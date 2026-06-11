@@ -679,14 +679,34 @@ class BaseAutofill:
         return False
 
 class ProxyManager:
-    user_pools = {}
-    user_enabled = {}
+    db_pool = None
 
     @classmethod
-    def load(cls, user_id: int, raw_text: str) -> int:
-        if user_id not in cls.user_pools:
-            cls.user_pools[user_id] = []
-            cls.user_enabled[user_id] = False
+    async def init_db(cls, db_pool):
+        cls.db_pool = db_pool
+
+    @classmethod
+    async def get_user_proxies(cls, user_id: int) -> List[Dict]:
+        if not cls.db_pool: return []
+        async with cls.db_pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT proxies FROM user_proxies WHERE user_id = $1", user_id)
+            if row and row['proxies']:
+                return json.loads(row['proxies'])
+            return []
+
+    @classmethod
+    async def save_user_proxies(cls, user_id: int, proxies: List[Dict]):
+        if not cls.db_pool: return
+        async with cls.db_pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO user_proxies (user_id, proxies)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id) DO UPDATE SET proxies = EXCLUDED.proxies
+            """, user_id, json.dumps(proxies))
+
+    @classmethod
+    async def load(cls, user_id: int, raw_text: str) -> int:
+        pool = await cls.get_user_proxies(user_id)
             
         lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
         added = 0
@@ -694,23 +714,20 @@ class ProxyManager:
             parts = line.split(':')
             if len(parts) == 4:
                 p = {"raw": line, "server": f"http://{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]}
-                cls.user_pools[user_id].append(p)
+                pool.append(p)
                 added += 1
             elif len(parts) == 2:
                 p = {"raw": line, "server": f"http://{parts[0]}:{parts[1]}"}
-                cls.user_pools[user_id].append(p)
+                pool.append(p)
                 added += 1
         if added > 0:
-            cls.user_enabled[user_id] = True
+            await cls.save_user_proxies(user_id, pool)
         return added
 
     @classmethod
     async def get_random(cls, user_id: int) -> Optional[Dict]:
-        pool = cls.user_pools.get(user_id, [])
-        enabled = cls.user_enabled.get(user_id, False)
+        pool = await cls.get_user_proxies(user_id)
         if not pool:
-            if enabled:
-                raise Exception("PROXY_POOL_EXHAUSTED: All proxies have died. Aborting to prevent naked IP leak.")
             return None
         
         for _ in range(3):
@@ -729,22 +746,24 @@ class ProxyManager:
         return random.choice(pool)
         
     @classmethod
-    def remove(cls, user_id: int, proxy_raw: str):
-        if user_id in cls.user_pools:
-            cls.user_pools[user_id] = [p for p in cls.user_pools[user_id] if p['raw'] != proxy_raw]
+    async def remove(cls, user_id: int, proxy_raw: str):
+        pool = await cls.get_user_proxies(user_id)
+        new_pool = [p for p in pool if p['raw'] != proxy_raw]
+        if len(new_pool) != len(pool):
+            await cls.save_user_proxies(user_id, new_pool)
         
     @classmethod
-    def clear(cls, user_id: int):
-        cls.user_pools[user_id] = []
-        cls.user_enabled[user_id] = False
+    async def clear(cls, user_id: int):
+        await cls.save_user_proxies(user_id, [])
 
     @classmethod
-    def get_count(cls, user_id: int) -> int:
-        return len(cls.user_pools.get(user_id, []))
+    async def get_count(cls, user_id: int) -> int:
+        pool = await cls.get_user_proxies(user_id)
+        return len(pool)
         
     @classmethod
-    def has_proxies(cls, user_id: int) -> bool:
-        return len(cls.user_pools.get(user_id, [])) > 0
+    async def has_proxies(cls, user_id: int) -> bool:
+        return await cls.get_count(user_id) > 0
 
     @classmethod
     def format_for_playwright(cls, proxy_data: Dict) -> Dict:

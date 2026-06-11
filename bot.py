@@ -1,6 +1,7 @@
 import os
 import asyncio
 import re
+import asyncpg
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
@@ -65,7 +66,7 @@ async def hit_command(message: types.Message):
         return
 
     # 1% CODER: Naked IP Block
-    if not ProxyManager.has_proxies(user_id):
+    if not await ProxyManager.has_proxies(user_id):
         await message.answer("❌ <b>Proxy Required!</b>\nPlease use <code>/setproxy ip:port:user:pass</code> to load your proxies first.")
         return
 
@@ -267,7 +268,7 @@ async def setproxy_command(message: types.Message):
     if not text:
         await message.answer("❌ Please provide proxies.\nFormat: `ip:port:user:pass` or `ip:port`")
         return
-    added = ProxyManager.load(user_id, text)
+    added = await ProxyManager.load(user_id, text)
     await message.answer(f"✅ Loaded {added} proxies into your private pool!")
     if LOG_GROUP_ID:
         try:
@@ -285,7 +286,7 @@ async def setlog_command(message: types.Message):
 
 @dp.message(Command("proxystatus"))
 async def proxystatus_command(message: types.Message):
-    count = ProxyManager.get_count(message.from_user.id)
+    count = await ProxyManager.get_count(message.from_user.id)
     if count == 0:
         await message.answer("🟡 <b>Proxy Pool Empty</b>\nYou have no proxies loaded.")
     else:
@@ -293,7 +294,7 @@ async def proxystatus_command(message: types.Message):
 
 @dp.message(Command("offproxy"))
 async def offproxy_command(message: types.Message):
-    ProxyManager.clear(message.from_user.id)
+    await ProxyManager.clear(message.from_user.id)
     await message.answer("🛑 <b>Proxy Pool Cleared</b>\nYour proxies have been removed.")
 
 @dp.message(Command("chkproxy"))
@@ -315,7 +316,7 @@ async def chkproxy_command(message: types.Message):
         proxies_to_test = temp_pool
         is_pool = False
     else:
-        proxies_to_test = list(ProxyManager.user_pools.get(user_id, []))
+        proxies_to_test = list(await ProxyManager.get_user_proxies(user_id))
         is_pool = True
         
     if not proxies_to_test:
@@ -345,11 +346,11 @@ async def chkproxy_command(message: types.Message):
                         live_count += 1
                     else:
                         results.append(f"❌ Dead | {p['raw']}")
-                        if is_pool: ProxyManager.remove(user_id, p['raw'])
+                        if is_pool: await ProxyManager.remove(user_id, p['raw'])
                         dead_count += 1
         except:
             results.append(f"❌ Dead/Timeout | {p['raw']}")
-            if is_pool: ProxyManager.remove(user_id, p['raw'])
+            if is_pool: await ProxyManager.remove(user_id, p['raw'])
             dead_count += 1
             
     res_text = "\n".join(results)
@@ -379,6 +380,22 @@ async def start_web_server():
 
 async def main() -> None:
     print("Bot is starting...")
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        print("Connecting to Supabase...")
+        db_pool = await asyncpg.create_pool(db_url)
+        async with db_pool.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_proxies (
+                    user_id BIGINT PRIMARY KEY,
+                    proxies JSONB DEFAULT '[]'
+                );
+            """)
+        await ProxyManager.init_db(db_pool)
+        print("Supabase connected and user_proxies table ready!")
+    else:
+        print("WARNING: DATABASE_URL not set! Proxies will not be saved.")
+        
     await start_web_server()
     await dp.start_polling(bot)
 
