@@ -9,3 +9,5 @@ services:
         sync: false
       - key: LOG_GROUP_ID
         sync: false
+      - key: DATABASE_URL
+        sync: false
