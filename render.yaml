@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: gokuhitter-bot
+    env: python
+    buildCommand: "bash build.sh"
+    startCommand: "python bot.py"
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: LOG_GROUP_ID
+        sync: false
