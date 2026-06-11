@@ -11,7 +11,7 @@ import aiohttp
 from hitter_core import CardGenerator, ConcurrentHitter, STRIPE_DECLINE_CODES, ProxyManager
 
 load_dotenv()
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN")
 LOG_GROUP_ID = os.getenv("LOG_GROUP_ID")
 
 # Setup bot
