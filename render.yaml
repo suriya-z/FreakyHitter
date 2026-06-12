@@ -1,9 +1,7 @@
 services:
   - type: web
     name: gokuhitter-bot
-    env: python
-    buildCommand: "bash build.sh"
-    startCommand: "python bot.py"
+    env: docker
     envVars:
       - key: BOT_TOKEN
         sync: false
