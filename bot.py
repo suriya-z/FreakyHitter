@@ -242,6 +242,14 @@ async def hit_command(message: types.Message):
                 await status_msg.edit_text(text)
             if user_id in active_sessions:
                 del active_sessions[user_id]
+        
+        elif data["status"] == "error":
+            if anim_task:
+                anim_task.cancel()
+            error_msg = data.get("error", "Unknown error")
+            await status_msg.edit_text(f"❌ <b>Session Crashed!</b>\n\n<code>{error_msg}</code>")
+            if user_id in active_sessions:
+                del active_sessions[user_id]
 
     hitter = ConcurrentHitter(user_id, url, cards, update_callback=update_status)
     active_sessions[user_id] = hitter

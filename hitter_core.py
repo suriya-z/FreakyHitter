@@ -1670,83 +1670,77 @@ class ConcurrentHitter:
             queue.task_done()
     
     async def run(self):
-        if self.update_callback:
-            await self.update_callback({"status": "analyzing"})
-            
-        await self.analyze_first()
-        
-        async with async_playwright() as p:
-            # Main browser instance, workers will spawn isolated contexts from it
-            browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-web-security','--disable-site-isolation-trials'])
-            
-            max_retries = 3
-            autofill_class = StripeV2_ElementsIframe # Default fallback
-            for attempt in range(max_retries):
-                try:
-                    # Analyze page architecture to pick right autofill engine
-                    proxy_data = await ProxyManager.get_random(self.user_id)
-                    playwright_proxy = ProxyManager.format_for_playwright(proxy_data) if proxy_data else None
-                    
-                    # Dynamic Timezone mapping
-                    proxy_url_str = proxy_data["server"] if proxy_data else None
-                    _, proxy_timezone, proxy_locale = await RandomData.get_address_and_timezone(proxy_url_str)
-                    
-                    ua = random.choice(USER_AGENTS)
-                    platform = '"Windows"' if 'Windows' in ua else '"macOS"'
-                    
-                    context = await browser.new_context(
-                        user_agent=ua,
-                        extra_http_headers={
-                            'sec-ch-ua-platform': platform,
-                            'sec-ch-ua-mobile': '?0',
-                            'sec-ch-ua': '"Chromium";v="120", "Not(A:Brand";v="24", "Google Chrome";v="120"'
-                        },
-                        viewport={'width': 390, 'height': 844},
-                        device_scale_factor=3,
-                        is_mobile=True,
-                        has_touch=True,
-                        locale=proxy_locale,
-                        timezone_id=proxy_timezone,
-                        proxy=playwright_proxy
-                    )
-                    
-                    # 1% CODER: Apply Hardware spoofing at the Context level BEFORE any page is created
-                    await context.add_init_script(HARDWARE_SPOOF_SCRIPT)
-                    
-                    test_page = await context.new_page()
-                    
-                    # 1% CODER: Apply Stealth to the architecture analyzer
-                    await Stealth().apply_stealth_async(test_page)
-                    
-                    await test_page.goto(self.url, timeout=30000, wait_until='domcontentloaded')
-                    autofill_class = await AutofillSelector.detect(test_page, self.url)
-                    await context.close()
-                    break # Success!
-                except Exception as e:
-                    if context: await context.close()
-                    pass
-            
+        try:
             if self.update_callback:
-                await self.update_callback({"status": "starting", "url_info": self.url_info, "autofill": autofill_class.__name__})
+                await self.update_callback({"status": "analyzing"})
                 
-            # 1% CODER: Async Worker Pool Queue
-            queue = asyncio.Queue()
-            for i, card in enumerate(self.cards[:MAX_ATTEMPTS]):
-                queue.put_nowait((card, i + 1))
-                
-            # Spawn worker tasks
-            workers = []
-            for _ in range(CONCURRENT_BATCH_SIZE):
-                workers.append(asyncio.create_task(self._worker(queue, browser, autofill_class)))
-                
-            # Wait for all cards to be processed
-            await queue.join()
+            await self.analyze_first()
             
-            # Cancel any stuck workers just in case
-            for w in workers:
-                w.cancel()
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-web-security','--disable-site-isolation-trials'])
                 
-            await browser.close()
-            
-        if self.update_callback:
-            await self.update_callback({"status": "completed", "successes": self.successes, "fails": self.fails})
+                max_retries = 3
+                autofill_class = StripeV2_ElementsIframe
+                for attempt in range(max_retries):
+                    context = None
+                    try:
+                        proxy_data = await ProxyManager.get_random(self.user_id)
+                        playwright_proxy = ProxyManager.format_for_playwright(proxy_data) if proxy_data else None
+                        
+                        proxy_url_str = proxy_data["server"] if proxy_data else None
+                        _, proxy_timezone, proxy_locale = await RandomData.get_address_and_timezone(proxy_url_str)
+                        
+                        ua = random.choice(USER_AGENTS)
+                        platform = '"Windows"' if 'Windows' in ua else '"macOS"'
+                        
+                        context = await browser.new_context(
+                            user_agent=ua,
+                            extra_http_headers={
+                                'sec-ch-ua-platform': platform,
+                                'sec-ch-ua-mobile': '?0',
+                                'sec-ch-ua': '"Chromium";v="120", "Not(A:Brand";v="24", "Google Chrome";v="120"'
+                            },
+                            viewport={'width': 390, 'height': 844},
+                            device_scale_factor=3,
+                            is_mobile=True,
+                            has_touch=True,
+                            locale=proxy_locale,
+                            timezone_id=proxy_timezone,
+                            proxy=playwright_proxy
+                        )
+                        
+                        await context.add_init_script(HARDWARE_SPOOF_SCRIPT)
+                        test_page = await context.new_page()
+                        await Stealth().apply_stealth_async(test_page)
+                        
+                        await test_page.goto(self.url, timeout=30000, wait_until='domcontentloaded')
+                        autofill_class = await AutofillSelector.detect(test_page, self.url)
+                        await context.close()
+                        break
+                    except Exception as e:
+                        if context: await context.close()
+                        pass
+                
+                if self.update_callback:
+                    await self.update_callback({"status": "starting", "url_info": self.url_info, "autofill": autofill_class.__name__})
+                    
+                queue = asyncio.Queue()
+                for i, card in enumerate(self.cards[:MAX_ATTEMPTS]):
+                    queue.put_nowait((card, i + 1))
+                    
+                workers = []
+                for _ in range(CONCURRENT_BATCH_SIZE):
+                    workers.append(asyncio.create_task(self._worker(queue, browser, autofill_class)))
+                    
+                await queue.join()
+                
+                for w in workers:
+                    w.cancel()
+                    
+                await browser.close()
+                
+            if self.update_callback:
+                await self.update_callback({"status": "completed", "successes": self.successes, "fails": self.fails})
+        except Exception as e:
+            if self.update_callback:
+                await self.update_callback({"status": "error", "error": str(e)})
