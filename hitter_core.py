@@ -1718,6 +1718,7 @@ class ConcurrentHitter:
                         await context.close()
                         break
                     except Exception as e:
+                        print(f"DEBUG: run() attempt {attempt} failed: {str(e)}")
                         if context: await context.close()
                         pass
                 
