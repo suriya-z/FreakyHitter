@@ -1579,7 +1579,7 @@ class ConcurrentHitter:
         
     async def analyze_first(self):
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-web-security','--disable-site-isolation-trials'])
+            browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-dev-shm-usage','--disable-web-security','--disable-site-isolation-trials'])
             
             max_retries = 3
             for attempt in range(max_retries):
@@ -1677,7 +1677,7 @@ class ConcurrentHitter:
             await self.analyze_first()
             
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-web-security','--disable-site-isolation-trials'])
+                browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-dev-shm-usage','--disable-web-security','--disable-site-isolation-trials'])
                 
                 max_retries = 3
                 autofill_class = StripeV2_ElementsIframe
