@@ -1134,7 +1134,7 @@ class StripeV6_PaymentElement(BaseAutofill):
 
 class StripeV7_LinkAuth(BaseAutofill):
     async def fill(self):
-        await StripeV2_ElementsIframe(self.page, self.card, self.name, self.email, self.address).fill()
+        await StripeV2_ElementsIframe(self.page, self.real_card, self.name, self.email, self.address).fill()
         link = await self.page.query_selector('button:has-text("Link"), [data-testid="link-auth"]')
         if link:
             await link.click()
