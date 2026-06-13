@@ -1630,8 +1630,14 @@ class ConcurrentHitter:
                     await context.close()
                     break # Success!
                 except Exception as e:
-                    print(f"DEBUG: analyze_first() attempt {attempt} failed: {str(e)}")
-                    if proxy_data and ('Timeout' in str(e) or 'ERR_PROXY_CONNECTION_FAILED' in str(e)):
+                    err_str = str(e)
+                    print(f"DEBUG: analyze_first() attempt {attempt} failed: {err_str}")
+                    should_remove = False
+                    if proxy_data:
+                        if any(k in err_str for k in ['Timeout', 'ERR_', 'closed', 'refused', 'reset', 'disconnected', 'socket', 'Navigation failed']):
+                            should_remove = True
+                            
+                    if should_remove:
                         await ProxyManager.remove(self.user_id, proxy_data['raw'])
                     if context: await context.close()
                     if attempt == max_retries - 1:
