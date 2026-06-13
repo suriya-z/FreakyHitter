@@ -1707,6 +1707,7 @@ class ConcurrentHitter:
                         ), timeout=5.0)
                         
                         test_page = await context.new_page()
+                        await Stealth().apply_stealth_async(test_page)
                         
                         try:
                             await asyncio.wait_for(test_page.goto(self.url, timeout=15000, wait_until='domcontentloaded'), timeout=16.0)
