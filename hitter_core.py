@@ -1505,16 +1505,19 @@ async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class
         # Spoofing iPhone Safari while sending Chromium Sec-CH-UA headers is an instant flag!
         ua = "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
         
-        context = await browser.new_context(
+        context = await asyncio.wait_for(browser.new_context(
             proxy=playwright_proxy,
             ignore_https_errors=True
-        )
+        ), timeout=5.0)
         
         page = await context.new_page()
         # 1% CODER: Apply Stealth even to the initial analyzer to avoid Cloudflare taint
         await Stealth().apply_stealth_async(page)
         
-        await page.goto(url, timeout=15000, wait_until='domcontentloaded')
+        try:
+            await asyncio.wait_for(page.goto(url, timeout=15000, wait_until='domcontentloaded'), timeout=16.0)
+        except asyncio.TimeoutError:
+            raise Exception("Timeout 15000ms exceeded.")
         await asyncio.sleep(0.5) # Let frame settle
         
         autofill = autofill_class(page, card, name, email, address)
@@ -1573,18 +1576,26 @@ class ConcurrentHitter:
                 proxy_data = await ProxyManager.get_random(self.user_id)
                 playwright_proxy = ProxyManager.format_for_playwright(proxy_data) if proxy_data else None
                 
-                context = await browser.new_context(
+                if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Testing proxy connection..."})
+                
+                # 1% CODER: Wrap context creation to prevent deadlocks
+                context = await asyncio.wait_for(browser.new_context(
                     proxy=playwright_proxy,
                     ignore_https_errors=True
-                )
+                ), timeout=5.0)
                 
                 page = await context.new_page()
                 
                 # 1% CODER: Apply Stealth even to the initial analyzer to avoid Cloudflare taint
                 await Stealth().apply_stealth_async(page)
-
                 
-                await page.goto(self.url, timeout=15000, wait_until='domcontentloaded')
+                if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Analyzing Stripe endpoint..."})
+                
+                # 1% CODER: Wrap with asyncio.wait_for to prevent native Playwright network deadlocks
+                try:
+                    await asyncio.wait_for(page.goto(self.url, timeout=15000, wait_until='domcontentloaded'), timeout=16.0)
+                except asyncio.TimeoutError:
+                    raise Exception("Timeout 15000ms exceeded.")
                 await asyncio.sleep(2)
                 self.url_info = await URLAnalyzer.analyze(self.user_id, page, self.url)
                 try: await asyncio.wait_for(context.close(), timeout=2.0)
@@ -1689,14 +1700,18 @@ class ConcurrentHitter:
                         proxy_data = await ProxyManager.get_random(self.user_id)
                         playwright_proxy = ProxyManager.format_for_playwright(proxy_data) if proxy_data else None
                         
-                        context = await browser.new_context(
+                        if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Detecting gateway engine..."})
+                        context = await asyncio.wait_for(browser.new_context(
                             proxy=playwright_proxy,
                             ignore_https_errors=True
-                        )
+                        ), timeout=5.0)
                         
                         test_page = await context.new_page()
                         
-                        await test_page.goto(self.url, timeout=15000, wait_until='domcontentloaded')
+                        try:
+                            await asyncio.wait_for(test_page.goto(self.url, timeout=15000, wait_until='domcontentloaded'), timeout=16.0)
+                        except asyncio.TimeoutError:
+                            raise Exception("Timeout 15000ms exceeded.")
                         autofill_class = await AutofillSelector.detect(test_page, self.url)
                         try: await asyncio.wait_for(context.close(), timeout=2.0)
                         except: pass

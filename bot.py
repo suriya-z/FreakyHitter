@@ -126,32 +126,17 @@ async def hit_command(message: types.Message):
     else:
         status_msg = await message.answer(f"🍳 <b>Cooking...</b>\n<i>Initiating sequence... 🩸</i>")
         
+    status_msg = await message.answer("🍳 <b>Cooking...</b>")
     anim_task = None
-    if len(cards) == 1:
-        async def anim_loop():
-            frames = [
-                "🍳 <b>Cooking...</b>\n<i>Injecting the payload... 🩸</i>",
-                "🍳 <b>Cooking...</b>\n<i>Slicing through firewalls... 🔪</i>",
-                "🍳 <b>Cooking...</b>\n<i>Bleeding the proxy... 💉</i>",
-                "🍳 <b>Cooking...</b>\n<i>Waiting for the kill... 💀</i>"
-            ]
-            idx = 0
-            while True:
-                try:
-                    await asyncio.sleep(3.0)
-                    await status_msg.edit_text(frames[idx % len(frames)])
-                    idx += 1
-                except asyncio.CancelledError:
-                    break
-                except Exception as e:
-                    if "RetryAfter" in str(e):
-                        await asyncio.sleep(10)
-                    pass
-        anim_task = asyncio.create_task(anim_loop())
     
     # Callback to update the Telegram message
     async def update_status(data):
-        if data["status"] == "starting":
+        if data["status"] == "analyzing":
+            step_text = data.get("step", "Initializing hitting engine...")
+            try: await status_msg.edit_text(f"🍳 <b>Cooking...</b>\n<i>{step_text}</i>")
+            except Exception as e:
+                pass
+        elif data["status"] == "starting":
             info = data.get("url_info", {})
             merchant = info.get("merchant", "Unknown")
             amt = info.get("amount", "Unknown")
