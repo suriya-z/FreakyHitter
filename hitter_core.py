@@ -1645,7 +1645,13 @@ class ConcurrentHitter:
                     result = await single_hit(browser, self.url, card, attempt_num, autofill_class, self.url_info, self.user_id)
                     
                     # Retry if proxy failed/timeout
-                    if result.get('decline_code') == 'exception' and ('Timeout' in result.get('error', '') or 'ERR_' in result.get('error', '')):
+                    err_str = result.get('error', '')
+                    should_retry = False
+                    if result.get('decline_code') == 'exception':
+                        if any(k in err_str for k in ['Timeout', 'ERR_', 'closed', 'refused', 'reset', 'disconnected', 'socket', 'Navigation failed']):
+                            should_retry = True
+                            
+                    if should_retry:
                         if result.get('proxy_raw'):
                             await ProxyManager.remove(self.user_id, result['proxy_raw'])
                             

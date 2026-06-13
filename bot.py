@@ -189,7 +189,10 @@ async def hit_command(message: types.Message):
                 
                 # 1% CODER: Live Card Detection
                 hit_text = f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str}\n📉 Reason: {code}\n⏱ {res['response_time']:.2f}s"
-                
+                if code == 'exception' and 'error' in res:
+                    # Escape HTML tags from playwright errors
+                    err_str = str(res['error']).replace('<', '&lt;').replace('>', '&gt;')
+                    hit_text += f"\n🐛 <code>{err_str[:200]}</code>..."
                 live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin', 'withdrawal_count_limit_exceeded']
                 if any(c in code.lower() for c in live_codes):
                     hit_text += "\n⚠️ <b>Card is live</b>"
