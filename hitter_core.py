@@ -1645,7 +1645,7 @@ class ConcurrentHitter:
                     # Retry if proxy failed/timeout
                     if result.get('decline_code') == 'exception' and ('Timeout' in result.get('error', '') or 'ERR_' in result.get('error', '')):
                         if result.get('proxy_raw'):
-                            ProxyManager.remove(result['proxy_raw'])
+                            await ProxyManager.remove(self.user_id, result['proxy_raw'])
                             
                         if try_idx < max_retries - 1:
                             # 1% CODER: Exponential Backoff (from claude.py) for rate limit / proxy drops
