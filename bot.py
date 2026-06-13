@@ -406,7 +406,7 @@ async def main() -> None:
     db_url = os.environ.get("DATABASE_URL")
     if db_url:
         print("Connecting to Supabase...")
-        db_pool = await asyncpg.create_pool(db_url)
+        db_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=4)
         async with db_pool.acquire() as conn:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS user_proxies (
