@@ -1565,6 +1565,7 @@ class ConcurrentHitter:
         self.completed = 0
         self.total = len(cards[:MAX_ATTEMPTS])
         self.url_info = None
+        self.autofill_class = None
         self.update_callback = update_callback
         self.is_running = True
         
@@ -1598,6 +1599,10 @@ class ConcurrentHitter:
                     raise Exception("Timeout 15000ms exceeded.")
                 await asyncio.sleep(2)
                 self.url_info = await URLAnalyzer.analyze(self.user_id, page, self.url)
+                
+                if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Detecting gateway engine..."})
+                self.autofill_class = await AutofillSelector.detect(page, self.url)
+                
                 try: await asyncio.wait_for(context.close(), timeout=2.0)
                 except: pass
                 break # Success!
@@ -1692,47 +1697,7 @@ class ConcurrentHitter:
                 
                 await self.analyze_first(browser)
                 
-                max_retries = 1 # Fail fast
-                autofill_class = StripeV2_ElementsIframe
-                for attempt in range(max_retries):
-                    context = None
-                    try:
-                        proxy_data = await ProxyManager.get_random(self.user_id)
-                        playwright_proxy = ProxyManager.format_for_playwright(proxy_data) if proxy_data else None
-                        
-                        if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Detecting gateway engine..."})
-                        context = await asyncio.wait_for(browser.new_context(
-                            proxy=playwright_proxy,
-                            ignore_https_errors=True
-                        ), timeout=5.0)
-                        
-                        test_page = await context.new_page()
-                        await Stealth().apply_stealth_async(test_page)
-                        
-                        try:
-                            await asyncio.wait_for(test_page.goto(self.url, timeout=15000, wait_until='domcontentloaded'), timeout=16.0)
-                        except asyncio.TimeoutError:
-                            raise Exception("Timeout 15000ms exceeded.")
-                        autofill_class = await AutofillSelector.detect(test_page, self.url)
-                        try: await asyncio.wait_for(context.close(), timeout=2.0)
-                        except: pass
-                        break
-                    except Exception as e:
-                        err_str = str(e)
-                        print(f"DEBUG: run() attempt {attempt} failed: {err_str}")
-                        should_remove = False
-                        if proxy_data:
-                            if any(k in err_str for k in ['Timeout', 'ERR_', 'closed', 'refused', 'reset', 'disconnected', 'socket', 'Navigation failed']):
-                                should_remove = True
-                                
-                        if should_remove:
-                            # DEBUG: Temporarily disable auto-delete
-                            # await ProxyManager.remove(self.user_id, proxy_data['raw'])
-                            pass
-                        if context:
-                            try: await asyncio.wait_for(context.close(), timeout=2.0)
-                            except: pass
-                        pass
+                autofill_class = self.autofill_class or StripeV2_ElementsIframe
                 
                 if self.update_callback:
                     await self.update_callback({"status": "starting", "url_info": self.url_info, "autofill": autofill_class.__name__})
