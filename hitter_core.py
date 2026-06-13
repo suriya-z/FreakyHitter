@@ -1484,7 +1484,7 @@ HARDWARE_SPOOF_SCRIPT = """
 
 async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class, url_info, user_id: int) -> Dict:
     start = time.time()
-    result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': url_info.get('amount'), 'proxy_raw': None}
+    result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': url_info.get('amount'), 'merchant': url_info.get('merchant'), 'proxy_raw': None}
     context = None
     try:
         # 1% CODER: Ephemeral Context per hit prevents fingerprint bleed

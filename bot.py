@@ -139,8 +139,13 @@ async def hit_command(message: types.Message):
         elif data["status"] == "starting":
             info = data.get("url_info", {})
             merchant = info.get("merchant", "Unknown")
-            amt = info.get("amount", "Unknown")
             
+            raw_amt = info.get("amount")
+            if isinstance(raw_amt, int) or (isinstance(raw_amt, str) and raw_amt.isdigit()):
+                amt = f"${int(raw_amt)/100:.2f}"
+            else:
+                amt = raw_amt or "Unknown"
+                
             if len(cards) > 1:
                 text = (
                     f"🎯 <b>Hitting Session Started!</b>\n\n"
@@ -158,7 +163,13 @@ async def hit_command(message: types.Message):
             
             # Send an individual message for the hit result
             card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
-            amt_str = f"\n💰 <b>Amount:</b> {res.get('amount')}" if res.get('amount') else ""
+            amt = res.get('amount')
+            if isinstance(amt, int) or (isinstance(amt, str) and amt.isdigit()):
+                amt_str = f"\n💰 <b>Amount:</b> ${int(amt)/100:.2f}"
+            elif amt:
+                amt_str = f"\n💰 <b>Amount:</b> {amt}"
+            else:
+                amt_str = ""
             
             if res['success']:
                 final_url = res.get('final_url')
@@ -173,7 +184,14 @@ async def hit_command(message: types.Message):
                 code = res.get('decline_code') or res.get('error') or 'unknown'
                 
                 # 1% CODER: Live Card Detection
-                hit_text = f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str}\n📉 Reason: {code}\n⏱ {res['response_time']:.2f}s"
+                hit_text = f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str}\n"
+                
+                merchant_name = res.get('merchant') or 'Unknown'
+                if merchant_name != 'Unknown':
+                    hit_text += f"🛒 <b>Merchant:</b> {merchant_name}\n"
+                    
+                hit_text += f"📉 Reason: {code}\n⏱ {res['response_time']:.2f}s"
+                
                 if code == 'exception' and 'error' in res:
                     import html
                     err_str = str(res['error'])[:200]
