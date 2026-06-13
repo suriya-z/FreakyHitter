@@ -1638,7 +1638,9 @@ class ConcurrentHitter:
                             should_remove = True
                             
                     if should_remove:
-                        await ProxyManager.remove(self.user_id, proxy_data['raw'])
+                        # DEBUG: Temporarily disable auto-delete
+                        # await ProxyManager.remove(self.user_id, proxy_data['raw'])
+                        pass
                     if context: await context.close()
                     if attempt == max_retries - 1:
                         self.url_info = {'amount': None, 'merchant': 'Unknown'} # Fallback
@@ -1667,7 +1669,9 @@ class ConcurrentHitter:
                             
                     if should_retry:
                         if result.get('proxy_raw'):
-                            await ProxyManager.remove(self.user_id, result['proxy_raw'])
+                            # DEBUG: Temporarily disable auto-delete
+                            # await ProxyManager.remove(self.user_id, result['proxy_raw'])
+                            pass
                             
                         if try_idx < max_retries - 1:
                             # 1% CODER: Exponential Backoff (from claude.py) for rate limit / proxy drops
@@ -1753,7 +1757,9 @@ class ConcurrentHitter:
                                 should_remove = True
                                 
                         if should_remove:
-                            await ProxyManager.remove(self.user_id, proxy_data['raw'])
+                            # DEBUG: Temporarily disable auto-delete
+                            # await ProxyManager.remove(self.user_id, proxy_data['raw'])
+                            pass
                         if context: await context.close()
                         pass
                 
