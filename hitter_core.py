@@ -1610,7 +1610,8 @@ class ConcurrentHitter:
                         viewport={'width':1920,'height':1080}, 
                         locale=proxy_locale,
                         timezone_id=proxy_timezone,
-                        proxy=playwright_proxy
+                        proxy=playwright_proxy,
+                        ignore_https_errors=True
                     )
                     
                     # 1% CODER: Apply Stealth and Hardware spoofing at the Context level BEFORE any page is created
@@ -1735,7 +1736,8 @@ class ConcurrentHitter:
                             has_touch=True,
                             locale=proxy_locale,
                             timezone_id=proxy_timezone,
-                            proxy=playwright_proxy
+                            proxy=playwright_proxy,
+                            ignore_https_errors=True
                         )
                         
                         await context.add_init_script(HARDWARE_SPOOF_SCRIPT)
