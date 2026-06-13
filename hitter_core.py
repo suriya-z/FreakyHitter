@@ -776,11 +776,11 @@ class ProxyManager:
 
     @classmethod
     def format_for_playwright(cls, proxy_data: Dict) -> Dict:
-        # Pass exactly the string aiohttp uses natively, stripping the dictionary format
-        proxy_url = proxy_data["server"]
+        playwright_proxy = {"server": proxy_data["server"]}
         if "username" in proxy_data:
-            proxy_url = proxy_url.replace("http://", f"http://{proxy_data['username']}:{proxy_data['password']}@").replace("socks5://", f"socks5://{proxy_data['username']}:{proxy_data['password']}@")
-        return {"server": proxy_url}
+            playwright_proxy["username"] = proxy_data["username"]
+            playwright_proxy["password"] = proxy_data["password"]
+        return playwright_proxy
 
 # ============= RANDOM DATA =============
 class RandomData:
@@ -1505,11 +1505,6 @@ async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class
         
         context = await browser.new_context(
             user_agent=ua,
-            extra_http_headers={
-                'sec-ch-ua-platform': '"Android"',
-                'sec-ch-ua-mobile': '?1',
-                'sec-ch-ua': '"Chromium";v="116", "Not)A;Brand";v="24", "Google Chrome";v="116"'
-            },
             viewport={'width':390,'height':844},
             device_scale_factor=3,
             is_mobile=True,
@@ -1529,10 +1524,6 @@ async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class
         await context.route("**/*", block_assets)
         
         page = await context.new_page()
-        await Stealth().apply_stealth_async(page)
-        
-        # Inject Hardware Sensor Emulation, WebRTC Blocker, and Canvas Poisoning
-        await page.add_init_script(HARDWARE_SPOOF_SCRIPT)
         
         await page.goto(url, timeout=30000, wait_until='domcontentloaded')
         await asyncio.sleep(0.5) # Let frame settle
@@ -1602,11 +1593,6 @@ class ConcurrentHitter:
                     
                     context = await browser.new_context(
                         user_agent=ua, 
-                        extra_http_headers={
-                            'sec-ch-ua-platform': platform,
-                            'sec-ch-ua-mobile': '?0',
-                            'sec-ch-ua': '"Chromium";v="120", "Not(A:Brand";v="24", "Google Chrome";v="120"'
-                        },
                         viewport={'width':1920,'height':1080}, 
                         locale=proxy_locale,
                         timezone_id=proxy_timezone,
@@ -1614,14 +1600,7 @@ class ConcurrentHitter:
                         ignore_https_errors=True
                     )
                     
-                    # 1% CODER: Apply Stealth and Hardware spoofing at the Context level BEFORE any page is created
-                    await context.add_init_script(HARDWARE_SPOOF_SCRIPT)
-                    
                     page = await context.new_page()
-                    
-                    # 1% CODER: Apply Stealth even to the initial analyzer to avoid Cloudflare taint
-                    await Stealth().apply_stealth_async(page)
-
                     
                     await page.goto(self.url, timeout=30000, wait_until='domcontentloaded')
                     await asyncio.sleep(3)
@@ -1725,11 +1704,6 @@ class ConcurrentHitter:
                         
                         context = await browser.new_context(
                             user_agent=ua,
-                            extra_http_headers={
-                                'sec-ch-ua-platform': platform,
-                                'sec-ch-ua-mobile': '?0',
-                                'sec-ch-ua': '"Chromium";v="120", "Not(A:Brand";v="24", "Google Chrome";v="120"'
-                            },
                             viewport={'width': 390, 'height': 844},
                             device_scale_factor=3,
                             is_mobile=True,
@@ -1740,9 +1714,7 @@ class ConcurrentHitter:
                             ignore_https_errors=True
                         )
                         
-                        await context.add_init_script(HARDWARE_SPOOF_SCRIPT)
                         test_page = await context.new_page()
-                        await Stealth().apply_stealth_async(test_page)
                         
                         await test_page.goto(self.url, timeout=30000, wait_until='domcontentloaded')
                         autofill_class = await AutofillSelector.detect(test_page, self.url)
