@@ -235,34 +235,35 @@ async def hit_command(message: types.Message):
                     pass # Ignore "message is not modified" errors from Telegram
                 
         elif data["status"] == "completed":
-            if anim_task:
+            if anim_task: 
                 anim_task.cancel()
-                try: await status_msg.delete()
+                try: await anim_task
                 except: pass
-            elif len(cards) > 1:
-                text = (
-                    f"🏁 <b>Session Completed!</b>\n\n"
-                    f"✅ <b>Approved:</b> {data['successes']}\n"
-                    f"❌ <b>Declined:</b> {data['fails']}"
-                )
-                try:
-                    await status_msg.edit_text(text)
-                except Exception:
-                    await message.answer(text)
+            
+            text = (
+                f"🎯 <b>Hitting Session Completed!</b>\n\n"
+                f"✅ <b>Live:</b> {data['successes']}\n"
+                f"❌ <b>Dead:</b> {data['fails']}\n\n"
+            )
+            try: await status_msg.delete()
+            except: pass
+            await message.answer(text)
             if user_id in active_sessions:
                 del active_sessions[user_id]
         
         elif data["status"] == "error":
-            if anim_task:
+            if anim_task: 
                 anim_task.cancel()
+                try: await anim_task
+                except: pass
+                
             error_msg = str(data.get("error", "Unknown error"))
             import html
             error_msg = html.escape(error_msg)
-            text = f"❌ <b>Session Crashed!</b>\n\n<code>{error_msg}</code>"
-            try:
-                await status_msg.edit_text(text)
-            except Exception:
-                await message.answer(text)
+            
+            try: await status_msg.delete()
+            except: pass
+            await message.answer(f"❌ <b>Error processing session:</b>\n<code>{error_msg}</code>")
             if user_id in active_sessions:
                 del active_sessions[user_id]
 
