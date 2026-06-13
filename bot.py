@@ -358,15 +358,13 @@ async def chkproxy_command(message: types.Message):
             
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get("http://ip-api.com/json/", proxy=proxy_url, timeout=10) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        country = data.get('country', 'Unknown')
-                        ip = data.get('query', 'Unknown')
-                        results.append(f"✅ Live | {ip} [{country}]")
+                # Test against Stripe instead of ip-api to see if the provider blocks financial domains
+                async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=10) as resp:
+                    if resp.status in [200, 404]: # 404 means Stripe loaded but no invoice id, which is fine
+                        results.append(f"✅ Live for Stripe | {p['raw']}")
                         live_count += 1
                     else:
-                        results.append(f"❌ Dead | {p['raw']}")
+                        results.append(f"❌ Blocked by Provider | {p['raw']}")
                         if is_pool: await ProxyManager.remove(user_id, p['raw'])
                         dead_count += 1
         except:
