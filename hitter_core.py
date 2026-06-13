@@ -1566,7 +1566,7 @@ class ConcurrentHitter:
         self.is_running = True
         
     async def analyze_first(self, browser):
-        max_retries = 2
+        max_retries = 1 # Fail fast
         for attempt in range(max_retries):
             context = None
             try:
@@ -1618,7 +1618,7 @@ class ConcurrentHitter:
                 break
                 
             try:
-                max_retries = 6 # Increased to allow cycling through more proxies
+                max_retries = 2 # Reduced to 2 to fail fast and prevent 4+ minute hangs
                 for try_idx in range(max_retries):
                     result = await single_hit(browser, self.url, card, attempt_num, autofill_class, self.url_info, self.user_id)
                     
@@ -1673,7 +1673,7 @@ class ConcurrentHitter:
                 
                 await self.analyze_first(browser)
                 
-                max_retries = 2
+                max_retries = 1 # Fail fast
                 autofill_class = StripeV2_ElementsIframe
                 for attempt in range(max_retries):
                     context = None
