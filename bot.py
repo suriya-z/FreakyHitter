@@ -255,7 +255,9 @@ async def hit_command(message: types.Message):
         elif data["status"] == "error":
             if anim_task:
                 anim_task.cancel()
-            error_msg = data.get("error", "Unknown error")
+            error_msg = str(data.get("error", "Unknown error"))
+            import html
+            error_msg = html.escape(error_msg)
             text = f"❌ <b>Session Crashed!</b>\n\n<code>{error_msg}</code>"
             try:
                 await status_msg.edit_text(text)
