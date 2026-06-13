@@ -1504,35 +1504,15 @@ async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class
         ua = "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
         
         context = await browser.new_context(
-            user_agent=ua,
-            extra_http_headers={
-                'sec-ch-ua-platform': '"Android"',
-                'sec-ch-ua-mobile': '?1',
-                'sec-ch-ua': '"Chromium";v="116", "Not)A;Brand";v="24", "Google Chrome";v="116"'
-            },
             viewport={'width':390,'height':844},
             device_scale_factor=3,
             is_mobile=True,
             has_touch=True,
             ignore_https_errors=True,
-            locale=proxy_locale,
-            timezone_id=proxy_timezone,
             proxy=playwright_proxy
         )
         
-        # SPEED OPTIMIZATION: Block heavy assets (BUT keep fonts for anti-fingerprinting)
-        async def block_assets(route):
-            if route.request.resource_type in ["image", "media"]:
-                await route.abort()
-            else:
-                await route.continue_()
-        await context.route("**/*", block_assets)
-        
         page = await context.new_page()
-        await Stealth().apply_stealth_async(page)
-        
-        # Inject Hardware Sensor Emulation, WebRTC Blocker, and Canvas Poisoning
-        await page.add_init_script(HARDWARE_SPOOF_SCRIPT)
         
         await page.goto(url, timeout=15000, wait_until='domcontentloaded')
         await asyncio.sleep(0.5) # Let frame settle
