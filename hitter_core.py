@@ -1623,6 +1623,8 @@ class ConcurrentHitter:
                     break # Success!
                 except Exception as e:
                     print(f"DEBUG: analyze_first() attempt {attempt} failed: {str(e)}")
+                    if proxy_data and ('Timeout' in str(e) or 'ERR_PROXY_CONNECTION_FAILED' in str(e)):
+                        await ProxyManager.remove(self.user_id, proxy_data['raw'])
                     if context: await context.close()
                     if attempt == max_retries - 1:
                         self.url_info = {'amount': None, 'merchant': 'Unknown'} # Fallback
