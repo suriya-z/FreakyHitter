@@ -776,11 +776,13 @@ class ProxyManager:
 
     @classmethod
     def format_for_playwright(cls, proxy_data: Dict) -> Dict:
-        playwright_proxy = {"server": proxy_data["server"]}
         if "username" in proxy_data:
-            playwright_proxy["username"] = proxy_data["username"]
-            playwright_proxy["password"] = proxy_data["password"]
-        return playwright_proxy
+            server = proxy_data["server"].replace("http://", "").replace("socks5://", "")
+            prefix = "socks5://" if proxy_data["server"].startswith("socks5://") else "http://"
+            return {
+                "server": f"{prefix}{proxy_data['username']}:{proxy_data['password']}@{server}"
+            }
+        return {"server": proxy_data["server"]}
 
 # ============= RANDOM DATA =============
 class RandomData:
