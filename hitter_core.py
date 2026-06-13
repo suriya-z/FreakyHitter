@@ -776,11 +776,11 @@ class ProxyManager:
 
     @classmethod
     def format_for_playwright(cls, proxy_data: Dict) -> Dict:
-        playwright_proxy = {"server": proxy_data["server"]}
+        # Pass exactly the string aiohttp uses natively, stripping the dictionary format
+        proxy_url = proxy_data["server"]
         if "username" in proxy_data:
-            playwright_proxy["username"] = proxy_data["username"]
-            playwright_proxy["password"] = proxy_data["password"]
-        return playwright_proxy
+            proxy_url = proxy_url.replace("http://", f"http://{proxy_data['username']}:{proxy_data['password']}@").replace("socks5://", f"socks5://{proxy_data['username']}:{proxy_data['password']}@")
+        return {"server": proxy_url}
 
 # ============= RANDOM DATA =============
 class RandomData:
