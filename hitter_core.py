@@ -1581,7 +1581,7 @@ class ConcurrentHitter:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-dev-shm-usage','--disable-web-security','--disable-site-isolation-trials'])
             
-            max_retries = 3
+            max_retries = 6
             for attempt in range(max_retries):
                 try:
                     proxy_data = await ProxyManager.get_random(self.user_id)
@@ -1686,7 +1686,7 @@ class ConcurrentHitter:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-dev-shm-usage','--disable-web-security','--disable-site-isolation-trials'])
                 
-                max_retries = 3
+                max_retries = 6
                 autofill_class = StripeV2_ElementsIframe
                 for attempt in range(max_retries):
                     context = None
@@ -1726,6 +1726,8 @@ class ConcurrentHitter:
                         break
                     except Exception as e:
                         print(f"DEBUG: run() attempt {attempt} failed: {str(e)}")
+                        if proxy_data and ('Timeout' in str(e) or 'ERR_PROXY_CONNECTION_FAILED' in str(e)):
+                            await ProxyManager.remove(self.user_id, proxy_data['raw'])
                         if context: await context.close()
                         pass
                 
