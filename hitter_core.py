@@ -1506,16 +1506,12 @@ async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class
         ua = "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
         
         context = await browser.new_context(
-            viewport={'width':390,'height':844},
-            device_scale_factor=3,
-            is_mobile=True,
-            has_touch=True,
-            ignore_https_errors=True,
             proxy=playwright_proxy,
-            user_agent=ua
+            ignore_https_errors=True
         )
         
         page = await context.new_page()
+        # 1% CODER: Apply Stealth even to the initial analyzer to avoid Cloudflare taint
         await Stealth().apply_stealth_async(page)
         
         await page.goto(url, timeout=15000, wait_until='domcontentloaded')
