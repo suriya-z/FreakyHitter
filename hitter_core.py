@@ -1622,6 +1622,7 @@ class ConcurrentHitter:
                     await context.close()
                     break # Success!
                 except Exception as e:
+                    print(f"DEBUG: analyze_first() attempt {attempt} failed: {str(e)}")
                     if context: await context.close()
                     if attempt == max_retries - 1:
                         self.url_info = {'amount': None, 'merchant': 'Unknown'} # Fallback
