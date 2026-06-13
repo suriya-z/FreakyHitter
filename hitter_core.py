@@ -1492,10 +1492,7 @@ async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class
         playwright_proxy = None
         if proxy_data:
             result['proxy_raw'] = proxy_data['raw']
-            playwright_proxy = {"server": proxy_data["server"]}
-            if "username" in proxy_data:
-                playwright_proxy["username"] = proxy_data["username"]
-                playwright_proxy["password"] = proxy_data["password"]
+            playwright_proxy = ProxyManager.format_for_playwright(proxy_data)
 
         # Identify checkout type and inject pre-generated identity
         proxy_url_str = proxy_data["server"] if proxy_data else None
