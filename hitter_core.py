@@ -747,8 +747,8 @@ class ProxyManager:
                 
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get("http://clients3.google.com/generate_204", proxy=proxy_url, timeout=3) as resp:
-                        if resp.status == 204:
+                    async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=3) as resp:
+                        if resp.status in [200, 404]:
                             return proxy
             except:
                 continue
@@ -1509,10 +1509,12 @@ async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class
             is_mobile=True,
             has_touch=True,
             ignore_https_errors=True,
-            proxy=playwright_proxy
+            proxy=playwright_proxy,
+            user_agent=ua
         )
         
         page = await context.new_page()
+        await Stealth().apply_stealth_async(page)
         
         await page.goto(url, timeout=15000, wait_until='domcontentloaded')
         await asyncio.sleep(0.5) # Let frame settle
