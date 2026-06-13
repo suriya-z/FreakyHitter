@@ -747,12 +747,14 @@ class ProxyManager:
                 
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=3) as resp:
+                    async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=10) as resp:
                         if resp.status in [200, 404]:
                             return proxy
-            except:
+            except Exception as e:
+                # DEBUG: print(f"Proxy check failed: {e}")
                 continue
-        return random.choice(pool)
+        # Fallback to the first proxy which is usually the most recently added or most reliable
+        return pool[0]
         
     @classmethod
     async def remove(cls, user_id: int, proxy_raw: str):
