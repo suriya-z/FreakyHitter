@@ -1637,38 +1637,42 @@ class ConcurrentHitter:
             except asyncio.QueueEmpty:
                 break
                 
-            max_retries = 3 # Increased from 2 to allow for Cloudflare progressive backoff
-            for try_idx in range(max_retries):
-                result = await single_hit(browser, self.url, card, attempt_num, autofill_class, self.url_info, self.user_id)
+            try:
+                max_retries = 3 # Increased from 2 to allow for Cloudflare progressive backoff
+                for try_idx in range(max_retries):
+                    result = await single_hit(browser, self.url, card, attempt_num, autofill_class, self.url_info, self.user_id)
+                    
+                    # Retry if proxy failed/timeout
+                    if result.get('decline_code') == 'exception' and ('Timeout' in result.get('error', '') or 'ERR_' in result.get('error', '')):
+                        if result.get('proxy_raw'):
+                            ProxyManager.remove(result['proxy_raw'])
+                            
+                        if try_idx < max_retries - 1:
+                            # 1% CODER: Exponential Backoff (from claude.py) for rate limit / proxy drops
+                            delay = 1.5 * (try_idx + 1)
+                            await asyncio.sleep(delay)
+                            continue # Try again with a new proxy
+                    break
                 
-                # Retry if proxy failed/timeout
-                if result.get('decline_code') == 'exception' and ('Timeout' in result.get('error', '') or 'ERR_' in result.get('error', '')):
-                    if result.get('proxy_raw'):
-                        ProxyManager.remove(result['proxy_raw'])
-                        
-                    if try_idx < max_retries - 1:
-                        # 1% CODER: Exponential Backoff (from claude.py) for rate limit / proxy drops
-                        delay = 1.5 * (try_idx + 1)
-                        await asyncio.sleep(delay)
-                        continue # Try again with a new proxy
-                break
-            
-            self.completed += 1
-            if result['success']:
-                self.successes += 1
-            else:
-                self.fails += 1
-                
-            if self.update_callback:
-                await self.update_callback({
-                    "status": "progress",
-                    "result": result,
-                    "completed": self.completed,
-                    "total": self.total,
-                    "successes": self.successes,
-                    "fails": self.fails
-                })
-            queue.task_done()
+                self.completed += 1
+                if result['success']:
+                    self.successes += 1
+                else:
+                    self.fails += 1
+                    
+                if self.update_callback:
+                    await self.update_callback({
+                        "status": "progress",
+                        "result": result,
+                        "completed": self.completed,
+                        "total": self.total,
+                        "successes": self.successes,
+                        "fails": self.fails
+                    })
+            except Exception as e:
+                print(f"DEBUG: _worker processing card {card} failed completely: {str(e)}")
+            finally:
+                queue.task_done()
     
     async def run(self):
         try:
