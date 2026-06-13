@@ -1640,7 +1640,7 @@ class ConcurrentHitter:
                 break
                 
             try:
-                max_retries = 3 # Increased from 2 to allow for Cloudflare progressive backoff
+                max_retries = 6 # Increased to allow cycling through more proxies
                 for try_idx in range(max_retries):
                     result = await single_hit(browser, self.url, card, attempt_num, autofill_class, self.url_info, self.user_id)
                     
@@ -1651,7 +1651,7 @@ class ConcurrentHitter:
                             
                         if try_idx < max_retries - 1:
                             # 1% CODER: Exponential Backoff (from claude.py) for rate limit / proxy drops
-                            delay = 1.5 * (try_idx + 1)
+                            delay = 2.0 * (try_idx + 1)
                             await asyncio.sleep(delay)
                             continue # Try again with a new proxy
                     break
