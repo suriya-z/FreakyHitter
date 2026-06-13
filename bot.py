@@ -138,12 +138,14 @@ async def hit_command(message: types.Message):
             idx = 0
             while True:
                 try:
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(3.0)
                     await status_msg.edit_text(frames[idx % len(frames)])
                     idx += 1
                 except asyncio.CancelledError:
                     break
-                except:
+                except Exception as e:
+                    if "RetryAfter" in str(e):
+                        await asyncio.sleep(10)
                     pass
         anim_task = asyncio.create_task(anim_loop())
     
@@ -239,7 +241,10 @@ async def hit_command(message: types.Message):
                     f"✅ <b>Approved:</b> {data['successes']}\n"
                     f"❌ <b>Declined:</b> {data['fails']}"
                 )
-                await status_msg.edit_text(text)
+                try:
+                    await status_msg.edit_text(text)
+                except Exception:
+                    await message.answer(text)
             if user_id in active_sessions:
                 del active_sessions[user_id]
         
@@ -247,7 +252,11 @@ async def hit_command(message: types.Message):
             if anim_task:
                 anim_task.cancel()
             error_msg = data.get("error", "Unknown error")
-            await status_msg.edit_text(f"❌ <b>Session Crashed!</b>\n\n<code>{error_msg}</code>")
+            text = f"❌ <b>Session Crashed!</b>\n\n<code>{error_msg}</code>"
+            try:
+                await status_msg.edit_text(text)
+            except Exception:
+                await message.answer(text)
             if user_id in active_sessions:
                 del active_sessions[user_id]
 
@@ -369,7 +378,10 @@ async def chkproxy_command(message: types.Message):
     if is_pool and dead_count > 0:
         final_msg += f"\n\n🗑 <i>{dead_count} dead proxies were automatically removed from your pool.</i>"
         
-    await status_msg.edit_text(final_msg)
+    try:
+        await status_msg.edit_text(final_msg)
+    except Exception:
+        await message.answer(final_msg)
 
 from aiohttp import web
 
