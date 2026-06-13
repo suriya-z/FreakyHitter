@@ -711,13 +711,22 @@ class ProxyManager:
         lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
         added = 0
         for line in lines:
+            prefix = "http://"
+            raw_line = line
+            if line.lower().startswith("socks5://"):
+                prefix = "socks5://"
+                line = line[9:]
+            elif line.lower().startswith("http://"):
+                prefix = "http://"
+                line = line[7:]
+                
             parts = line.split(':')
             if len(parts) == 4:
-                p = {"raw": line, "server": f"http://{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]}
+                p = {"raw": raw_line, "server": f"{prefix}{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]}
                 pool.append(p)
                 added += 1
             elif len(parts) == 2:
-                p = {"raw": line, "server": f"http://{parts[0]}:{parts[1]}"}
+                p = {"raw": raw_line, "server": f"{prefix}{parts[0]}:{parts[1]}"}
                 pool.append(p)
                 added += 1
         if added > 0:
