@@ -1669,7 +1669,15 @@ class ConcurrentHitter:
                 
             async with async_playwright() as p:
                 # 1% CODER: Launch Chromium once to prevent RAM exhaust on 512MB VMs
-                browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-dev-shm-usage','--disable-web-security','--disable-site-isolation-trials'])
+                browser = await p.chromium.launch(headless=True, args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-web-security',
+                    '--disable-site-isolation-trials',
+                    '--ignore-certificate-errors', # Crucial for some proxy providers
+                    '--proxy-bypass-list=<-loopback>' # Prevent localhost proxy loops
+                ])
                 
                 await self.analyze_first(browser)
                 

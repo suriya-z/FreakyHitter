@@ -406,7 +406,15 @@ async def debugproxy_command(message: types.Message):
     
     try:
         async with async_playwright() as play:
-            browser = await play.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-dev-shm-usage','--disable-web-security','--disable-site-isolation-trials'])
+            browser = await play.chromium.launch(headless=True, args=[
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-web-security',
+                '--disable-site-isolation-trials',
+                '--ignore-certificate-errors',
+                '--proxy-bypass-list=<-loopback>'
+            ])
             context = await browser.new_context(proxy=playwright_proxy, ignore_https_errors=True)
             page = await context.new_page()
             
