@@ -1763,7 +1763,7 @@ class ConcurrentHitter:
                     self.autofill_class = await asyncio.wait_for(AutofillSelector.detect(page, self.url), timeout=5.0)
                 except Exception as ex:
                     print(f"DEBUG: AutofillSelector failed/timed out: {ex}")
-                    self.autofill_class = StripeV2_ElementsIframe
+                    self.autofill_class = None
                 
                 try: await asyncio.wait_for(context.close(), timeout=2.0)
                 except: pass
@@ -1866,7 +1866,11 @@ class ConcurrentHitter:
                 
                 await self.analyze_first(browser)
                 
-                autofill_class = self.autofill_class or StripeV2_ElementsIframe
+                autofill_class = self.autofill_class
+                if not autofill_class:
+                    if self.update_callback:
+                        await self.update_callback({"status": "error", "error_message": "Failed to analyze gateway engine. The site is dead or heavily protected."})
+                    return
                 
                 if self.update_callback:
                     await self.update_callback({"status": "starting", "url_info": self.url_info, "autofill": autofill_class.__name__})
