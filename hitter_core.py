@@ -85,14 +85,18 @@ class StripeAPIExtractor:
                 resp_json = response.json()
                 amount = None
                 merchant = "Unknown"
-                if resp_json.get('line_item_group', {}).get('total'):
-                    amount = resp_json['line_item_group']['total']
+                lig = resp_json.get('line_item_group')
+                if lig and isinstance(lig, dict) and lig.get('total'):
+                    amount = lig['total']
                 elif resp_json.get('amount'):
                     amount = resp_json['amount']
-                if resp_json.get('account_settings', {}).get('display_name'):
-                    merchant = resp_json['account_settings']['display_name']
+                    
+                acct = resp_json.get('account_settings')
+                if acct and isinstance(acct, dict) and acct.get('display_name'):
+                    merchant = acct['display_name']
                 elif resp_json.get('statement_descriptor'):
                     merchant = resp_json['statement_descriptor']
+                    
                 currency = resp_json.get('currency', 'usd').upper()
                 return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount else None, 'merchant': merchant}
             return {'success': False}
@@ -1719,7 +1723,22 @@ class ConcurrentHitter:
                         
                         self.autofill_class = StripeV4_Invoice if 'invoice.stripe.com' in url_lower else StripeV2_ElementsIframe
                         cs_token = StripeAPIExtractor.extract_cs_live(self.url, html)
-                        pk_key = StripeAPIExtractor.extract_pk_live(html)
+                        
+                        pk_key = None
+                        hash_idx = self.url.find('#')
+                        if hash_idx != -1:
+                            import urllib.parse, base64, json
+                            hash_str = self.url[hash_idx+1:]
+                            decoded = urllib.parse.unquote(hash_str)
+                            try:
+                                raw_bytes = base64.b64decode(decoded + '==')
+                                json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
+                                data = json.loads(json_str)
+                                pk_key = data.get('apiKey')
+                            except: pass
+                        if not pk_key:
+                            pk_key = StripeAPIExtractor.extract_pk_live(html)
+                            
                         self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'merchant': 'Unknown', 'amount': None}
                         
                         if cs_token and pk_key:
