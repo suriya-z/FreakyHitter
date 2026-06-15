@@ -505,6 +505,8 @@ class StripeAPIHitter:
                 "authority": "api.stripe.com",
                 "accept": "application/json",
                 "content-type": "application/x-www-form-urlencoded",
+                "origin": "https://checkout.stripe.com",
+                "referer": "https://checkout.stripe.com/",
                 "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
             }
 
@@ -517,6 +519,7 @@ class StripeAPIHitter:
                 "card[exp_month]": card['month'],
                 "card[exp_year]": card['year'],
                 "key": self.pk_live,
+                "payment_user_agent": "stripe.js/b60285dd61; stripe-js-v3/b60285dd61; checkout",
             }
             
             loop = asyncio.get_event_loop()
