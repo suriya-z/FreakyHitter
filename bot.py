@@ -90,8 +90,8 @@ async def hit_command(message: types.Message):
         # Format: /hit [url] [bin_pattern] [count]
         bin_pattern = "".join(parts[:-1]).strip()
         count = int(count_val)
-        if count > 100:
-            await message.answer("❌ Maximum allowed count is 100 per session.")
+        if count > 10:
+            await message.answer("❌ Maximum allowed count is 10 per session.")
             return
             
         # Generate Cards
