@@ -545,16 +545,13 @@ class StripeAPIHitter:
             
             # 2. Confirm Payment Intent
             confirm_url = f"https://api.stripe.com/v1/payment_pages/{self.cs_live}/confirm"
+            email = RandomData.get_email()
             confirm_data = {
                 "payment_method": pm_id,
                 "key": self.pk_live,
                 "expected_payment_method_type": "card",
-                "shipping[name]": f"{RandomData.get_name()}",
-                "shipping[address][line1]": address["line1"],
-                "shipping[address][city]": address["city"],
-                "shipping[address][state]": address["state"],
-                "shipping[address][postal_code]": address["zip"],
-                "shipping[address][country]": address["country"],
+                "receipt_email": email,
+                "email": email,
             }
             if self.raw_amount is not None:
                 confirm_data["expected_amount"] = self.raw_amount
@@ -615,7 +612,9 @@ class StripeAPIHitter:
                                     confirm_data_2 = {
                                         "payment_method": pm_id,
                                         "key": self.pk_live,
-                                        "expected_payment_method_type": "card"
+                                        "expected_payment_method_type": "card",
+                                        "receipt_email": email,
+                                        "email": email,
                                     }
                                     if self.raw_amount is not None:
                                         confirm_data_2["expected_amount"] = self.raw_amount
