@@ -1751,10 +1751,19 @@ class ConcurrentHitter:
                 except asyncio.TimeoutError:
                     raise Exception("Timeout 15000ms exceeded.")
                 await asyncio.sleep(2)
-                self.url_info = await URLAnalyzer.analyze(self.user_id, page, self.url)
+                try:
+                    self.url_info = await asyncio.wait_for(URLAnalyzer.analyze(self.user_id, page, self.url), timeout=5.0)
+                except Exception as ex:
+                    print(f"DEBUG: URLAnalyzer failed/timed out: {ex}")
+                    self.url_info = {'merchant': 'Unknown', 'amount': None, 'cs_token': None, 'pk_key': None}
                 
                 if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Detecting gateway engine..."})
-                self.autofill_class = await AutofillSelector.detect(page, self.url)
+                
+                try:
+                    self.autofill_class = await asyncio.wait_for(AutofillSelector.detect(page, self.url), timeout=5.0)
+                except Exception as ex:
+                    print(f"DEBUG: AutofillSelector failed/timed out: {ex}")
+                    self.autofill_class = StripeV2_ElementsIframe
                 
                 try: await asyncio.wait_for(context.close(), timeout=2.0)
                 except: pass
