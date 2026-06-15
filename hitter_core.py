@@ -548,7 +548,13 @@ class StripeAPIHitter:
             confirm_data = {
                 "payment_method": pm_id,
                 "key": self.pk_live,
-                "expected_payment_method_type": "card"
+                "expected_payment_method_type": "card",
+                "shipping[name]": f"{RandomData.get_name()}",
+                "shipping[address][line1]": address["line1"],
+                "shipping[address][city]": address["city"],
+                "shipping[address][state]": address["state"],
+                "shipping[address][postal_code]": address["zip"],
+                "shipping[address][country]": address["country"],
             }
             if self.raw_amount is not None:
                 confirm_data["expected_amount"] = self.raw_amount
