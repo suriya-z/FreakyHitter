@@ -74,7 +74,7 @@ class StripeAPIExtractor:
             proxies = None
             if proxy_data:
                 auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
-                proxy_url = f"http://{auth}{proxy_data['server']}"
+                proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
                 proxies = {"http": proxy_url, "https": proxy_url}
                 
             loop = asyncio.get_event_loop()
@@ -738,7 +738,7 @@ class StripeAPIHitter:
             if self.proxy_data:
                 result['proxy_raw'] = self.proxy_data['raw']
                 auth = f"{self.proxy_data['username']}:{self.proxy_data['password']}@" if self.proxy_data.get('username') else ""
-                proxy_url = f"http://{auth}{self.proxy_data['server']}"
+                proxy_url = f"http://{auth}{self.proxy_data['server'].replace('http://', '')}"
                 proxies = {"http": proxy_url, "https": proxy_url}
 
             headers = {
