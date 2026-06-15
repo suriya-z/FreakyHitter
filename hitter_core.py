@@ -532,6 +532,7 @@ class StripeAPIHitter:
             if self.raw_amount is not None:
                 confirm_data["expected_amount"] = self.raw_amount
             
+            loop = asyncio.get_event_loop()
             confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=15, impersonate="chrome116"))
             confirm_json = confirm_res.json()
             
