@@ -324,6 +324,34 @@ async def offproxy_command(message: types.Message):
     await ProxyManager.clear(message.from_user.id)
     await message.answer("🛑 <b>Proxy Pool Cleared</b>\nYour proxies have been removed.")
 
+async def test_proxy_list(proxies_to_test, is_pool, user_id):
+    results = []
+    dead_count = 0
+    live_count = 0
+    
+    for p in proxies_to_test:
+        proxy_url = p['server']
+        if 'username' in p:
+            server = p['server'].replace('http://', '')
+            proxy_url = f"http://{p['username']}:{p['password']}@{server}"
+            
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=10) as resp:
+                    if resp.status in [200, 404]:
+                        results.append(f"✅ Live for Stripe | {p['raw']}")
+                        live_count += 1
+                    else:
+                        results.append(f"❌ Blocked by Provider | {p['raw']}")
+                        if is_pool: await ProxyManager.remove(user_id, p['raw'])
+                        dead_count += 1
+        except:
+            results.append(f"❌ Dead/Timeout | {p['raw']}")
+            if is_pool: await ProxyManager.remove(user_id, p['raw'])
+            dead_count += 1
+            
+    return results, live_count, dead_count
+
 @dp.message(Command("chkproxy"))
 async def chkproxy_command(message: types.Message):
     user_id = message.from_user.id
@@ -331,7 +359,6 @@ async def chkproxy_command(message: types.Message):
     
     proxies_to_test = []
     if text:
-        # Test specific list without adding
         temp_pool = []
         lines = text.split()
         for line in lines:
@@ -352,31 +379,7 @@ async def chkproxy_command(message: types.Message):
 
     status_msg = await message.answer(f"🔍 Testing {len(proxies_to_test)} proxies. Please wait...")
     
-    results = []
-    dead_count = 0
-    live_count = 0
-    
-    for p in proxies_to_test:
-        proxy_url = p['server']
-        if 'username' in p:
-            server = p['server'].replace('http://', '')
-            proxy_url = f"http://{p['username']}:{p['password']}@{server}"
-            
-        try:
-            async with aiohttp.ClientSession() as session:
-                # Test against Stripe instead of ip-api to see if the provider blocks financial domains
-                async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=10) as resp:
-                    if resp.status in [200, 404]: # 404 means Stripe loaded but no invoice id, which is fine
-                        results.append(f"✅ Live for Stripe | {p['raw']}")
-                        live_count += 1
-                    else:
-                        results.append(f"❌ Blocked by Provider | {p['raw']}")
-                        if is_pool: await ProxyManager.remove(user_id, p['raw'])
-                        dead_count += 1
-        except:
-            results.append(f"❌ Dead/Timeout | {p['raw']}")
-            if is_pool: await ProxyManager.remove(user_id, p['raw'])
-            dead_count += 1
+    results, live_count, dead_count = await test_proxy_list(proxies_to_test, is_pool, user_id)
             
     res_text = "\n".join(results)
     if len(res_text) > 3500:
@@ -452,6 +455,28 @@ async def start_web_server():
     await site.start()
     print(f"Dummy web server started on port {port} for Render health checks")
 
+async def auto_proxy_checker_loop():
+    while True:
+        try:
+            await asyncio.sleep(6 * 60 * 60) # Wake up every 6 hours
+            print("Running Auto Proxy Checker...")
+            users = await ProxyManager.get_all_users()
+            for uid in users:
+                proxies = list(await ProxyManager.get_user_proxies(uid))
+                if not proxies: continue
+                
+                # Test all proxies (is_pool=True automatically deletes dead ones)
+                _, live_count, dead_count = await test_proxy_list(proxies, True, uid)
+                
+                if dead_count > 0:
+                    msg = f"🗑 <b>Auto-Cleanup Report</b>\nRemoved {dead_count} dead/blocked proxies.\nYou have {live_count} live proxies remaining in your pool."
+                    try:
+                        await bot.send_message(uid, msg)
+                    except: pass
+        except Exception as e:
+            print(f"Auto proxy loop error: {e}")
+            await asyncio.sleep(60) # Prevent tight crash loop
+
 async def main() -> None:
     print("Bot is starting...")
     db_url = os.environ.get("DATABASE_URL")
@@ -470,7 +495,9 @@ async def main() -> None:
     else:
         print("WARNING: DATABASE_URL not set! Proxies will not be saved.")
         
+        
     await start_web_server()
+    asyncio.create_task(auto_proxy_checker_loop())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

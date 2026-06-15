@@ -696,6 +696,13 @@ class ProxyManager:
             return []
 
     @classmethod
+    async def get_all_users(cls) -> List[int]:
+        if not cls.db_pool: return []
+        async with cls.db_pool.acquire() as conn:
+            rows = await conn.fetch("SELECT user_id FROM user_proxies")
+            return [row['user_id'] for row in rows]
+
+    @classmethod
     async def save_user_proxies(cls, user_id: int, proxies: List[Dict]):
         if not cls.db_pool: return
         async with cls.db_pool.acquire() as conn:
