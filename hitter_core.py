@@ -1876,7 +1876,7 @@ class ConcurrentHitter:
                 autofill_class = self.autofill_class
                 if not autofill_class:
                     if self.update_callback:
-                        await self.update_callback({"status": "error", "error_message": "Failed to analyze gateway engine. The site is dead or heavily protected."})
+                        await self.update_callback({"status": "error", "error": "Failed to analyze gateway engine. The site is dead or heavily protected."})
                     return
                 
                 if self.update_callback:
