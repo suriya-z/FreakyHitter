@@ -519,6 +519,8 @@ class StripeAPIHitter:
                 "card[cvc]": card['cvv'],
                 "card[exp_month]": card['month'],
                 "card[exp_year]": card['year'],
+                "billing_details[address][postal_code]": "10001",
+                "billing_details[address][country]": "US",
                 "key": self.pk_live,
                 "payment_user_agent": "stripe.js/b60285dd61; stripe-js-v3/b60285dd61; checkout",
             }
