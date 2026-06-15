@@ -192,7 +192,7 @@ async def hit_command(message: types.Message):
                     
                 hit_text += f"📉 Reason: {code}\n⏱ {res['response_time']:.2f}s"
                 
-                if code == 'exception' and 'error' in res:
+                if code in ['exception', 'unknown'] and 'error' in res:
                     import html
                     err_str = str(res['error'])[:200]
                     err_str = html.escape(err_str)

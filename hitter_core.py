@@ -525,7 +525,8 @@ class StripeAPIHitter:
             if pm_res.status_code != 200:
                 pm_json = pm_res.json()
                 result['error'] = pm_json.get('error', {}).get('message', 'Failed to generate payment method')
-                result['decline_code'] = pm_json.get('error', {}).get('decline_code', pm_json.get('error', {}).get('code', 'unknown'))
+                err = pm_json.get('error', {})
+                result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'unknown')
                 result['response_time'] = time.time() - start
                 return result
                 
@@ -625,7 +626,7 @@ class StripeAPIHitter:
                     result['decline_code'] = status
             else:
                 err = confirm_json.get('error', {})
-                result['decline_code'] = err.get('decline_code', err.get('code', 'unknown'))
+                result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'unknown')
                 result['error'] = err.get('message', 'Unknown error')
                 
         except Exception as e:
