@@ -654,9 +654,9 @@ class ConcurrentHitter:
         
     async def analyze_first(self):
         url_lower = self.url.lower()
-        if not any(x in url_lower for x in ['checkout.stripe.com', 'buy.stripe.com', 'invoice.stripe.com']):
+        if 'cs_' not in url_lower and 'buy.stripe.com' not in url_lower and 'invoice.stripe.com' not in url_lower:
             if self.update_callback:
-                await self.update_callback({"status": "error", "error": "Only native Stripe checkout URLs are currently supported."})
+                await self.update_callback({"status": "error", "error": "This does not appear to be a valid Stripe link. Need a checkout, buy, or invoice link."})
             return False
             
         for _ in range(3):
