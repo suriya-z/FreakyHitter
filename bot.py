@@ -394,51 +394,7 @@ async def chkproxy_command(message: types.Message):
     except Exception:
         await message.answer(final_msg)
 
-@dp.message(Command("debugproxy"))
-async def debugproxy_command(message: types.Message):
-    user_id = message.from_user.id
-    proxies = await ProxyManager.get_user_proxies(user_id)
-    if not proxies:
-        await message.answer("No proxies loaded.")
-        return
-        
-    p = proxies[0]
-    playwright_proxy = ProxyManager.format_for_playwright(p)
-    
-    status = await message.answer(f"Debugging Playwright with proxy: {p['server']} ...")
-    
-    from playwright.async_api import async_playwright
-    import traceback
-    
-    try:
-        async with async_playwright() as play:
-            browser = await play.chromium.launch(headless=True, args=[
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-web-security',
-                '--disable-site-isolation-trials',
-                '--ignore-certificate-errors',
-                '--proxy-bypass-list=<-loopback>'
-            ])
-            context = await browser.new_context(proxy=playwright_proxy, ignore_https_errors=True)
-            page = await context.new_page()
-            
-            error_text = "No error"
-            try:
-                await page.goto("https://checkout.stripe.com/", timeout=15000, wait_until='domcontentloaded')
-            except Exception as e:
-                error_text = str(e)
-                
-            await page.screenshot(path=f"debug_{user_id}.png")
-            await context.close()
-            await browser.close()
-            
-            from aiogram.types import FSInputFile
-            photo = FSInputFile(f"debug_{user_id}.png")
-            await message.answer_photo(photo, caption=f"Error:\n<code>{error_text}</code>")
-    except Exception as e:
-        await message.answer(f"Failed to run test:\n<code>{traceback.format_exc()}</code>")
+
 
 from aiohttp import web
 
