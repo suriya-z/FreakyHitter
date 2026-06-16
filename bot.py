@@ -205,9 +205,9 @@ async def hit_command(message: types.Message):
                     
                 hit_text += f"📉 Reason: {code}\n⏱ {res['response_time']:.2f}s"
                 
-                if code in ['exception', 'unknown', 'invalid_request_error', 'checkout_confirm_error', 'open', '3d_secure_auth_failed'] and 'error' in res:
+                if code in ['exception', 'unknown', 'invalid_request_error', 'checkout_confirm_error', 'open', '3d_secure_auth_failed'] and res.get('error') is not None:
                     import html
-                    err_str = str(res['error'])[:200]
+                    err_str = str(res.get('error'))[:200]
                     err_str = html.escape(err_str)
                     hit_text += f"\n🐛 <code>{err_str}</code>..."
                 live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin', 'withdrawal_count_limit_exceeded']
