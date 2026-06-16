@@ -654,6 +654,7 @@ class StripeAPIHitter:
                                     return result
                                 else:
                                     result['decline_code'] = '3d_secure_auth_failed'
+                                    result['error'] = str(auth_json)[:500]
                                     return result
                     except Exception as ex:
                         print(f"DEBUG: 3DS Frictionless bypass failed: {ex}")
