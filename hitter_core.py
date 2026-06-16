@@ -90,6 +90,20 @@ class StripeAPIExtractor:
                     amount = resp_json['amount']
                 elif resp_json.get('payment_intent') and isinstance(resp_json.get('payment_intent'), dict) and resp_json['payment_intent'].get('amount') is not None:
                     amount = resp_json['payment_intent']['amount']
+                else:
+                    def _find_amount(d):
+                        if isinstance(d, dict):
+                            for k in ['amount_total', 'amount_due']:
+                                if k in d and isinstance(d[k], int): return d[k]
+                            for v in d.values():
+                                res = _find_amount(v)
+                                if res is not None: return res
+                        elif isinstance(d, list):
+                            for item in d:
+                                res = _find_amount(item)
+                                if res is not None: return res
+                        return None
+                    amount = _find_amount(resp_json)
                     
                 acct = resp_json.get('account_settings')
                 if acct and isinstance(acct, dict) and acct.get('display_name'):
