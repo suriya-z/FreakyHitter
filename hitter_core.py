@@ -651,7 +651,14 @@ class StripeAPIHitter:
                             result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
                             result['error'] = err.get('message', 'Unknown error')
                             return result
+                    err = confirm_json.get('error')
+                    if isinstance(err, dict):
+                        result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
+                        result['error'] = err.get('message', 'Unknown error')
+                        return result
+                    
                     result['decline_code'] = 'open'
+                    result['error'] = str(confirm_json)[:500]  # Dump the JSON to telegram so we can see what's actually there
                 else:
                     result['decline_code'] = status
             else:
