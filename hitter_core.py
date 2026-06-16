@@ -88,6 +88,8 @@ class StripeAPIExtractor:
                     amount = lig['total']
                 elif resp_json.get('amount'):
                     amount = resp_json['amount']
+                elif resp_json.get('payment_intent') and isinstance(resp_json.get('payment_intent'), dict) and resp_json['payment_intent'].get('amount'):
+                    amount = resp_json['payment_intent']['amount']
                     
                 acct = resp_json.get('account_settings')
                 if acct and isinstance(acct, dict) and acct.get('display_name'):
