@@ -536,6 +536,8 @@ class StripeAPIHitter:
                 "payment_method_data[card][cvc]": card['cvv'],
                 "payment_method_data[card][exp_month]": card['month'],
                 "payment_method_data[card][exp_year]": card['year'],
+                "payment_method_data[billing_details][name]": RandomData.get_name(),
+                "payment_method_data[billing_details][email]": RandomData.get_email(),
                 "payment_method_data[billing_details][address][line1]": address["line1"],
                 "payment_method_data[billing_details][address][city]": address["city"],
                 "payment_method_data[billing_details][address][state]": address["state"],
