@@ -558,7 +558,7 @@ class StripeAPIHitter:
             
             if confirm_res.status_code == 200:
                 status = confirm_json.get('status')
-                if status == 'succeeded' or status == 'requires_capture':
+                if status in ['succeeded', 'requires_capture', 'complete']:
                     result['success'] = True
                     return result
                 elif status == 'requires_action':
@@ -615,7 +615,7 @@ class StripeAPIHitter:
                                     confirm_json_2 = confirm_res_2.json()
                                     
                                     status_2 = confirm_json_2.get('status')
-                                    if status_2 == 'succeeded' or status_2 == 'requires_capture':
+                                    if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                         result['success'] = True
                                     else:
                                         err = confirm_json_2.get('error', {})
@@ -635,6 +635,23 @@ class StripeAPIHitter:
                         
                     result['decline_code'] = '3d_secure_required'
                     return result
+                elif status == 'open':
+                    # Card declined, checkout session remains open. Look for nested payment_intent error
+                    pi = confirm_json.get('payment_intent', {})
+                    if isinstance(pi, dict):
+                        err = pi.get('last_payment_error')
+                        if err:
+                            result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
+                            result['error'] = err.get('message', 'Unknown error')
+                            return result
+                    si = confirm_json.get('setup_intent', {})
+                    if isinstance(si, dict):
+                        err = si.get('last_setup_error')
+                        if err:
+                            result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
+                            result['error'] = err.get('message', 'Unknown error')
+                            return result
+                    result['decline_code'] = 'open'
                 else:
                     result['decline_code'] = status
             else:
