@@ -612,7 +612,6 @@ class StripeAPIHitter:
                                     "app[device_render_options][sdk_ui_type][2]": "03",
                                     "app[device_render_options][sdk_ui_type][3]": "04",
                                     "app[device_render_options][sdk_ui_type][4]": "05",
-                                    "app[sdk_ephem_pub_key]": '{"kty":"EC","crv":"P-256","x":"V0x4w98cO6pL41VjQ8T8YmX1qA-P2QOqN8YpQYm9a_E","y":"l1oO3qZ20281Q7A-P9J8v6eA1B2T-QO8pZ9_X-aB2QY"}',
                                     "app[sdk_reference_number]": "3DS_LOA_SDK_PPDO_020100_00001",
                                     "app[sdk_trans_id]": server_trans_id or "6291d904-74a4-4dc4-b770-4cc200ffb5d4",
                                     "browser": json.dumps(browser_info, separators=(',', ':')),
