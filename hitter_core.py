@@ -613,7 +613,7 @@ class StripeAPIHitter:
                                     "app[device_render_options][sdk_ui_type][2]": "03",
                                     "app[device_render_options][sdk_ui_type][3]": "04",
                                     "app[device_render_options][sdk_ui_type][4]": "05",
-                                    "browser": json.dumps(browser_info, separators=(',', ':')),
+                                    "browser": '{"color_depth":"32","java_enabled":false,"language":"en-US","screen_height":"844","screen_width":"390","timezone_offset":"240","user_agent":"' + headers['user-agent'] + '"}',
                                     "key": self.pk_live
                                 }
                                 
