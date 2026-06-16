@@ -606,7 +606,7 @@ class StripeAPIHitter:
                                 auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                 auth_data = {
                                     "source": source_id,
-                                    "app[sdk_trans_id]": server_trans_id or "6291d904-74a4-4dc4-b770-4cc200ffb5d4",
+                                    "app": '{"sdk_trans_id":"' + (server_trans_id or "6291d904-74a4-4dc4-b770-4cc200ffb5d4") + '"}',
                                     "browser": '{"color_depth":"32","java_enabled":false,"language":"en-US","screen_height":"844","screen_width":"390","timezone_offset":"240","user_agent":"' + headers['user-agent'] + '"}',
                                     "key": self.pk_live
                                 }
