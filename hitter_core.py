@@ -662,6 +662,10 @@ class StripeAPIHitter:
                                         return result
                                     else:
                                         err = auth_json.get('error', {})
+                                        if err.get('type') == 'invalid_request_error' and not err.get('message'):
+                                            result['decline_code'] = '3d_secure_auth_failed'
+                                            return result
+                                            
                                         if '3D Secure 2 is not supported' in err.get('message', ''):
                                             result['decline_code'] = '3d_secure_2_not_supported'
                                             return result
