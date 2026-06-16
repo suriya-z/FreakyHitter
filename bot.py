@@ -65,7 +65,7 @@ async def hit_command(message: types.Message):
         await message.answer("⚠️ You already have an active hitting session running! Please wait for it to finish or use /stop.")
         return
 
-    # 1% CODER: Naked IP Block
+    # Naked IP Block
     if not await ProxyManager.has_proxies(user_id):
         await message.answer("❌ <b>Proxy Required!</b>\nPlease use <code>/setproxy ip:port:user:pass</code> to load your proxies first.")
         return
@@ -77,7 +77,7 @@ async def hit_command(message: types.Message):
         
     url = args[1]
     
-    # 1% CODER: Advanced Card/BIN Parsing (Immune to spacing issues)
+    # Advanced Card/BIN Parsing (Immune to spacing issues)
     # Extract everything after the URL
     raw_payload = message.text[message.text.find(url) + len(url):].strip()
     cards = []
@@ -183,7 +183,7 @@ async def hit_command(message: types.Message):
             else:
                 code = res.get('decline_code') or res.get('error') or 'unknown'
                 
-                # 1% CODER: Live Card Detection
+                # Live Card Detection
                 hit_text = f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str}\n"
                 
                 merchant_name = res.get('merchant') or 'Unknown'

