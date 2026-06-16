@@ -606,7 +606,6 @@ class StripeAPIHitter:
                                 auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                 auth_data = {
                                     "source": source_id,
-                                    "app[message_version]": "2.1.0",
                                     "app[device_render_options][sdk_interface]": "03",
                                     "app[device_render_options][sdk_ui_type][0]": "01",
                                     "app[device_render_options][sdk_ui_type][1]": "02",
