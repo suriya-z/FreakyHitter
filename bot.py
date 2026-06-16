@@ -122,20 +122,17 @@ async def hit_command(message: types.Message):
         })
     status_msg = None
     if len(cards) > 1:
-        status_msg = await message.answer(f"🍳 <b>Cooking...</b>\nGenerating {len(cards)} cards...")
-    else:
-        status_msg = await message.answer(f"🍳 <b>Cooking...</b>\n<i>Initiating sequence... 🩸</i>")
-        
-    status_msg = await message.answer("🍳 <b>Cooking...</b>")
+        status_msg = await message.answer(f"⏳ <b>Initializing Engine for {len(cards)} cards...</b>")
+    
     anim_task = None
     
     # Callback to update the Telegram message
     async def update_status(data):
         if data["status"] == "analyzing":
             step_text = data.get("step", "Initializing hitting engine...")
-            try: await status_msg.edit_text(f"🍳 <b>Cooking...</b>\n<i>{step_text}</i>")
-            except Exception as e:
-                pass
+            if status_msg:
+                try: await status_msg.edit_text(f"⏳ <b>{step_text}</b>")
+                except Exception as e: pass
         elif data["status"] == "starting":
             info = data.get("url_info", {})
             merchant = info.get("merchant", "Unknown")
@@ -146,7 +143,7 @@ async def hit_command(message: types.Message):
             else:
                 amt = raw_amt or "Unknown"
                 
-            if len(cards) > 1:
+            if len(cards) > 1 and status_msg:
                 text = (
                     f"🎯 <b>Hitting Session Started!</b>\n\n"
                     f"🛒 <b>Merchant:</b> {merchant}\n"
@@ -243,14 +240,16 @@ async def hit_command(message: types.Message):
                 try: await anim_task
                 except: pass
             
-            text = (
-                f"🎯 <b>Hitting Session Completed!</b>\n\n"
-                f"✅ <b>Live:</b> {data['successes']}\n"
-                f"❌ <b>Dead:</b> {data['fails']}\n\n"
-            )
-            try: await status_msg.delete()
-            except: pass
-            await message.answer(text)
+            if len(cards) > 1:
+                text = (
+                    f"🎯 <b>Hitting Session Completed!</b>\n\n"
+                    f"✅ <b>Live:</b> {data['successes']}\n"
+                    f"❌ <b>Dead:</b> {data['fails']}\n\n"
+                )
+                if status_msg:
+                    try: await status_msg.delete()
+                    except: pass
+                await message.answer(text)
             if user_id in active_sessions:
                 del active_sessions[user_id]
         

