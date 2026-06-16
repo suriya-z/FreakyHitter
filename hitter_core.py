@@ -84,11 +84,11 @@ class StripeAPIExtractor:
                 amount = None
                 merchant = "Unknown"
                 lig = resp_json.get('line_item_group')
-                if lig and isinstance(lig, dict) and lig.get('total'):
+                if lig and isinstance(lig, dict) and lig.get('total') is not None:
                     amount = lig['total']
-                elif resp_json.get('amount'):
+                elif resp_json.get('amount') is not None:
                     amount = resp_json['amount']
-                elif resp_json.get('payment_intent') and isinstance(resp_json.get('payment_intent'), dict) and resp_json['payment_intent'].get('amount'):
+                elif resp_json.get('payment_intent') and isinstance(resp_json.get('payment_intent'), dict) and resp_json['payment_intent'].get('amount') is not None:
                     amount = resp_json['payment_intent']['amount']
                     
                 acct = resp_json.get('account_settings')
