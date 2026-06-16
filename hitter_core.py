@@ -607,12 +607,6 @@ class StripeAPIHitter:
                                 auth_data = {
                                     "source": source_id,
                                     "app[sdk_trans_id]": server_trans_id or "6291d904-74a4-4dc4-b770-4cc200ffb5d4",
-                                    "app[device_render_options][sdk_interface]": "03",
-                                    "app[device_render_options][sdk_ui_type][0]": "01",
-                                    "app[device_render_options][sdk_ui_type][1]": "02",
-                                    "app[device_render_options][sdk_ui_type][2]": "03",
-                                    "app[device_render_options][sdk_ui_type][3]": "04",
-                                    "app[device_render_options][sdk_ui_type][4]": "05",
                                     "browser": '{"color_depth":"32","java_enabled":false,"language":"en-US","screen_height":"844","screen_width":"390","timezone_offset":"240","user_agent":"' + headers['user-agent'] + '"}',
                                     "key": self.pk_live
                                 }
