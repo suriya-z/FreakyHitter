@@ -609,22 +609,17 @@ class StripeAPIHitter:
                                 server_trans_id = next_action['use_stripe_sdk'].get('server_transaction_id')
                                 
                                 if source_id:
-                                    # Spoof legitimate browser environment for 3DS evaluation
-                                    browser_info = {
-                                        "color_depth": profile["color_depth"],
-                                        "java_enabled": False,
-                                        "language": "en-US",
-                                        "screen_height": profile["screen_height"],
-                                        "screen_width": profile["screen_width"],
-                                        "timezone_offset": "240",
-                                        "user_agent": profile["user_agent"]
-                                    }
-                                    
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                     auth_data = {
                                         "source": source_id,
-                                        "app": '{"sdk_trans_id":"' + (server_trans_id or "6291d904-74a4-4dc4-b770-4cc200ffb5d4") + '"}',
-                                        "browser": json.dumps(browser_info, separators=(',', ':')),
+                                        "app[sdk_trans_id]": server_trans_id or "6291d904-74a4-4dc4-b770-4cc200ffb5d4",
+                                        "browser[color_depth]": profile["color_depth"],
+                                        "browser[java_enabled]": "false",
+                                        "browser[language]": "en-US",
+                                        "browser[screen_height]": profile["screen_height"],
+                                        "browser[screen_width]": profile["screen_width"],
+                                        "browser[timezone_offset]": "240",
+                                        "browser[user_agent]": profile["user_agent"],
                                         "key": self.pk_live
                                     }
                                     
