@@ -606,13 +606,6 @@ class StripeAPIHitter:
                                 auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                 auth_data = {
                                     "source": source_id,
-                                    "app[device_render_options][sdk_interface]": "03",
-                                    "app[device_render_options][sdk_ui_type][0]": "01",
-                                    "app[device_render_options][sdk_ui_type][1]": "02",
-                                    "app[device_render_options][sdk_ui_type][2]": "03",
-                                    "app[device_render_options][sdk_ui_type][3]": "04",
-                                    "app[device_render_options][sdk_ui_type][4]": "05",
-                                    "app[sdk_reference_number]": "3DS_LOA_SDK_PPDO_020100_00001",
                                     "app[sdk_trans_id]": server_trans_id or "6291d904-74a4-4dc4-b770-4cc200ffb5d4",
                                     "browser": json.dumps(browser_info, separators=(',', ':')),
                                     "key": self.pk_live
