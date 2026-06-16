@@ -123,6 +123,8 @@ async def hit_command(message: types.Message):
     status_msg = None
     if len(cards) > 1:
         status_msg = await message.answer(f"⏳ <b>Initializing Engine for {len(cards)} cards...</b>")
+    else:
+        status_msg = await message.answer(f"🎯 <b>Target Locked. Hitting...</b>")
     
     anim_task = None
     
@@ -152,12 +154,26 @@ async def hit_command(message: types.Message):
                     f"⏳ <b>Progress:</b> 0/{len(cards)}\n"
                     f"✅ 0  |  ❌ 0"
                 )
-                await status_msg.edit_text(text)
-            # If len == 1, let the animation keep running!
+                try: await status_msg.edit_text(text)
+                except Exception: pass
+            elif len(cards) == 1 and status_msg:
+                text = (
+                    f"🎯 <b>Hitting Session Started!</b>\n\n"
+                    f"🛒 <b>Merchant:</b> {merchant}\n"
+                    f"💰 <b>Amount:</b> {amt}\n"
+                    f"🤖 <b>Bypass Engine:</b> {data.get('autofill')}"
+                )
+                try: await status_msg.edit_text(text)
+                except Exception: pass
             
         elif data["status"] == "progress":
             res = data["result"]
             
+            # For single card, delete the temporary status message to keep chat clean
+            if len(cards) == 1 and status_msg:
+                try: await status_msg.delete()
+                except: pass
+                
             # Send an individual message for the hit result
             card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
             amt = res.get('amount')
