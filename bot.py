@@ -130,7 +130,7 @@ async def hit_command(message: types.Message):
     
     # Callback to update the Telegram message
     async def update_status(data):
-        global anim_task
+        nonlocal anim_task
         if data["status"] == "analyzing":
             step_text = data.get("step", "Initializing hitting engine...")
             if status_msg:
