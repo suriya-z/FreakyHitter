@@ -157,18 +157,34 @@ async def hit_command(message: types.Message):
                 try: await status_msg.edit_text(text)
                 except Exception: pass
             elif len(cards) == 1 and status_msg:
-                text = (
-                    f"🎯 <b>Hitting Session Started!</b>\n\n"
-                    f"🛒 <b>Merchant:</b> {merchant}\n"
-                    f"💰 <b>Amount:</b> {amt}\n"
-                    f"🤖 <b>Bypass Engine:</b> {data.get('autofill')}"
-                )
-                try: await status_msg.edit_text(text)
-                except Exception: pass
+                # Start dynamic animation for single hits
+                async def animate_hitting():
+                    dots = 1
+                    while True:
+                        try:
+                            text = (
+                                f"🎯 <b>Hitting Target{'.' * dots}</b>\n\n"
+                                f"🛒 <b>Merchant:</b> {merchant}\n"
+                                f"💰 <b>Amount:</b> {amt}\n"
+                                f"🤖 <b>Bypass Engine:</b> {data.get('autofill')}"
+                            )
+                            await status_msg.edit_text(text)
+                            dots = (dots % 3) + 1
+                            await asyncio.sleep(0.8)
+                        except Exception:
+                            break
+                            
+                global anim_task
+                anim_task = asyncio.create_task(animate_hitting())
             
         elif data["status"] == "progress":
             res = data["result"]
             
+            # Cancel animation task if running
+            global anim_task
+            if 'anim_task' in globals() and anim_task:
+                anim_task.cancel()
+                
             # For single card, delete the temporary status message to keep chat clean
             if len(cards) == 1 and status_msg:
                 try: await status_msg.delete()
