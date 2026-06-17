@@ -539,21 +539,42 @@ class StripeAPIHitter:
 
                 address, tz_id, locale = await RandomData.get_address_and_timezone(proxy_url if proxies else None)
     
+                # Step 1: Tokenize the raw card into a PaymentMethod
+                pm_url = "https://api.stripe.com/v1/payment_methods"
+                pm_data = {
+                    "type": "card",
+                    "card[number]": card['card'],
+                    "card[cvc]": card['cvv'],
+                    "card[exp_month]": card['month'],
+                    "card[exp_year]": card['year'],
+                    "billing_details[name]": RandomData.get_name(),
+                    "billing_details[email]": RandomData.get_email(),
+                    "billing_details[address][line1]": address["line1"],
+                    "billing_details[address][city]": address["city"],
+                    "billing_details[address][state]": address["state"],
+                    "billing_details[address][postal_code]": address["zip"],
+                    "billing_details[address][country]": address["country"],
+                    "payment_user_agent": "stripe.js/b60285dd61; stripe-js-v3/b60285dd61; checkout",
+                    "key": self.pk_live,
+                }
+                
+                loop = asyncio.get_event_loop()
+                pm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(pm_url, headers=headers, data=pm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                pm_json = pm_res.json()
+                
+                if 'id' not in pm_json:
+                    err = pm_json.get('error', {})
+                    result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'pm_token_failed')
+                    result['error'] = err.get('message', 'Failed to generate payment method token')
+                    # If we reach here without exception, do not retry!
+                    return result
+                    
+                pm_id = pm_json['id']
+                
+                # Step 2: Confirm the charge using the trusted pm_ token
                 confirm_url = f"https://api.stripe.com/v1/payment_pages/{self.cs_live}/confirm"
                 confirm_data = {
-                    "payment_method_data[type]": "card",
-                    "payment_method_data[card][number]": card['card'],
-                    "payment_method_data[card][cvc]": card['cvv'],
-                    "payment_method_data[card][exp_month]": card['month'],
-                    "payment_method_data[card][exp_year]": card['year'],
-                    "payment_method_data[billing_details][name]": RandomData.get_name(),
-                    "payment_method_data[billing_details][email]": RandomData.get_email(),
-                    "payment_method_data[billing_details][address][line1]": address["line1"],
-                    "payment_method_data[billing_details][address][city]": address["city"],
-                    "payment_method_data[billing_details][address][state]": address["state"],
-                    "payment_method_data[billing_details][address][postal_code]": address["zip"],
-                    "payment_method_data[billing_details][address][country]": address["country"],
-                    "payment_method_data[payment_user_agent]": "stripe.js/b60285dd61; stripe-js-v3/b60285dd61; checkout",
+                    "payment_method": pm_id,
                     "expected_payment_method_type": "card",
                     "key": self.pk_live,
                 }
