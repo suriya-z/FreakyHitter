@@ -543,6 +543,22 @@ class StripeAPIHitter:
                 import uuid
                 pm_idempotency = str(uuid.uuid4())
                 confirm_idempotency = str(uuid.uuid4())
+                
+                # Step 0: Pure-API Telemetry Harvesting (MUID/SID)
+                telemetry_url = "https://m.stripe.com/6"
+                telemetry_headers = {
+                    "user-agent": profile["user_agent"],
+                    "content-type": "text/plain;charset=UTF-8",
+                    "origin": "https://checkout.stripe.com",
+                    "referer": "https://checkout.stripe.com/"
+                }
+                # Empty payload simulates a user with a strict adblocker, which is safer than a bad forged payload
+                loop = asyncio.get_event_loop()
+                telemetry_res = await loop.run_in_executor(None, lambda: cffi_requests.post(telemetry_url, headers=telemetry_headers, data="", proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                telemetry_json = telemetry_res.json() if telemetry_res.status_code == 200 else {}
+                
+                muid = telemetry_json.get("muid") or str(uuid.uuid4())
+                sid = telemetry_json.get("sid") or str(uuid.uuid4())
     
                 # Step 1: Tokenize the raw card into a PaymentMethod
                 pm_url = "https://api.stripe.com/v1/payment_methods"
@@ -560,6 +576,10 @@ class StripeAPIHitter:
                     "billing_details[address][postal_code]": address["zip"],
                     "billing_details[address][country]": address["country"],
                     "payment_user_agent": "stripe.js/b60285dd61; stripe-js-v3/b60285dd61; checkout",
+                    "pasted_fields": "number",
+                    "guid": muid,
+                    "muid": muid,
+                    "sid": sid,
                     "key": self.pk_live,
                 }
                 
