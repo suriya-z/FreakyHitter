@@ -130,6 +130,7 @@ async def hit_command(message: types.Message):
     
     # Callback to update the Telegram message
     async def update_status(data):
+        global anim_task
         if data["status"] == "analyzing":
             step_text = data.get("step", "Initializing hitting engine...")
             if status_msg:
@@ -174,15 +175,13 @@ async def hit_command(message: types.Message):
                         except Exception:
                             break
                             
-                global anim_task
                 anim_task = asyncio.create_task(animate_hitting())
             
         elif data["status"] == "progress":
             res = data["result"]
             
             # Cancel animation task if running
-            global anim_task
-            if 'anim_task' in globals() and anim_task:
+            if anim_task:
                 anim_task.cancel()
                 
             # For single card, delete the temporary status message to keep chat clean
