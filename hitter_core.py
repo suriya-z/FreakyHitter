@@ -956,7 +956,7 @@ class ConcurrentHitter:
     
     async def run(self):
         if self.update_callback:
-            await self.update_callback({"status": "starting"})
+            await self.update_callback({"status": "analyzing", "step": "Extracting Stripe keys and payload..."})
             
         success = await self.analyze_first()
         if not success:
