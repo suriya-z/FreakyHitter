@@ -648,7 +648,7 @@ class StripeAPIHitter:
                     confirm_json = confirm_res.json()
                     
                 # Case 2: We DID NOT send an expected_amount (e.g. $0 intent), but Stripe strictly requires it. Send 0.
-                elif confirm_res.status_code != 200 and 'expected_amount' not in confirm_data and 'expected amount' in err_msg.lower():
+                elif confirm_res.status_code != 200 and 'expected_amount' not in confirm_data and (err_code == 'checkout_amount_mismatch' or 'expected amount' in err_msg.lower()):
                     confirm_data['expected_amount'] = 0
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
                     confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
