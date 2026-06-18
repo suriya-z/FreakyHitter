@@ -623,6 +623,7 @@ class StripeAPIHitter:
                 confirm_data = {
                     "payment_method": pm_id,
                     "expected_payment_method_type": "card",
+                    "eid": "NA",
                     "key": self.pk_live,
                 }
                 if self.raw_amount is not None and self.raw_amount > 0:
