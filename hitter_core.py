@@ -639,8 +639,16 @@ class StripeAPIHitter:
                 # If the scraped amount was slightly off (taxes/shipping) and caused a mismatch, instantly retry without the constraint
                 err_code = confirm_json.get('error', {}).get('code')
                 err_msg = confirm_json.get('error', {}).get('message', '')
+                
+                # Case 1: We sent an expected_amount but it was wrong. Delete it and retry.
                 if confirm_res.status_code != 200 and 'expected_amount' in confirm_data and (err_code == 'checkout_amount_mismatch' or 'expected_amount' in err_msg):
                     del confirm_data['expected_amount']
+                    confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                    confirm_json = confirm_res.json()
+                    
+                # Case 2: We DID NOT send an expected_amount (e.g. $0 intent), but Stripe strictly requires it. Send 0.
+                elif confirm_res.status_code != 200 and 'expected_amount' not in confirm_data and 'expected amount' in err_msg.lower():
+                    confirm_data['expected_amount'] = 0
                     confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
                     confirm_json = confirm_res.json()
                 
