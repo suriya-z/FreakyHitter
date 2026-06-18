@@ -201,6 +201,9 @@ async def hit_command(message: types.Message):
             
             if res['success']:
                 final_url = res.get('final_url')
+                if final_url:
+                    import html
+                    final_url = html.escape(final_url)
                 url_str = f"\n🔗 <b>Confirmation:</b> {final_url}" if final_url else ""
                 hit_text = f"✅ <b>PAYMENT SUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str}{url_str}\n⏱ {res['response_time']:.2f}s"
                 if LOG_GROUP_ID:
@@ -210,15 +213,23 @@ async def hit_command(message: types.Message):
                         pass
             else:
                 code = res.get('decline_code') or res.get('error') or 'unknown'
+                if isinstance(code, str):
+                    import html
+                    code_escaped = html.escape(code)
+                else:
+                    code_escaped = str(code)
                 
                 # Live Card Detection
                 hit_text = f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str}\n"
                 
                 merchant_name = res.get('merchant') or 'Unknown'
+                if isinstance(merchant_name, str):
+                    import html
+                    merchant_name = html.escape(merchant_name)
                 if merchant_name != 'Unknown':
                     hit_text += f"🛒 <b>Merchant:</b> {merchant_name}\n"
                     
-                hit_text += f"📉 Reason: {code}\n⏱ {res['response_time']:.2f}s"
+                hit_text += f"📉 Reason: {code_escaped}\n⏱ {res['response_time']:.2f}s"
                 
                 if code in ['exception', 'unknown', 'invalid_request_error', 'checkout_confirm_error', 'open', '3d_secure_auth_failed'] and res.get('error') is not None:
                     import html
@@ -236,7 +247,13 @@ async def hit_command(message: types.Message):
                         pass
                         
             hit_text += "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
-            sent_msg = await message.answer(hit_text)
+            try:
+                sent_msg = await message.answer(hit_text)
+            except Exception as e:
+                # Fallback to plain text if HTML crashes
+                import re
+                plain_text = re.sub(r'<[^>]+>', '', hit_text)
+                sent_msg = await message.answer(f"⚠️ UI Formatting Error: {e}\n\nRAW RESULT:\n{plain_text}")
             
             async def auto_delete(m):
                 await asyncio.sleep(30)
