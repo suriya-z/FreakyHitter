@@ -640,8 +640,8 @@ class StripeAPIHitter:
                 err_code = confirm_json.get('error', {}).get('code')
                 err_msg = confirm_json.get('error', {}).get('message', '') or ''
                 
-                # Case 1: We sent an expected_amount but it was wrong.
-                if confirm_res.status_code != 200 and 'expected_amount' in confirm_data and (err_code == 'checkout_amount_mismatch' or 'expected_amount' in err_msg):
+                # Unified Amount Mismatch Bypass
+                if confirm_res.status_code != 200 and (err_code == 'checkout_amount_mismatch' or 'expected amount' in err_msg.lower() or 'expected_amount' in err_msg):
                     # Fetch the correct, updated amount from the checkout session
                     init_res = await loop.run_in_executor(None, lambda: cffi_requests.post(f"https://api.stripe.com/v1/payment_pages/{self.cs_live}/init", headers=headers, data={"key": self.pk_live, "eid": "NA", "browser_locale": "en-US", "browser_timezone": "America/New_York", "redirect_type": "url"}, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                     if init_res.status_code == 200:
@@ -655,19 +655,10 @@ class StripeAPIHitter:
                         if new_amount is not None:
                             confirm_data['expected_amount'] = new_amount
                         else:
-                            del confirm_data['expected_amount']
+                            confirm_data['expected_amount'] = 0
                     else:
-                        del confirm_data['expected_amount']
+                        confirm_data['expected_amount'] = 0
                         
-                    confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
-                    confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
-                    confirm_json = confirm_res.json()
-                    err_code = confirm_json.get('error', {}).get('code')
-                    err_msg = confirm_json.get('error', {}).get('message', '') or ''
-                    
-                # Case 2: We DID NOT send an expected_amount (e.g. $0 intent), but Stripe strictly requires it. Send 0.
-                elif confirm_res.status_code != 200 and 'expected_amount' not in confirm_data and (err_code == 'checkout_amount_mismatch' or 'expected amount' in err_msg.lower()):
-                    confirm_data['expected_amount'] = 0
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
                     confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
                     confirm_json = confirm_res.json()
