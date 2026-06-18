@@ -714,6 +714,27 @@ class StripeAPIHitter:
                                     }
                                     
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
+                                    
+                                    # EMVCo 3DS Method URL Execution (Critical for modern ACS frictionless approval)
+                                    method_url = next_action['use_stripe_sdk'].get('three_ds_method_url')
+                                    if method_url and server_trans_id:
+                                        try:
+                                            import base64
+                                            method_data = json.dumps({
+                                                "threeDSServerTransID": server_trans_id,
+                                                "threeDSMethodNotificationURL": "https://stripe.com/3ds2/method_notification"
+                                            })
+                                            b64_method_data = base64.urlsafe_b64encode(method_data.encode()).decode().rstrip("=")
+                                            
+                                            method_headers = headers.copy()
+                                            method_headers["content-type"] = "application/x-www-form-urlencoded"
+                                            method_headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                                            
+                                            # We don't await the result heavily, we just need to hit it so the ACS logs our IP
+                                            await loop.run_in_executor(None, lambda: cffi_requests.post(method_url, headers=method_headers, data={"threeDSMethodData": b64_method_data}, proxies=proxies, timeout=5, impersonate=profile["impersonate"]))
+                                        except Exception as e:
+                                            pass
+                                            
                                     auth_data = {
                                         "source": source_id,
                                         "app": '{"sdk_trans_id":"' + (server_trans_id or "6291d904-74a4-4dc4-b770-4cc200ffb5d4") + '"}',
