@@ -638,7 +638,7 @@ class StripeAPIHitter:
                 # Dynamic Amount Mismatch Bypass
                 # If the scraped amount was slightly off (taxes/shipping) and caused a mismatch, instantly retry without the constraint
                 err_code = confirm_json.get('error', {}).get('code')
-                err_msg = confirm_json.get('error', {}).get('message', '')
+                err_msg = confirm_json.get('error', {}).get('message', '') or ''
                 
                 # Case 1: We sent an expected_amount but it was wrong. Delete it and retry.
                 if confirm_res.status_code != 200 and 'expected_amount' in confirm_data and (err_code == 'checkout_amount_mismatch' or 'expected_amount' in err_msg):
@@ -735,6 +735,7 @@ class StripeAPIHitter:
                                             err = confirm_json_2.get('error', {})
                                             if isinstance(pi_2, dict) and pi_2.get('last_payment_error'): err = pi_2.get('last_payment_error')
                                             result['decline_code'] = err.get('decline_code', err.get('code', status_2))
+                                            result['error'] = err.get('message', 'Unknown error')
                                         return result
                                         
                                     elif state == 'challenge_required':
