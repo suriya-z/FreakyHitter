@@ -693,7 +693,7 @@ class StripeAPIHitter:
                                             "key": self.pk_live,
                                             "expected_payment_method_type": "card",
                                         }
-                                        if self.raw_amount is not None:
+                                        if self.raw_amount is not None and self.raw_amount > 0:
                                             confirm_data_2["expected_amount"] = self.raw_amount
                                         confirm_res_2 = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data_2, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
                                         confirm_json_2 = confirm_res_2.json()
