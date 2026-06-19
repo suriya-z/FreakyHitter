@@ -743,6 +743,10 @@ class StripeAPIHitter:
                                             
                                             # We don't await the result heavily, we just need to hit it so the ACS logs our IP
                                             await loop.run_in_executor(None, lambda: cffi_requests.post(method_url, headers=method_headers, data={"threeDSMethodData": b64_method_data}, proxies=proxies, timeout=5, impersonate=profile["impersonate"]))
+                                            
+                                            # EMVCo Timing Protocol: We MUST wait for the ACS to process the fingerprint
+                                            # If we hit authenticate instantly, the ACS denies frictionless because fingerprinting is pending.
+                                            await asyncio.sleep(2.5)
                                         except Exception as e:
                                             pass
                                             
