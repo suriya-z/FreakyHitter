@@ -749,8 +749,12 @@ class StripeAPIHitter:
                                             
                                 if not source_id and sdk.get('stripe_js'):
                                     stripe_js_url = sdk.get('stripe_js')
-                                    # Hit the URL directly to trigger the frictionless fingerprint
-                                    await loop.run_in_executor(None, lambda: cffi_requests.get(stripe_js_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    if isinstance(stripe_js_url, str):
+                                        # Hit the URL directly to trigger the frictionless fingerprint
+                                        await loop.run_in_executor(None, lambda: cffi_requests.get(stripe_js_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    else:
+                                        result['decline_code'] = f"3d_stripe_js_is_dict_{str(stripe_js_url)[:40]}"
+                                        return result
                                     
                                     intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
                                     client_secret = pi.get('client_secret') if isinstance(pi, dict) and pi.get('client_secret') else (si.get('client_secret') if isinstance(si, dict) else None)
