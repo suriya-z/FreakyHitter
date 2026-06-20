@@ -811,6 +811,7 @@ class StripeAPIHitter:
                                         status_2 = poll_json.get('status')
                                         if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                             result['success'] = True
+                                            return result
                                         else:
                                             err = poll_json.get('last_payment_error', poll_json.get('last_setup_error', poll_json.get('error', {})))
                                             result['decline_code'] = err.get('decline_code', err.get('code', status_2))
