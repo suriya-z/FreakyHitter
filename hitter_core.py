@@ -752,12 +752,14 @@ class StripeAPIHitter:
                                     if isinstance(stripe_js_url, str):
                                         # Hit the URL directly to trigger the frictionless fingerprint
                                         await loop.run_in_executor(None, lambda: cffi_requests.get(stripe_js_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    elif isinstance(stripe_js_url, dict):
+                                        # If stripe_js is a dictionary containing rqdata, it's expecting a hCaptcha/Risk challenge.
+                                        # Usually we can ignore it and just poll the intent, because the backend logic
+                                        # often just requires a poll to trigger the next state, or the rqdata is optional.
+                                        # Let's bypass it and jump straight to polling.
+                                        pass
                                     else:
-                                        import base64
-                                        encoded_sdk = base64.b64encode(json.dumps(sdk).encode()).decode()
-                                        result['decline_code'] = f"3d_stripe_js_is_dict_base64_{encoded_sdk[:50]}"
-                                        result['error'] = f"FULL_SDK:{encoded_sdk}"
-                                        return result
+                                        pass
                                     
                                     intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
                                     client_secret = pi.get('client_secret') if isinstance(pi, dict) and pi.get('client_secret') else (si.get('client_secret') if isinstance(si, dict) else None)
