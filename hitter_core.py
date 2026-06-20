@@ -78,7 +78,7 @@ class StripeAPIExtractor:
                 proxies = {"http": proxy_url, "https": proxy_url}
                 
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, lambda: requests.post(url, headers=headers, data=data, proxies=proxies, timeout=30))
+            response = await loop.run_in_executor(None, lambda: requests.post(url, headers=headers, data=data, proxies=proxies, timeout=5))
             if response.status_code == 200:
                 resp_json = response.json()
                 amount = None
@@ -194,7 +194,7 @@ class ProxyManager:
                 
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=30) as resp:
+                    async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=4) as resp:
                         if resp.status in [200, 404]:
                             return proxy
             except Exception as e:
@@ -903,7 +903,7 @@ class ConcurrentHitter:
                 if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Fast-analyzing Stripe endpoint..."})
                 
                 async with cffi_requests.AsyncSession(impersonate="chrome120", proxies=proxies) as s:
-                    resp = await s.get(self.url, timeout=30)
+                    resp = await s.get(self.url, timeout=5)
                     html = resp.text
                     
                     cs_token = StripeAPIExtractor.extract_cs_live(self.url, html)
