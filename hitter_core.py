@@ -737,13 +737,19 @@ class StripeAPIHitter:
                                     sdk.get('three_d_secure_2_source')
                                     or sdk.get('source')
                                     or next_action.get('source')
-                                    or sdk.get('stripe_js', {}).get('source')
                                 )
                                 server_trans_id = sdk.get('server_transaction_id')
                                 
+                                # Stripe sometimes nests these inside e.g. "stripe_3ds2_fingerprint"
                                 if not source_id:
-                                    # Provide telemetry on what the payload actually contains so we can map it
-                                    raise Exception(f"Source missing. Payload: {str(next_action)[:300]}")
+                                    for key, val in sdk.items():
+                                        if isinstance(val, dict):
+                                            source_id = source_id or val.get('three_d_secure_2_source') or val.get('source')
+                                            server_trans_id = server_trans_id or val.get('server_transaction_id')
+                                            
+                                if not source_id:
+                                    result['decline_code'] = f"3d_missing_src_keys_{list(sdk.keys())}"
+                                    return result
                                     
                                 if source_id:
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
@@ -811,7 +817,6 @@ class StripeAPIHitter:
                                         status_2 = poll_json.get('status')
                                         if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                             result['success'] = True
-                                            return result
                                         else:
                                             err = poll_json.get('last_payment_error', poll_json.get('last_setup_error', poll_json.get('error', {})))
                                             result['decline_code'] = err.get('decline_code', err.get('code', status_2))
