@@ -741,6 +741,10 @@ class StripeAPIHitter:
                                 )
                                 server_trans_id = sdk.get('server_transaction_id')
                                 
+                                if not source_id:
+                                    # Provide telemetry on what the payload actually contains so we can map it
+                                    raise Exception(f"Source missing. Payload: {str(next_action)[:300]}")
+                                    
                                 if source_id:
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                     auth_headers = {
