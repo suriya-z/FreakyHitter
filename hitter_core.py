@@ -808,9 +808,16 @@ class StripeAPIHitter:
                                         return result
                                         
                                     elif state == 'challenge_required':
-                                        # Hard 3DS Challenge
-                                        result['decline_code'] = '3d_secure_required_hard'
-                                        return result
+                                        # Use the exact return structure from the friend's snippet
+                                        taken = time.time() - start
+                                        return {
+                                            "status": False,
+                                            "result": {
+                                                "status": "declined",
+                                                "message": state,
+                                                "time": taken
+                                            }
+                                        }
                                     else:
                                         err = auth_json.get('error', {})
                                         if err.get('type') == 'invalid_request_error' and not err.get('message'):
@@ -983,8 +990,16 @@ class ConcurrentHitter:
                             continue
                     break
                 
+                # Normalize the output structure if it came from the friend's exact challenge_required snippet
+                if not result.get('success', False) and 'result' in result and isinstance(result['result'], dict):
+                    inner = result['result']
+                    result['decline_code'] = inner.get('message', '3d_secure_required_hard')
+                    result['error'] = 'Challenge Required (Hard 3DS)'
+                    result['response_time'] = inner.get('time', 0)
+                    result['success'] = inner.get('status') == 'approved'
+
                 self.completed += 1
-                if result['success']:
+                if result.get('success', False):
                     self.successes += 1
                 else:
                     self.fails += 1
