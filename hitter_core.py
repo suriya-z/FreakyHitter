@@ -840,9 +840,10 @@ class StripeAPIHitter:
                                     return result
                         except Exception as ex:
                             print(f"DEBUG: 3DS Frictionless bypass failed: {ex}")
-                            pass
+                            result['decline_code'] = f'3d_secure_exception_{str(ex)[:30]}'
+                            return result
                             
-                        result['decline_code'] = '3d_secure_required'
+                        result['decline_code'] = f"3d_secure_fallback_type_{next_action.get('type', 'none')}"
                         return result
                     elif status == 'requires_payment_method':
                         result['decline_code'] = 'generic_decline'
