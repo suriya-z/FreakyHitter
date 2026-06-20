@@ -120,6 +120,11 @@ async def hit_command(message: types.Message):
             'year': cc_parts[2].zfill(2) if len(cc_parts[2]) <= 2 else cc_parts[2][-2:],
             'cvv': cc_parts[3]
         })
+        
+    if len(cards) > 10:
+        await message.answer(f"❌ <b>Request Denied.</b>\nYou submitted {len(cards)} cards. The maximum allowed limit is 10 cards per hit command to prevent flagging the proxy network.")
+        return
+        
     status_msg = None
     if len(cards) > 1:
         status_msg = await message.answer(f"⏳ <b>Initializing Engine for {len(cards)} cards...</b>")
