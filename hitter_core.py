@@ -747,7 +747,38 @@ class StripeAPIHitter:
                                             source_id = source_id or val.get('three_d_secure_2_source') or val.get('source')
                                             server_trans_id = server_trans_id or val.get('server_transaction_id')
                                             
-                                if not source_id:
+                                if not source_id and sdk.get('stripe_js'):
+                                    stripe_js_url = sdk.get('stripe_js')
+                                    # Hit the URL directly to trigger the frictionless fingerprint
+                                    await loop.run_in_executor(None, lambda: cffi_requests.get(stripe_js_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    
+                                    intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
+                                    client_secret = pi.get('client_secret') if isinstance(pi, dict) and pi.get('client_secret') else (si.get('client_secret') if isinstance(si, dict) else None)
+                                    
+                                    if intent_id and client_secret:
+                                        if 'seti' in intent_id:
+                                            poll_url = f"https://api.stripe.com/v1/setup_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
+                                        else:
+                                            poll_url = f"https://api.stripe.com/v1/payment_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
+                                            
+                                        poll_headers = {
+                                            "accept": "application/json",
+                                            "origin": "https://js.stripe.com",
+                                            "referer": "https://js.stripe.com/"
+                                        }
+                                        poll_resp = cffi_requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30, impersonate=profile["impersonate"])
+                                        poll_json = poll_resp.json()
+                                        
+                                        status_2 = poll_json.get('status')
+                                        if status_2 in ['succeeded', 'requires_capture', 'complete']:
+                                            result['success'] = True
+                                        else:
+                                            err = poll_json.get('last_payment_error', poll_json.get('last_setup_error', poll_json.get('error', {})))
+                                            result['decline_code'] = err.get('decline_code', err.get('code', status_2))
+                                            result['error'] = err.get('message', 'Unknown error')
+                                        return result
+                                        
+                                elif not source_id:
                                     result['decline_code'] = f"3d_missing_src_keys_{list(sdk.keys())}"
                                     return result
                                     
