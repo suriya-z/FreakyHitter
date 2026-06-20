@@ -737,6 +737,7 @@ class StripeAPIHitter:
                                     sdk.get('three_d_secure_2_source')
                                     or sdk.get('source')
                                     or next_action.get('source')
+                                    or sdk.get('stripe_js', {}).get('source')
                                 )
                                 server_trans_id = sdk.get('server_transaction_id')
                                 
