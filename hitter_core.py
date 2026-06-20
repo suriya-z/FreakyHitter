@@ -624,6 +624,7 @@ class StripeAPIHitter:
                     "payment_method": pm_id,
                     "expected_payment_method_type": "card",
                     "payment_method_options[card][request_three_d_secure]": "any",
+                    "consent[terms_of_service]": "accepted",
                     "key": self.pk_live,
                 }
                 if self.raw_amount is not None and self.raw_amount > 0:
