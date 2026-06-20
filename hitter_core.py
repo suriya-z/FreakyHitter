@@ -773,9 +773,13 @@ class StripeAPIHitter:
                                         if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                             result['success'] = True
                                         else:
-                                            err = poll_json.get('last_payment_error', poll_json.get('last_setup_error', poll_json.get('error', {})))
-                                            result['decline_code'] = err.get('decline_code', err.get('code', status_2))
-                                            result['error'] = err.get('message', 'Unknown error')
+                                            err = poll_json.get('last_payment_error') or poll_json.get('last_setup_error') or poll_json.get('error') or {}
+                                            if isinstance(err, dict):
+                                                result['decline_code'] = err.get('decline_code', err.get('code', status_2))
+                                                result['error'] = err.get('message', 'Unknown error')
+                                            else:
+                                                result['decline_code'] = status_2
+                                                result['error'] = 'Unknown error'
                                         return result
                                         
                                 elif not source_id:
