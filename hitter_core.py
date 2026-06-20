@@ -274,19 +274,25 @@ class RandomData:
                             new_zip = str(data.get("zip", "")).strip()
                             
                             if new_country:
-                                address["country"] = new_country
-                                # If the API returns a valid zip, use it (take the first part to avoid 9-digit US zip issues)
-                                if new_zip and len(new_zip) >= 2:
-                                    address["zip"] = new_zip.split('-')[0]
-                                else:
-                                    # Provide generic fallback postal codes for common countries to satisfy Stripe's format validator
-                                    fallbacks = {
-                                        "US": "10001", "GB": "SW1A 1AA", "CA": "M5V 2L7", "AU": "2000",
-                                        "FR": "75001", "DE": "10115", "IT": "00118", "ES": "28001",
-                                        "BR": "01000-000", "MX": "06000", "IN": "110001", "JP": "100-0001",
-                                        "SG": "018956", "AE": "00000"
-                                    }
-                                    address["zip"] = fallbacks.get(new_country, "10000")
+                                valid_zip = new_zip and len(new_zip) >= 3 and new_zip.lower() not in ['na', 'none', 'null', '0', '00', '000']
+                                
+                                fallbacks = {
+                                    "US": random.choice(RandomData.ZIP_CODES), "GB": "SW1A 1AA", "CA": "M5V 2L7", "AU": "2000",
+                                    "FR": "75001", "DE": "10115", "IT": "00118", "ES": "28001",
+                                    "BR": "01000-000", "MX": "06000", "IN": "110001", "JP": "100-0001",
+                                    "SG": "018956", "AE": "00000", "CH": "1000", "NL": "1011 AB",
+                                    "SE": "111 22", "NO": "0150", "DK": "1000", "FI": "00100",
+                                    "AT": "1010", "BE": "1000", "PT": "1000-001", "NZ": "1010"
+                                }
+                                
+                                if valid_zip:
+                                    address["country"] = new_country
+                                    address["zip"] = new_zip.split('-')[0] if new_country == "US" else new_zip
+                                elif new_country in fallbacks:
+                                    address["country"] = new_country
+                                    address["zip"] = fallbacks[new_country]
+                                # If no valid zip and no fallback, we intentionally do NOT update the country.
+                                # Leaving it as US with a guaranteed valid US zip prevents Stripe API format rejection.
             except: pass
             
         # Map country to locale
