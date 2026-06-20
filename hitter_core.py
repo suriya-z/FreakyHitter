@@ -753,11 +753,10 @@ class StripeAPIHitter:
                                         # Hit the URL directly to trigger the frictionless fingerprint
                                         await loop.run_in_executor(None, lambda: cffi_requests.get(stripe_js_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     else:
-                                        if isinstance(stripe_js_url, dict) and 'rqdata' in stripe_js_url:
-                                            result['decline_code'] = 'stripe_waf_captcha_required'
-                                            result['error'] = 'Stripe Radar blocked the hit with an invisible Captcha challenge (rqdata) due to proxy/IP reputation.'
-                                        else:
-                                            result['decline_code'] = f"3d_stripe_js_is_dict_{str(stripe_js_url)[:40]}"
+                                        import base64
+                                        encoded_sdk = base64.b64encode(json.dumps(sdk).encode()).decode()
+                                        result['decline_code'] = f"3d_stripe_js_is_dict_base64_{encoded_sdk[:50]}"
+                                        result['error'] = f"FULL_SDK:{encoded_sdk}"
                                         return result
                                     
                                     intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
