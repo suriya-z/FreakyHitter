@@ -740,66 +740,7 @@ class StripeAPIHitter:
                                     or sdk.get('source')
                                     or next_action.get('source')
                                 )
-                                server_trans_id = sdk.get('server_transaction_id')
                                 
-                                # Stripe sometimes nests these inside e.g. "stripe_3ds2_fingerprint"
-                                if not source_id:
-                                    for key, val in sdk.items():
-                                        if isinstance(val, dict):
-                                            source_id = source_id or val.get('three_d_secure_2_source') or val.get('source')
-                                            server_trans_id = server_trans_id or val.get('server_transaction_id')
-                                            
-                                if not source_id and sdk.get('stripe_js'):
-                                    stripe_js_url = sdk.get('stripe_js')
-                                    if isinstance(stripe_js_url, str):
-                                        # Hit the URL directly to trigger the frictionless fingerprint
-                                        await loop.run_in_executor(None, lambda: cffi_requests.get(stripe_js_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                    elif isinstance(stripe_js_url, dict):
-                                        # If stripe_js is a dictionary containing rqdata, it's expecting a hCaptcha/Risk challenge.
-                                        ip_flagged_by_captcha = True
-                                        pass
-                                    else:
-                                        ip_flagged_by_captcha = False
-                                        pass
-                                    
-                                    intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
-                                    client_secret = pi.get('client_secret') if isinstance(pi, dict) and pi.get('client_secret') else (si.get('client_secret') if isinstance(si, dict) else None)
-                                    
-                                    if intent_id and client_secret:
-                                        if 'seti' in intent_id:
-                                            poll_url = f"https://api.stripe.com/v1/setup_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
-                                        else:
-                                            poll_url = f"https://api.stripe.com/v1/payment_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
-                                            
-                                        poll_headers = {
-                                            "accept": "application/json",
-                                            "origin": "https://js.stripe.com",
-                                            "referer": "https://js.stripe.com/"
-                                        }
-                                        poll_resp = cffi_requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30, impersonate=profile["impersonate"])
-                                        poll_json = poll_resp.json()
-                                        
-                                        status_2 = poll_json.get('status')
-                                        if status_2 in ['succeeded', 'requires_capture', 'complete']:
-                                            result['success'] = True
-                                        else:
-                                            err = poll_json.get('last_payment_error') or poll_json.get('last_setup_error') or poll_json.get('error') or {}
-                                            if isinstance(err, dict):
-                                                result['decline_code'] = err.get('decline_code', err.get('code', status_2))
-                                                result['error'] = err.get('message', 'Unknown error')
-                                            else:
-                                                result['decline_code'] = status_2
-                                                result['error'] = 'Unknown error'
-                                                
-                                            if ip_flagged_by_captcha:
-                                                result['error'] = f"[BAD IP] Stripe triggered a CAPTCHA (rqdata) because the Proxy IP is flagged. {result['error']}"
-                                                
-                                        return result
-                                        
-                                elif not source_id:
-                                    result['decline_code'] = f"3d_missing_src_keys_{list(sdk.keys())}"
-                                    return result
-                                    
                                 if source_id:
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                     auth_headers = {
@@ -834,7 +775,7 @@ class StripeAPIHitter:
                                         "key": self.pk_live
                                     }
                                     
-                                    auth_resp = cffi_requests.post(auth_url, headers=auth_headers, data=auth_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"])
+                                    auth_resp = await loop.run_in_executor(None, lambda: requests.post(auth_url, headers=auth_headers, data=auth_data, proxies=proxies, timeout=30))
                                     
                                     try:
                                         data = auth_resp.json()
@@ -861,7 +802,7 @@ class StripeAPIHitter:
                                             "origin": "https://js.stripe.com",
                                             "referer": "https://js.stripe.com/"
                                         }
-                                        poll_resp = cffi_requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30, impersonate=profile["impersonate"])
+                                        poll_resp = await loop.run_in_executor(None, lambda: requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30))
                                         poll_json = poll_resp.json()
                                         
                                         status_2 = poll_json.get('status')
