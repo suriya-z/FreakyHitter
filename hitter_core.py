@@ -1027,6 +1027,10 @@ class ConcurrentHitter:
                 for try_idx in range(max_retries):
                     proxy_data = await ProxyManager.get_random(self.user_id)
                     hitter = StripeAPIHitter(self.url_info['pk_key'], self.url_info['cs_token'], proxy_data, self.url_info.get('raw_amount'), self.url_info.get('locked_email'))
+                    
+                    import random
+                    await asyncio.sleep(random.uniform(0.05, 0.2))  # Micro-random delay per card attempt  
+                    
                     result = await hitter.hit(card, attempt_num, self.user_id)
                     result['amount'] = self.url_info.get('amount')
                     result['merchant'] = self.url_info.get('merchant')
