@@ -687,22 +687,10 @@ class StripeAPIHitter:
                 
                 # Unified Amount Mismatch Bypass
                 if confirm_res.status_code != 200 and (err_code == 'checkout_amount_mismatch' or 'expected amount' in err_msg.lower() or 'expected_amount' in err_msg):
-                    # Fetch the correct, updated amount from the checkout session
-                    init_res = await loop.run_in_executor(None, lambda: cffi_requests.post(f"https://api.stripe.com/v1/payment_pages/{self.cs_live}/init", headers=headers, data={"key": self.pk_live, "eid": "NA", "browser_locale": "en-US", "browser_timezone": "America/New_York", "redirect_type": "url"}, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                    if init_res.status_code == 200:
-                        init_json = init_res.json()
-                        new_amount = init_json.get('amount')
-                        if init_json.get('payment_intent') and isinstance(init_json.get('payment_intent'), dict) and init_json['payment_intent'].get('amount') is not None:
-                            new_amount = init_json['payment_intent']['amount']
-                        elif init_json.get('line_item_group') and isinstance(init_json.get('line_item_group'), dict) and init_json['line_item_group'].get('total') is not None:
-                            new_amount = init_json['line_item_group']['total']
-                            
-                        if new_amount is not None:
-                            confirm_data['expected_amount'] = new_amount
-                        else:
-                            confirm_data['expected_amount'] = 0
-                    else:
-                        confirm_data['expected_amount'] = 0
+                    # If there's an amount mismatch (due to dynamic taxes, shipping, or bad extraction),
+                    # simply remove the restriction and let Stripe charge whatever the final session amount is.
+                    if 'expected_amount' in confirm_data:
+                        del confirm_data['expected_amount']
                         
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
                     confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
