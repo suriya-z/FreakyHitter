@@ -561,7 +561,6 @@ class StripeAPIHitter:
                 headers = {
                     "authority": "api.stripe.com",
                     "accept": "application/json",
-                    "accept-language": "en-US,en;q=0.9",
                     "content-type": "application/x-www-form-urlencoded",
                     "origin": "https://checkout.stripe.com",
                     "referer": "https://checkout.stripe.com/",
@@ -805,7 +804,6 @@ class StripeAPIHitter:
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                     auth_headers = {
                                         "accept": "application/json",
-                                        "accept-language": "en-US,en;q=0.9",
                                         "content-type": "application/x-www-form-urlencoded",
                                         "origin": "https://js.stripe.com",
                                         "referer": "https://js.stripe.com/",
@@ -860,7 +858,6 @@ class StripeAPIHitter:
                                             
                                         poll_headers = {
                                             "accept": "application/json",
-                                            "accept-language": "en-US,en;q=0.9",
                                             "origin": "https://js.stripe.com",
                                             "referer": "https://js.stripe.com/",
                                             "user-agent": "Mozilla/5.0 (Linux; Android 10)"
