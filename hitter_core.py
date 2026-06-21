@@ -843,6 +843,7 @@ class StripeAPIHitter:
                                         
                                     if state == "challenge_required":
                                         result['decline_code'] = '3d_secure_required_hard'
+                                        result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
                                         return result
 
                                     intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
@@ -901,6 +902,7 @@ class StripeAPIHitter:
                                         return result
                                         
                                     result['decline_code'] = '3d_secure_required_hard'
+                                    result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
                                     result['final_url'] = return_url or redirect_url
                                     return result
                         except Exception as ex:
