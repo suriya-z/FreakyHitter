@@ -809,7 +809,7 @@ class StripeAPIHitter:
                                         "content-type": "application/x-www-form-urlencoded",
                                         "origin": "https://js.stripe.com",
                                         "referer": "https://js.stripe.com/",
-                                        "user-agent": profile["user_agent"]
+                                        "user-agent": "Mozilla/5.0 (Linux; Android 10)"
                                     }
                                     browser = {
                                         "fingerprintAttempted": True,
@@ -819,9 +819,9 @@ class StripeAPIHitter:
                                         "browserJavaEnabled": False,
                                         "browserJavascriptEnabled": True,
                                         "browserLanguage": "en-US",
-                                        "browserColorDepth": profile.get("color_depth", "24"),
-                                        "browserScreenHeight": profile.get("screen_height", "1080"),
-                                        "browserScreenWidth": profile.get("screen_width", "1920"),
+                                        "browserColorDepth": "24",
+                                        "browserScreenHeight": "873",
+                                        "browserScreenWidth": "393",
                                         "browserTZ": "-300",
                                         "browserUserAgent": auth_headers["user-agent"]
                                     }
@@ -863,7 +863,7 @@ class StripeAPIHitter:
                                             "accept-language": "en-US,en;q=0.9",
                                             "origin": "https://js.stripe.com",
                                             "referer": "https://js.stripe.com/",
-                                            "user-agent": profile["user_agent"]
+                                            "user-agent": "Mozilla/5.0 (Linux; Android 10)"
                                         }
                                         poll_resp = cffi_requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30, impersonate=profile["impersonate"])
                                         poll_json = poll_resp.json()
