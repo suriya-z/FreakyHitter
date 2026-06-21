@@ -859,8 +859,7 @@ class StripeAPIHitter:
                                         poll_headers = {
                                             "accept": "application/json",
                                             "origin": "https://js.stripe.com",
-                                            "referer": "https://js.stripe.com/",
-                                            "user-agent": "Mozilla/5.0 (Linux; Android 10)"
+                                            "referer": "https://js.stripe.com/"
                                         }
                                         poll_resp = cffi_requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30, impersonate=profile["impersonate"])
                                         poll_json = poll_resp.json()
