@@ -687,10 +687,15 @@ class StripeAPIHitter:
                 
                 # Unified Amount Mismatch Bypass
                 if confirm_res.status_code != 200 and (err_code == 'checkout_amount_mismatch' or 'expected amount' in err_msg.lower() or 'expected_amount' in err_msg):
-                    # If there's an amount mismatch (due to dynamic taxes, shipping, or bad extraction),
-                    # simply remove the restriction and let Stripe charge whatever the final session amount is.
-                    if 'expected_amount' in confirm_data:
-                        del confirm_data['expected_amount']
+                    # Stripe's error message usually contains the correct expected amount: 
+                    # e.g., "The expected amount (2000) does not match the actual amount (0)."
+                    import re
+                    match = re.search(r'actual amount \((\d+)\)', err_msg.lower())
+                    if match:
+                        confirm_data['expected_amount'] = int(match.group(1))
+                    else:
+                        # Fallback to 0 for SetupIntents / Free Trials if regex fails
+                        confirm_data['expected_amount'] = 0
                         
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
                     confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
