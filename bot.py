@@ -243,6 +243,8 @@ async def hit_command(message: types.Message):
                         err_str = "Session is locked, expired, already paid, or merchant has strictly bound it to a logged-in session."
                     err_str = html.escape(err_str)
                     hit_text += f"\n🐛 <code>{err_str}</code>..."
+                elif code == 'exception':
+                    hit_text += f"\n🐛 <b>[DEAD PROXY]</b> The proxy IP failed to connect or was rejected by Cloudflare.\n<code>{str(res.get('error'))[:150]}</code>"
                 live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin', 'withdrawal_count_limit_exceeded']
                 if any(c in code.lower() for c in live_codes):
                     hit_text += "\n⚠️ <b>Card is live</b>"

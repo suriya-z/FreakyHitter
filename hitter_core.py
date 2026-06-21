@@ -757,11 +757,10 @@ class StripeAPIHitter:
                                         await loop.run_in_executor(None, lambda: cffi_requests.get(stripe_js_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     elif isinstance(stripe_js_url, dict):
                                         # If stripe_js is a dictionary containing rqdata, it's expecting a hCaptcha/Risk challenge.
-                                        # Usually we can ignore it and just poll the intent, because the backend logic
-                                        # often just requires a poll to trigger the next state, or the rqdata is optional.
-                                        # Let's bypass it and jump straight to polling.
+                                        ip_flagged_by_captcha = True
                                         pass
                                     else:
+                                        ip_flagged_by_captcha = False
                                         pass
                                     
                                     intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
@@ -792,6 +791,10 @@ class StripeAPIHitter:
                                             else:
                                                 result['decline_code'] = status_2
                                                 result['error'] = 'Unknown error'
+                                                
+                                            if ip_flagged_by_captcha:
+                                                result['error'] = f"[BAD IP] Stripe triggered a CAPTCHA (rqdata) because the Proxy IP is flagged. {result['error']}"
+                                                
                                         return result
                                         
                                 elif not source_id:
