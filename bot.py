@@ -380,52 +380,60 @@ async def offproxy_command(message: types.Message):
     await ProxyManager.clear(message.from_user.id)
     await message.answer("🛑 <b>Proxy Pool Cleared</b>\nYour proxies have been removed.")
 
+async def test_proxy_single(p, is_pool, user_id):
+    proxy_url = p['server']
+    if 'username' in p:
+        server = p['server'].replace('http://', '')
+        proxy_url = f"http://{p['username']}:{p['password']}@{server}"
+        
+    try:
+        async with aiohttp.ClientSession() as session:
+            # First, test connection to Stripe
+            async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=10) as resp:
+                if resp.status in [200, 404]:
+                    # Next, check IP quality using ip-api.com
+                    ip_quality = "[?]"
+                    try:
+                        async with session.get("http://ip-api.com/json/?fields=status,countryCode,isp,mobile,hosting,query", proxy=proxy_url, timeout=5) as ip_resp:
+                            if ip_resp.status == 200:
+                                ip_data = await ip_resp.json()
+                                if ip_data.get("status") == "success":
+                                    import html
+                                    country = html.escape(str(ip_data.get("countryCode", "??")))
+                                    isp = html.escape(str(ip_data.get("isp", ""))[:15])
+                                    
+                                    if ip_data.get("hosting"):
+                                        ip_quality = f"[🚨 DATACENTER/VPN | {country} | {isp}]"
+                                    elif ip_data.get("mobile"):
+                                        ip_quality = f"[📱 MOBILE | {country} | {isp}]"
+                                    else:
+                                        ip_quality = f"[🏠 RESIDENTIAL | {country} | {isp}]"
+                    except Exception:
+                        ip_quality = "[IP Check Failed]"
+                        
+                    return True, False, f"✅ Live {ip_quality} | {p['raw']}", p['raw']
+                else:
+                    return False, True, f"❌ Blocked by Provider | {p['raw']}", p['raw']
+    except:
+        return False, True, f"❌ Dead/Timeout | {p['raw']}", p['raw']
+
 async def test_proxy_list(proxies_to_test, is_pool, user_id):
     results = []
-    dead_count = 0
     live_count = 0
+    dead_count = 0
     
-    for p in proxies_to_test:
-        proxy_url = p['server']
-        if 'username' in p:
-            server = p['server'].replace('http://', '')
-            proxy_url = f"http://{p['username']}:{p['password']}@{server}"
-            
-        try:
-            async with aiohttp.ClientSession() as session:
-                # First, test connection to Stripe
-                async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=10) as resp:
-                    if resp.status in [200, 404]:
-                        # Next, check IP quality using ip-api.com
-                        ip_quality = "[?]"
-                        try:
-                            async with session.get("http://ip-api.com/json/?fields=status,countryCode,isp,mobile,hosting,query", proxy=proxy_url, timeout=5) as ip_resp:
-                                if ip_resp.status == 200:
-                                    ip_data = await ip_resp.json()
-                                    if ip_data.get("status") == "success":
-                                        country = ip_data.get("countryCode", "??")
-                                        isp = str(ip_data.get("isp", ""))[:15]
-                                        
-                                        if ip_data.get("hosting"):
-                                            ip_quality = f"[🚨 DATACENTER/VPN | {country} | {isp}]"
-                                        elif ip_data.get("mobile"):
-                                            ip_quality = f"[📱 MOBILE | {country} | {isp}]"
-                                        else:
-                                            ip_quality = f"[🏠 RESIDENTIAL | {country} | {isp}]"
-                        except Exception:
-                            ip_quality = "[IP Check Failed]"
-                            
-                        results.append(f"✅ Live {ip_quality} | {p['raw']}")
-                        live_count += 1
-                    else:
-                        results.append(f"❌ Blocked by Provider | {p['raw']}")
-                        if is_pool: await ProxyManager.remove(user_id, p['raw'])
-                        dead_count += 1
-        except:
-            results.append(f"❌ Dead/Timeout | {p['raw']}")
-            if is_pool: await ProxyManager.remove(user_id, p['raw'])
+    tasks = [test_proxy_single(p, is_pool, user_id) for p in proxies_to_test]
+    completed = await asyncio.gather(*tasks)
+    
+    for success, is_dead, res_str, raw in completed:
+        results.append(res_str)
+        if success:
+            live_count += 1
+        if is_dead:
             dead_count += 1
-            
+            if is_pool:
+                await ProxyManager.remove(user_id, raw)
+                
     return results, live_count, dead_count
 
 @dp.message(Command("chkproxy"))
