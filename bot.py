@@ -236,7 +236,7 @@ async def hit_command(message: types.Message):
                     
                 hit_text += f"📉 Reason: {code_escaped}\n⏱ {res['response_time']:.2f}s"
                 
-                if code in ['exception', 'unknown', 'invalid_request_error', 'checkout_confirm_error', 'open', '3d_secure_auth_failed'] and res.get('error') is not None:
+                if code in ['exception', 'unknown', 'invalid_request_error', 'checkout_confirm_error', 'open', '3d_secure_auth_failed', '3ds_auth_failed'] and res.get('error') is not None:
                     import html
                     err_str = str(res.get('error'))[:200]
                     if code == 'checkout_confirm_error' and 'An error has occurred confirming' in err_str:
