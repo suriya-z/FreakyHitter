@@ -735,7 +735,8 @@ class StripeAPIHitter:
                         return result
                     elif status == 'requires_action':
                         try:
-                            res = confirm_json
+                            state = None
+                            res = confirm_json.get('payment_intent') or confirm_json.get('setup_intent') or confirm_json
                             pk = self.pk_live
                             pi = intent_id
                             taken = time.time() - start
