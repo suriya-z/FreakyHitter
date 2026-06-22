@@ -845,9 +845,8 @@ class StripeAPIHitter:
                                         result['error'] = err.get('message', 'Unknown error')
                                     else:
                                         result['decline_code'] = status_2
-                                        auth_data_str = str(data)[:200] if 'data' in locals() else 'None'
-                                        poll_data_str = str(poll_json)[:200]
-                                        result['error'] = f"Stuck in requires_action. Auth Resp: {auth_data_str} | Poll Resp: {poll_data_str}"
+                                        next_act = poll_json.get('next_action') or {}
+                                        result['error'] = f"Stuck in requires_action. next_action: {next_act}"
                                 return result
                             elif next_action.get('type') == 'redirect_to_url':
                                 redirect_url = next_action.get('redirect_to_url', {}).get('url')
