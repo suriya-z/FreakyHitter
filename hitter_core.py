@@ -192,23 +192,7 @@ class ProxyManager:
         pool = await cls.get_user_proxies(user_id)
         if not pool:
             return None
-        
-        for _ in range(3):
-            proxy = random.choice(pool)
-            proxy_url = proxy["server"]
-            if "username" in proxy:
-                proxy_url = proxy_url.replace("http://", f"http://{proxy['username']}:{proxy['password']}@")
-                
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=4) as resp:
-                        if resp.status in [200, 404]:
-                            return proxy
-            except Exception as e:
-                # DEBUG: print(f"Proxy check failed: {e}")
-                continue
-        # Fallback to the first proxy which is usually the most recently added or most reliable
-        return pool[0]
+        return random.choice(pool)
         
     @classmethod
     async def remove(cls, user_id: int, proxy_raw: str):
@@ -946,6 +930,32 @@ class ConcurrentHitter:
                 await self.update_callback({"status": "error", "error": "This does not appear to be a valid Stripe link. Need a checkout, buy, or invoice link."})
             return False
             
+        # Try extracting CS and PK directly from URL first to bypass network request entirely
+        cs_token = StripeAPIExtractor.extract_cs_live(self.url, "")
+        pk_key = None
+        hash_idx = self.url.find('#')
+        if hash_idx != -1:
+            import urllib.parse, base64, json
+            hash_str = self.url[hash_idx+1:]
+            decoded = urllib.parse.unquote(hash_str)
+            try:
+                raw_bytes = base64.b64decode(decoded + '==')
+                json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
+                data = json.loads(json_str)
+                pk_key = data.get('apiKey')
+            except: pass
+
+        if cs_token and pk_key:
+            if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Instantly extracted Stripe keys..."})
+            self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'merchant': 'Unknown', 'amount': None, 'raw_amount': None}
+            api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key)
+            if api_data.get('success'):
+                self.url_info['amount'] = api_data.get('amount')
+                self.url_info['raw_amount'] = api_data.get('raw_amount')
+                self.url_info['merchant'] = api_data.get('merchant')
+                self.url_info['locked_email'] = api_data.get('locked_email')
+            return True
+
         for _ in range(3):
             try:
                 proxy_data = await ProxyManager.get_random(self.user_id)
