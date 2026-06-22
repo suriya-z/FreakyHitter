@@ -518,10 +518,13 @@ async def process_rm_weak(callback: types.CallbackQuery):
         await callback.answer("No weak proxies found or session expired.", show_alert=True)
         return
         
-    removed = 0
-    for p in weak_proxies:
-        await ProxyManager.remove(user_id, p)
-        removed += 1
+    # Batch remove to avoid hitting the DB hundreds of times
+    pool = await ProxyManager.get_user_proxies(user_id)
+    new_pool = [p for p in pool if p['raw'] not in weak_proxies]
+    removed = len(pool) - len(new_pool)
+    
+    if removed > 0:
+        await ProxyManager.save_user_proxies(user_id, new_pool)
         
     bot.weak_proxies_cache[user_id] = []
     
