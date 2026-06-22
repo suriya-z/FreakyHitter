@@ -818,8 +818,12 @@ class StripeAPIHitter:
                                     else:
                                         err = poll_json.get('last_payment_error') or poll_json.get('last_setup_error') or poll_json.get('error') or {}
                                         if status_2 == 'requires_action' and 'data' in locals():
-                                            result['decline_code'] = f"3d_debug_dict_{str(data)[:100]}"
-                                            result['error'] = 'Stuck in requires_action loop after bypass'
+                                            if data.get('error'):
+                                                result['decline_code'] = "3d_bypass_not_supported"
+                                                result['error'] = f"Stripe rejected 3DS2 bypass: {data.get('error', {}).get('message')}. NEXT_ACTION: {str(next_action)}"
+                                            else:
+                                                result['decline_code'] = f"3d_debug_dict_{str(data)[:100]}"
+                                                result['error'] = 'Stuck in requires_action loop after bypass'
                                         elif isinstance(err, dict):
                                             result['decline_code'] = err.get('decline_code', err.get('code', status_2))
                                             result['error'] = err.get('message', 'Unknown error')
