@@ -732,6 +732,10 @@ class StripeAPIHitter:
                             if res.get("status") == "requires_action":
                                 next_action = res.get("next_action", {})
                                 sdk = next_action.get("use_stripe_sdk", {})
+                                if isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {}):
+                                    result['decline_code'] = 'stripe_captcha_triggered'
+                                    result['error'] = 'Stripe triggered a CAPTCHA (rqdata) because your Proxy IP is flagged/dirty.'
+                                    return result
                                 source = (
                                     sdk.get("three_d_secure_2_source")
                                     or sdk.get("source")
