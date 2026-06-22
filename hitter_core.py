@@ -813,6 +813,12 @@ class StripeAPIHitter:
                                     }
                                     poll_resp = session.get(poll_url, headers=poll_headers, timeout=30)
 
+                            if state is None and 'data' in locals() and isinstance(data, dict) and 'error' in data:
+                                err = data.get('error', {})
+                                result['decline_code'] = err.get('decline_code') or err.get('code') or '3ds_auth_failed'
+                                result['error'] = f"Stripe rejected 3DS2 authenticate: {err.get('message', 'Unknown error')}"
+                                return result
+
                             if state and state != "challenge_required":
                                 poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
                                 poll_headers = {
