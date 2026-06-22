@@ -388,26 +388,33 @@ async def test_proxy_single(p, is_pool, user_id):
         
     try:
         async with aiohttp.ClientSession() as session:
-            # First, test connection to Stripe
+            # First, test connection
             async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=10) as resp:
                 if resp.status in [200, 404]:
-                    # Next, check IP quality using ip-api.com
+                    # Next, check IP quality and Fraud Score using proxycheck.io
                     ip_quality = "[?]"
                     try:
-                        async with session.get("http://ip-api.com/json/?fields=status,countryCode,isp,mobile,hosting,query", proxy=proxy_url, timeout=5) as ip_resp:
+                        # Use proxycheck.io with risk=1 to get fraud score
+                        async with session.get("http://proxycheck.io/v2/?vpn=1&asn=1&risk=1", proxy=proxy_url, timeout=5) as ip_resp:
                             if ip_resp.status == 200:
                                 ip_data = await ip_resp.json()
-                                if ip_data.get("status") == "success":
-                                    import html
-                                    country = html.escape(str(ip_data.get("countryCode", "??")))
-                                    isp = html.escape(str(ip_data.get("isp", ""))[:15])
-                                    
-                                    if ip_data.get("hosting"):
-                                        ip_quality = f"[🚨 DATACENTER/VPN | {country} | {isp}]"
-                                    elif ip_data.get("mobile"):
-                                        ip_quality = f"[📱 MOBILE | {country} | {isp}]"
-                                    else:
-                                        ip_quality = f"[🏠 RESIDENTIAL | {country} | {isp}]"
+                                if ip_data.get("status") == "ok":
+                                    # The response keys vary based on the IP, so get the first IP key
+                                    for key, val in ip_data.items():
+                                        if key not in ["status", "node", "query_time", "message"]:
+                                            import html
+                                            country = html.escape(str(val.get("isocode", "??")))
+                                            isp = html.escape(str(val.get("provider", ""))[:15])
+                                            ip_type = html.escape(str(val.get("type", "Unknown")))
+                                            risk = val.get("risk", "N/A")
+                                            
+                                            if "Datacenter" in ip_type or "VPN" in ip_type or "Business" in ip_type:
+                                                ip_quality = f"[🚨 {ip_type} | {country} | {isp} | Fraud Score: {risk}]"
+                                            elif "Mobile" in ip_type:
+                                                ip_quality = f"[📱 {ip_type} | {country} | {isp} | Fraud Score: {risk}]"
+                                            else:
+                                                ip_quality = f"[🏠 {ip_type} | {country} | {isp} | Fraud Score: {risk}]"
+                                            break
                     except Exception:
                         ip_quality = "[IP Check Failed]"
                         
