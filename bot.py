@@ -255,7 +255,6 @@ async def hit_command(message: types.Message):
                     except:
                         pass
                         
-            hit_text += "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
             try:
                 sent_msg = await message.answer(hit_text)
             except Exception as e:
@@ -263,12 +262,6 @@ async def hit_command(message: types.Message):
                 import re
                 plain_text = re.sub(r'<[^>]+>', '', hit_text)
                 sent_msg = await message.answer(f"⚠️ UI Formatting Error: {e}\n\nRAW RESULT:\n{plain_text}")
-            
-            async def auto_delete(m):
-                await asyncio.sleep(30)
-                try: await m.delete()
-                except: pass
-            asyncio.create_task(auto_delete(sent_msg))
             
             # Update the main progress message
             if len(cards) > 1:
