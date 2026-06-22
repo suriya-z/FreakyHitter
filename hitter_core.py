@@ -786,6 +786,36 @@ class StripeAPIHitter:
                                 except Exception:
                                     state = "3DS Attempt failed"
                                 if state == "challenge_required":
+                                    intent_type = "setup_intents" if is_setup_intent else "payment_intents"
+                                    try:
+                                        poll_url = f"https://api.stripe.com/v1/{intent_type}/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
+                                        poll_headers = {
+                                            "accept": "application/json",
+                                            "origin": "https://js.stripe.com",
+                                            "referer": "https://js.stripe.com/"
+                                        }
+                                        poll_resp = session.get(poll_url, headers=poll_headers, timeout=30)
+                                        poll_json = poll_resp.json()
+                                        status_c = poll_json.get('status')
+                                        next_act_c = poll_json.get('next_action') or {}
+                                        if status_c == 'requires_action' and next_act_c.get('type') == 'redirect_to_url':
+                                            redirect_url = next_act_c.get('redirect_to_url', {}).get('url')
+                                            return_url = next_act_c.get('redirect_to_url', {}).get('return_url')
+                                            if redirect_url:
+                                                await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                                
+                                                poll_url_3 = f"https://api.stripe.com/v1/{intent_type}/{pi}?key={pk}"
+                                                poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                                poll_json_3 = poll_res_3.json()
+                                                poll_status_3 = poll_json_3.get('status')
+                                                
+                                                if poll_status_3 in ['succeeded', 'requires_capture', 'complete']:
+                                                    result['success'] = True
+                                                    result['final_url'] = return_url or redirect_url
+                                                    return result
+                                    except Exception:
+                                        pass
+
                                     return {
                                         "status": False,
                                         "result": {
@@ -795,23 +825,19 @@ class StripeAPIHitter:
                                         }
                                     }
 
-                                    poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
-                                    poll_headers = {
-                                        "accept": "application/json",
-                                        "origin": "https://js.stripe.com",
-                                        "referer": "https://js.stripe.com/"
-                                    }
-                                    poll_resp = session.get(poll_url, headers=poll_headers, timeout=30)
-
+                            has_auth_error = False
+                            auth_err_msg = ""
+                            auth_decline_code = "3ds_auth_failed"
+                            
                             if state is None and 'data' in locals() and isinstance(data, dict) and 'error' in data:
                                 err = data.get('error', {})
-                                if "not supported" not in str(err.get('message', '')).lower():
-                                    result['decline_code'] = err.get('decline_code') or err.get('code') or '3ds_auth_failed'
-                                    result['error'] = f"Stripe rejected 3DS2 authenticate: {err.get('message', 'Unknown error')}"
-                                    return result
+                                has_auth_error = True
+                                auth_decline_code = err.get('decline_code') or err.get('code') or '3ds_auth_failed'
+                                auth_err_msg = f"Stripe rejected 3DS2 authenticate: {err.get('message', 'Unknown error')}"
 
                             if state != "challenge_required":
-                                poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
+                                intent_type = "setup_intents" if is_setup_intent else "payment_intents"
+                                poll_url = f"https://api.stripe.com/v1/{intent_type}/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
                                 poll_headers = {
                                     "accept": "application/json",
                                     "origin": "https://js.stripe.com",
@@ -830,10 +856,10 @@ class StripeAPIHitter:
                                         if redirect_url:
                                             await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                             
-                                            poll_url_3 = f"https://api.stripe.com/v1/payment_intents/{pi}?key={pk}"
+                                            poll_url_3 = f"https://api.stripe.com/v1/{intent_type}/{pi}?key={pk}"
                                             poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                             poll_json_3 = poll_res_3.json()
-                                            poll_status_3 = poll_json_3.get('status')
+                                            poll_status_3 = poll_res_3.get('status')
                                             
                                             if poll_status_3 in ['succeeded', 'requires_capture', 'complete']:
                                                 result['success'] = True
@@ -844,6 +870,11 @@ class StripeAPIHitter:
                                             result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
                                             result['final_url'] = return_url or redirect_url
                                             return result
+
+                                    if has_auth_error:
+                                        result['decline_code'] = auth_decline_code
+                                        result['error'] = auth_err_msg
+                                        return result
 
                                     err = poll_json.get('last_payment_error') or poll_json.get('error') or {}
                                     if isinstance(err, dict) and err.get('message'):
@@ -861,7 +892,8 @@ class StripeAPIHitter:
                                 if redirect_url:
                                     await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     
-                                    poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?key={pk}"
+                                    intent_type = "setup_intents" if is_setup_intent else "payment_intents"
+                                    poll_url = f"https://api.stripe.com/v1/{intent_type}/{pi}?key={pk}"
                                     poll_res = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     poll_json = poll_res.json()
                                     poll_status = poll_json.get('status')
