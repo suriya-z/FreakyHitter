@@ -1013,7 +1013,20 @@ class ConcurrentHitter:
                         "fails": self.fails
                     })
             except Exception as e:
-                print(f"DEBUG: _worker processing card {card} failed completely: {str(e)}")
+                import traceback
+                print(f"DEBUG: _worker processing card {card} failed completely: {str(e)}\n{traceback.format_exc()}", flush=True)
+                self.completed += 1
+                self.fails += 1
+                if self.update_callback:
+                    err_res = {'success': False, 'card': card, 'response_time': 0, 'decline_code': 'exception', 'error': f"Internal bot crash: {str(e)}"}
+                    await self.update_callback({
+                        "status": "progress",
+                        "result": err_res,
+                        "completed": self.completed,
+                        "total": self.total,
+                        "successes": self.successes,
+                        "fails": self.fails
+                    })
             finally:
                 queue.task_done()
     
