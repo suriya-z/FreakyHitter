@@ -393,9 +393,29 @@ async def test_proxy_list(proxies_to_test, is_pool, user_id):
             
         try:
             async with aiohttp.ClientSession() as session:
+                # First, test connection to Stripe
                 async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=10) as resp:
                     if resp.status in [200, 404]:
-                        results.append(f"✅ Live for Stripe | {p['raw']}")
+                        # Next, check IP quality using ip-api.com
+                        ip_quality = "[?]"
+                        try:
+                            async with session.get("http://ip-api.com/json/?fields=status,countryCode,isp,mobile,hosting,query", proxy=proxy_url, timeout=5) as ip_resp:
+                                if ip_resp.status == 200:
+                                    ip_data = await ip_resp.json()
+                                    if ip_data.get("status") == "success":
+                                        country = ip_data.get("countryCode", "??")
+                                        isp = str(ip_data.get("isp", ""))[:15]
+                                        
+                                        if ip_data.get("hosting"):
+                                            ip_quality = f"[🚨 DATACENTER/VPN | {country} | {isp}]"
+                                        elif ip_data.get("mobile"):
+                                            ip_quality = f"[📱 MOBILE | {country} | {isp}]"
+                                        else:
+                                            ip_quality = f"[🏠 RESIDENTIAL | {country} | {isp}]"
+                        except Exception:
+                            ip_quality = "[IP Check Failed]"
+                            
+                        results.append(f"✅ Live {ip_quality} | {p['raw']}")
                         live_count += 1
                     else:
                         results.append(f"❌ Blocked by Provider | {p['raw']}")
