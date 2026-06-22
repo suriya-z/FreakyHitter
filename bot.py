@@ -44,10 +44,10 @@ async def cmds_command(message: types.Message) -> None:
         "<code>/hit [url] [bin_pattern] [count]</code>\n"
         "<i>Generates cards from a bin pattern and hits them concurrently.</i>\n\n"
         "🛡 <b>Proxy Commands</b>\n"
-        "<code>/setproxy ip:port:user:pass</code>\n"
-        "<i>Loads proxies into your private rotation pool. You can paste massive lists!</i>\n\n"
-        "<code>/chkproxy</code>\n"
-        "<i>Tests every proxy in your pool, prints the IP/Country, and auto-removes dead ones.</i>\n\n"
+        "<code>/proxy ip:port:user:pass</code>\n"
+        "<i>Loads, validates, and rotates new proxies. Can paste massive lists!</i>\n\n"
+        "<code>/proxy</code>\n"
+        "<i>Checks all currently loaded proxies and purges dead ones.</i>\n\n"
         "<code>/proxystatus</code>\n"
         "<i>Shows how many live proxies are currently loaded in memory.</i>\n\n"
         "<code>/offproxy</code>\n"
@@ -344,20 +344,7 @@ async def stop_command(message: types.Message):
         await message.answer("⚠️ You don't have any active sessions.")
 
 
-@dp.message(Command("setproxy"))
-async def setproxy_command(message: types.Message):
-    user_id = message.from_user.id
-    text = message.text.replace("/setproxy", "").strip()
-    if not text:
-        await message.answer("❌ Please provide proxies.\nFormat: `ip:port:user:pass` or `ip:port`")
-        return
-    added = await ProxyManager.load(user_id, text)
-    await message.answer(f"✅ Loaded {added} proxies into your private pool!")
-    if LOG_GROUP_ID:
-        try:
-            await bot.send_message(LOG_GROUP_ID, f"🛡 <b>New Proxies Loaded by {message.from_user.first_name}</b>\n<code>{text}</code>")
-        except:
-            pass
+
 
 @dp.message(Command("setlog"))
 async def setlog_command(message: types.Message):
@@ -424,8 +411,8 @@ async def test_proxy_single(p, is_pool, user_id):
         return False, True, False, p['raw']
 
 async def test_proxy_list(proxies_to_test, is_pool, user_id):
-    live_count = 0
-    dead_count = 0
+    live_proxies = []
+    dead_proxies = []
     weak_proxies = []
     
     tasks = [test_proxy_single(p, is_pool, user_id) for p in proxies_to_test]
@@ -433,81 +420,207 @@ async def test_proxy_list(proxies_to_test, is_pool, user_id):
     
     for success, is_dead, is_weak, raw in completed:
         if success:
-            live_count += 1
+            live_proxies.append(raw)
             if is_weak:
                 weak_proxies.append(raw)
         if is_dead:
-            dead_count += 1
+            dead_proxies.append(raw)
             if is_pool:
                 await ProxyManager.remove(user_id, raw)
                 
-    return live_count, dead_count, weak_proxies
+    return live_proxies, dead_proxies, weak_proxies
 
-@dp.message(Command("chkproxy"))
-async def chkproxy_command(message: types.Message):
+@dp.message(Command("proxy", "setproxy", "chkproxy"))
+async def proxy_command(message: types.Message):
     user_id = message.from_user.id
-    text = message.text.replace("/chkproxy", "").strip()
     
+    # Parse command arguments
+    command_parts = message.text.split(maxsplit=1)
+    text = command_parts[1].strip() if len(command_parts) > 1 else ""
+    
+    is_loading_new = bool(text)
     proxies_to_test = []
-    if text:
+    
+    if is_loading_new:
         temp_pool = []
-        lines = text.split()
+        lines = text.split('\n')
         for line in lines:
+            line = line.strip()
+            if not line: continue
+            
+            prefix = "http://"
+            raw_line = line
+            if line.lower().startswith("socks5://"):
+                prefix = "socks5://"
+                line = line[9:]
+            elif line.lower().startswith("http://"):
+                prefix = "http://"
+                line = line[7:]
+                
             parts = line.split(':')
             if len(parts) == 4:
-                temp_pool.append({"raw": line, "server": f"http://{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]})
+                temp_pool.append({"raw": raw_line, "server": f"{prefix}{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]})
             elif len(parts) == 2:
-                temp_pool.append({"raw": line, "server": f"http://{parts[0]}:{parts[1]}"})
+                temp_pool.append({"raw": raw_line, "server": f"{prefix}{parts[0]}:{parts[1]}"})
         proxies_to_test = temp_pool
-        is_pool = False
     else:
         proxies_to_test = list(await ProxyManager.get_user_proxies(user_id))
-        is_pool = True
         
     if not proxies_to_test:
-        await message.answer("❌ No proxies provided and your pool is empty!")
+        if is_loading_new:
+            await message.answer("❌ No valid proxies parsed! Use format: `ip:port` or `ip:port:user:pass`")
+        else:
+            await message.answer("❌ <b>Proxy Pool Empty</b>\nPlease load proxies first: <code>/proxy ip:port:user:pass</code>")
         return
 
-    status_msg = await message.answer(f"🔍 Testing {len(proxies_to_test)} proxies. Please wait...")
+    loading_status = "Validating new proxy nodes..." if is_loading_new else "Handshaking with active proxy pool..."
+    status_msg = await message.answer(f"🔍 <b>[PORTAL]</b> {loading_status} ({len(proxies_to_test)} nodes)")
     
-    live_count, dead_count, weak_proxies = await test_proxy_list(proxies_to_test, is_pool, user_id)
-            
+    # Test proxies
+    live_proxies, dead_proxies, weak_proxies = await test_proxy_list(proxies_to_test, not is_loading_new, user_id)
+    
+    live_count = len(live_proxies)
+    dead_count = len(dead_proxies)
     weak_count = len(weak_proxies)
     premium_count = live_count - weak_count
+    total_tested = len(proxies_to_test)
+    
+    # Calculate health score percentage
+    health_pct = int((live_count / total_tested) * 100) if total_tested > 0 else 0
+    bar_len = 10
+    filled = int(bar_len * health_pct / 100)
+    bar = "█" * filled + "░" * (bar_len - filled)
     
     final_msg = (
-        f"🏁 <b>Proxy Check Completed</b>\n\n"
-        f"✅ <b>Total Live:</b> {live_count}\n"
-        f"❌ <b>Total Dead:</b> {dead_count}\n\n"
-        f"💎 <b>Premium IPs (Residential/Mobile):</b> {premium_count}\n"
-        f"🚨 <b>Weak IPs (Datacenter/VPN/High Risk):</b> {weak_count}"
+        f"🛡 <b>PROXY NETWORK PORTAL</b> 🛡\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📈 <b>Network Health:</b> <code>[{bar}]</code> {health_pct}%\n\n"
+        f"📊 <b>Operational Diagnostics</b>\n"
+        f"  ├─ 🌐 <b>Active Nodes:</b> {live_count} / {total_tested}\n"
+        f"  └─ 💀 <b>Dead Nodes:</b> {dead_count}\n\n"
+        f"⚡ <b>IP Quality Analysis</b>\n"
+        f"  ├─ 💎 <b>Premium Residential/Mobile:</b> {premium_count}\n"
+        f"  └─ 🚨 <b>Datacenter/VPN/High-Risk:</b> {weak_count}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
     )
     
-    if is_pool and dead_count > 0:
-        final_msg += f"\n\n🗑 <i>{dead_count} dead proxies were auto-removed.</i>"
+    if is_loading_new:
+        if live_count == 0:
+            final_msg += "❌ <i>All parsed proxies failed connection test. Discarded.</i>"
+            await status_msg.edit_text(final_msg)
+            return
+            
+        # Cache results in memory
+        if not hasattr(bot, 'pasted_proxies_cache'):
+            bot.pasted_proxies_cache = {}
         
-    markup = None
-    if is_pool and weak_count > 0:
-        # Save weak proxies to memory for deletion callback
-        if not hasattr(bot, 'weak_proxies_cache'):
-            bot.weak_proxies_cache = {}
-        bot.weak_proxies_cache[user_id] = weak_proxies
+        premium_raws = [p for p in live_proxies if p not in weak_proxies]
+        bot.pasted_proxies_cache[user_id] = {
+            'premium': premium_raws,
+            'live': live_proxies
+        }
         
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"🗑 Remove {weak_count} Weak IPs", callback_data="rm_weak_proxies")]
-        ])
+        buttons = []
+        if len(premium_raws) > 0:
+            buttons.append([InlineKeyboardButton(text=f"💎 Add only strong proxies ({len(premium_raws)})", callback_data="add_strong_only")])
+        buttons.append([InlineKeyboardButton(text=f"📥 Add all live proxies ({live_count})", callback_data="add_live_all")])
         
-    try:
-        if markup:
-            await status_msg.edit_text(final_msg, reply_markup=markup)
-        else:
-            await status_msg.edit_text(final_msg)
-    except Exception:
-        if markup:
-            await message.answer(final_msg, reply_markup=markup)
-        else:
-            await message.answer(final_msg)
+        markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await status_msg.edit_text(final_msg, reply_markup=markup)
+        
+        if LOG_GROUP_ID:
+            try:
+                await bot.send_message(LOG_GROUP_ID, f"🛡 <b>New Proxies Checked by {message.from_user.first_name}</b>\nLive: {live_count} | Dead: {dead_count}")
+            except:
+                pass
+    else:
+        # Standard check report
+        if dead_count > 0:
+            final_msg += f"🗑 <i>{dead_count} dead nodes auto-purged from registry.</i>\n"
+        final_msg += "<i>Status: Pool synchronized and ready.</i>"
+        
+        markup = None
+        if weak_count > 0:
+            if not hasattr(bot, 'weak_proxies_cache'):
+                bot.weak_proxies_cache = {}
+            bot.weak_proxies_cache[user_id] = weak_proxies
+            
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"🗑 Purge {weak_count} Weak IPs", callback_data="rm_weak_proxies")]
+            ])
+            
+        try:
+            if markup:
+                await status_msg.edit_text(final_msg, reply_markup=markup)
+            else:
+                await status_msg.edit_text(final_msg)
+        except Exception:
+            if markup:
+                await message.answer(final_msg, reply_markup=markup)
+            else:
+                await message.answer(final_msg)
+
+@dp.callback_query(F.data == "add_strong_only")
+async def process_add_strong_only(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    cache = getattr(bot, 'pasted_proxies_cache', {}).get(user_id, {})
+    premium_raws = cache.get('premium', [])
+    
+    if not premium_raws:
+        await callback.answer("No strong proxies found in cache or session expired.", show_alert=True)
+        return
+        
+    pool = await ProxyManager.get_user_proxies(user_id)
+    existing_raws = {p['raw'] for p in pool}
+    added = 0
+    for p_raw in premium_raws:
+        if p_raw not in existing_raws:
+            parts = p_raw.split(':')
+            if len(parts) == 4:
+                pool.append({"raw": p_raw, "server": f"http://{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]})
+            elif len(parts) == 2:
+                pool.append({"raw": p_raw, "server": f"http://{parts[0]}:{parts[1]}"})
+            added += 1
+            
+    if added > 0:
+        await ProxyManager.save_user_proxies(user_id, pool)
+        
+    bot.pasted_proxies_cache[user_id] = {}
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.reply(f"💎 <b>Saved {added} Premium/Strong proxies to active pool!</b>\nDatacenter/Weak/Dead proxies were discarded.")
+    await callback.answer("Premium proxies added successfully!")
+
+@dp.callback_query(F.data == "add_live_all")
+async def process_add_live_all(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    cache = getattr(bot, 'pasted_proxies_cache', {}).get(user_id, {})
+    live_raws = cache.get('live', [])
+    
+    if not live_raws:
+        await callback.answer("No live proxies found in cache or session expired.", show_alert=True)
+        return
+        
+    pool = await ProxyManager.get_user_proxies(user_id)
+    existing_raws = {p['raw'] for p in pool}
+    added = 0
+    for p_raw in live_raws:
+        if p_raw not in existing_raws:
+            parts = p_raw.split(':')
+            if len(parts) == 4:
+                pool.append({"raw": p_raw, "server": f"http://{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]})
+            elif len(parts) == 2:
+                pool.append({"raw": p_raw, "server": f"http://{parts[0]}:{parts[1]}"})
+            added += 1
+            
+    if added > 0:
+        await ProxyManager.save_user_proxies(user_id, pool)
+        
+    bot.pasted_proxies_cache[user_id] = {}
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.reply(f"✅ <b>Saved all {added} live proxies to active pool!</b>")
+    await callback.answer("All live proxies added successfully!")
 
 @dp.callback_query(F.data == "rm_weak_proxies")
 async def process_rm_weak(callback: types.CallbackQuery):
@@ -518,7 +631,6 @@ async def process_rm_weak(callback: types.CallbackQuery):
         await callback.answer("No weak proxies found or session expired.", show_alert=True)
         return
         
-    # Batch remove to avoid hitting the DB hundreds of times
     pool = await ProxyManager.get_user_proxies(user_id)
     new_pool = [p for p in pool if p['raw'] not in weak_proxies]
     removed = len(pool) - len(new_pool)
@@ -527,7 +639,6 @@ async def process_rm_weak(callback: types.CallbackQuery):
         await ProxyManager.save_user_proxies(user_id, new_pool)
         
     bot.weak_proxies_cache[user_id] = []
-    
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.reply(f"🗑 <b>Removed {removed} weak Datacenter/VPN proxies!</b>\nYour pool is now clean.")
     await callback.answer("Proxies removed successfully!")
@@ -560,7 +671,9 @@ async def auto_proxy_checker_loop():
                 if not proxies: continue
                 
                 # Test all proxies (is_pool=True automatically deletes dead ones)
-                _, live_count, dead_count = await test_proxy_list(proxies, True, uid)
+                live_proxies, dead_proxies, weak_proxies = await test_proxy_list(proxies, True, uid)
+                live_count = len(live_proxies)
+                dead_count = len(dead_proxies)
                 
                 if dead_count > 0:
                     msg = f"🗑 <b>Auto-Cleanup Report</b>\nRemoved {dead_count} dead/blocked proxies.\nYou have {live_count} live proxies remaining in your pool."
