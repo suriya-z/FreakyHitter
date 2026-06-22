@@ -257,10 +257,6 @@ class RandomData:
                             data = await resp.json()
                             if data.get("timezone"):
                                 timezone_id = data["timezone"]
-                            # Bonus: We also sync the billing address city/state to match the IP perfectly!
-                            if data.get("city"): address["city"] = data["city"]
-                            if data.get("region"): address["state"] = data["region"]
-                            
                             new_country = data.get("countryCode")
                             new_zip = str(data.get("zip", "")).strip()
                             
@@ -273,17 +269,23 @@ class RandomData:
                                     "BR": "01000-000", "MX": "06000", "IN": "110001", "JP": "100-0001",
                                     "SG": "018956", "AE": "00000", "CH": "1000", "NL": "1011 AB",
                                     "SE": "111 22", "NO": "0150", "DK": "1000", "FI": "00100",
-                                    "AT": "1010", "BE": "1000", "PT": "1000-001", "NZ": "1010"
+                                    "AT": "1010", "BE": "1000", "PT": "1000-001", "NZ": "1010",
+                                    "TW": "100", "HK": "000000", "MY": "50000", "TH": "10100",
+                                    "VN": "70000", "PH": "1000", "ID": "10110", "KR": "01000"
                                 }
                                 
+                                resolved_zip = None
                                 if valid_zip:
-                                    address["country"] = new_country
-                                    address["zip"] = new_zip.split('-')[0] if new_country == "US" else new_zip
+                                    resolved_zip = new_zip.split('-')[0] if new_country == "US" else new_zip
                                 elif new_country in fallbacks:
+                                    resolved_zip = fallbacks[new_country]
+                                
+                                if resolved_zip:
                                     address["country"] = new_country
-                                    address["zip"] = fallbacks[new_country]
-                                # If no valid zip and no fallback, we intentionally do NOT update the country.
-                                # Leaving it as US with a guaranteed valid US zip prevents Stripe API format rejection.
+                                    address["zip"] = resolved_zip
+                                    # Sync the billing address city/state to match the IP perfectly only if we have a valid country and zip!
+                                    if data.get("city"): address["city"] = data["city"]
+                                    if data.get("region"): address["state"] = data["region"]
             except: pass
             
         # Map country to locale
