@@ -780,8 +780,10 @@ class StripeAPIHitter:
                                 try:
                                     data = auth_resp.json()
                                     state = data.get("state")
-                                except Exception:
+                                    print(f"DEBUG 3DS Auth Response: {data}")
+                                except Exception as e:
                                     state = "3DS Attempt failed"
+                                    print(f"DEBUG 3DS Auth Exception: {e}")
                                     
                                 if state == "challenge_required":
                                     result['decline_code'] = '3d_secure_required_hard'
