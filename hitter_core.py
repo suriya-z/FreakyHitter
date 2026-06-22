@@ -822,6 +822,8 @@ class StripeAPIHitter:
                                             result['error'] = err.get('message', 'Unknown error')
                                         else:
                                             result['decline_code'] = status_2
+                                            if status_2 == 'requires_action' and 'data' in locals():
+                                                result['decline_code'] = f"3d_debug_dict_{str(data)[:60]}"
                                             result['error'] = 'Unknown error'
                                     return result
                                 else:
