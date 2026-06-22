@@ -394,27 +394,33 @@ async def test_proxy_single(p, is_pool, user_id):
                     # Next, check IP quality and Fraud Score using proxycheck.io
                     ip_quality = "[?]"
                     try:
-                        # Use proxycheck.io with risk=1 to get fraud score
-                        async with session.get("http://proxycheck.io/v2/?vpn=1&asn=1&risk=1", proxy=proxy_url, timeout=5) as ip_resp:
-                            if ip_resp.status == 200:
-                                ip_data = await ip_resp.json()
-                                if ip_data.get("status") == "ok":
-                                    # The response keys vary based on the IP, so get the first IP key
-                                    for key, val in ip_data.items():
-                                        if key not in ["status", "node", "query_time", "message"]:
-                                            import html
-                                            country = html.escape(str(val.get("isocode", "??")))
-                                            isp = html.escape(str(val.get("provider", ""))[:15])
-                                            ip_type = html.escape(str(val.get("type", "Unknown")))
-                                            risk = val.get("risk", "N/A")
-                                            
-                                            if "Datacenter" in ip_type or "VPN" in ip_type or "Business" in ip_type:
-                                                ip_quality = f"[🚨 {ip_type} | {country} | {isp} | Fraud Score: {risk}]"
-                                            elif "Mobile" in ip_type:
-                                                ip_quality = f"[📱 {ip_type} | {country} | {isp} | Fraud Score: {risk}]"
-                                            else:
-                                                ip_quality = f"[🏠 {ip_type} | {country} | {isp} | Fraud Score: {risk}]"
-                                            break
+                        # We need to get the proxy's public IP first since proxycheck.io sometimes requires the IP in the URL
+                        proxy_ip = None
+                        async with session.get("https://api.ipify.org?format=json", proxy=proxy_url, timeout=5) as ipify_resp:
+                            if ipify_resp.status == 200:
+                                ipify_data = await ipify_resp.json()
+                                proxy_ip = ipify_data.get("ip")
+                                
+                        if proxy_ip:
+                            async with session.get(f"http://proxycheck.io/v2/{proxy_ip}?vpn=1&asn=1&risk=1", proxy=proxy_url, timeout=5) as ip_resp:
+                                if ip_resp.status == 200:
+                                    ip_data = await ip_resp.json()
+                                    if ip_data.get("status") == "ok":
+                                        for key, val in ip_data.items():
+                                            if key not in ["status", "node", "query_time", "message"]:
+                                                import html
+                                                country = html.escape(str(val.get("isocode", "??")))
+                                                isp = html.escape(str(val.get("provider", ""))[:15])
+                                                ip_type = html.escape(str(val.get("type", "Unknown")))
+                                                risk = val.get("risk", "N/A")
+                                                
+                                                if "Datacenter" in ip_type or "VPN" in ip_type or "Business" in ip_type:
+                                                    ip_quality = f"[🚨 {ip_type} | {country} | {isp} | Fraud Score: {risk}]"
+                                                elif "Mobile" in ip_type:
+                                                    ip_quality = f"[📱 {ip_type} | {country} | {isp} | Fraud Score: {risk}]"
+                                                else:
+                                                    ip_quality = f"[🏠 {ip_type} | {country} | {isp} | Fraud Score: {risk}]"
+                                                break
                     except Exception:
                         ip_quality = "[IP Check Failed]"
                         
