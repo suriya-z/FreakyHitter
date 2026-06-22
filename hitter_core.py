@@ -777,50 +777,50 @@ class StripeAPIHitter:
                                     
                                     auth_resp = await loop.run_in_executor(None, lambda: requests.post(auth_url, headers=auth_headers, data=auth_data, proxies=proxies, timeout=30))
                                     
-                                    try:
-                                        data = auth_resp.json()
-                                        state = data.get("state")
-                                    except Exception:
-                                        state = "3DS Attempt failed"
-                                        
-                                    if state == "challenge_required":
-                                        result['decline_code'] = '3d_secure_required_hard'
-                                        result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
-                                        return result
-
-                                    intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
-                                    client_secret = pi.get('client_secret') if isinstance(pi, dict) and pi.get('client_secret') else (si.get('client_secret') if isinstance(si, dict) else None)
+                                try:
+                                    data = auth_resp.json()
+                                    state = data.get("state")
+                                except Exception:
+                                    state = "3DS Attempt failed"
                                     
-                                    if intent_id and client_secret:
-                                        if 'seti' in intent_id:
-                                            poll_url = f"https://api.stripe.com/v1/setup_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
-                                        else:
-                                            poll_url = f"https://api.stripe.com/v1/payment_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
-                                            
-                                        poll_headers = {
-                                            "accept": "application/json",
-                                            "origin": "https://js.stripe.com",
-                                            "referer": "https://js.stripe.com/"
-                                        }
-                                        poll_resp = await loop.run_in_executor(None, lambda: requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30))
-                                        poll_json = poll_resp.json()
-                                        
-                                        status_2 = poll_json.get('status')
-                                        if status_2 in ['succeeded', 'requires_capture', 'complete']:
-                                            result['success'] = True
-                                        else:
-                                            err = poll_json.get('last_payment_error') or poll_json.get('last_setup_error') or poll_json.get('error') or {}
-                                            if isinstance(err, dict):
-                                                result['decline_code'] = err.get('decline_code', err.get('code', status_2))
-                                                result['error'] = err.get('message', 'Unknown error')
-                                            else:
-                                                result['decline_code'] = status_2
-                                                result['error'] = 'Unknown error'
-                                        return result
+                                if state == "challenge_required":
+                                    result['decline_code'] = '3d_secure_required_hard'
+                                    result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
+                                    return result
+
+                                intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
+                                client_secret = pi.get('client_secret') if isinstance(pi, dict) and pi.get('client_secret') else (si.get('client_secret') if isinstance(si, dict) else None)
+                                
+                                if intent_id and client_secret:
+                                    if 'seti' in intent_id:
+                                        poll_url = f"https://api.stripe.com/v1/setup_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
                                     else:
-                                        result['decline_code'] = '3d_secure_auth_failed'
-                                        result['error'] = str(data)[:500] if 'data' in locals() else 'Missing intent context'
-                                        return result
+                                        poll_url = f"https://api.stripe.com/v1/payment_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
+                                        
+                                    poll_headers = {
+                                        "accept": "application/json",
+                                        "origin": "https://js.stripe.com",
+                                        "referer": "https://js.stripe.com/"
+                                    }
+                                    poll_resp = await loop.run_in_executor(None, lambda: requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30))
+                                    poll_json = poll_resp.json()
+                                    
+                                    status_2 = poll_json.get('status')
+                                    if status_2 in ['succeeded', 'requires_capture', 'complete']:
+                                        result['success'] = True
+                                    else:
+                                        err = poll_json.get('last_payment_error') or poll_json.get('last_setup_error') or poll_json.get('error') or {}
+                                        if isinstance(err, dict):
+                                            result['decline_code'] = err.get('decline_code', err.get('code', status_2))
+                                            result['error'] = err.get('message', 'Unknown error')
+                                        else:
+                                            result['decline_code'] = status_2
+                                            result['error'] = 'Unknown error'
+                                    return result
+                                else:
+                                    result['decline_code'] = '3d_secure_auth_failed'
+                                    result['error'] = str(data)[:500] if 'data' in locals() else 'Missing intent context'
+                                    return result
                                         
                             elif next_action.get('type') == 'redirect_to_url':
                                 redirect_url = next_action.get('redirect_to_url', {}).get('url')
