@@ -392,7 +392,7 @@ async def test_proxy_single(p, is_pool, user_id):
             async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=10) as resp:
                 if resp.status in [200, 404]:
                     # Next, check IP quality and Fraud Score using proxycheck.io
-                    ip_quality = "[?]"
+                    is_weak = False
                     try:
                         # We need to get the proxy's public IP first since proxycheck.io sometimes requires the IP in the URL
                         proxy_ip = None
@@ -408,46 +408,40 @@ async def test_proxy_single(p, is_pool, user_id):
                                     if ip_data.get("status") == "ok":
                                         for key, val in ip_data.items():
                                             if key not in ["status", "node", "query_time", "message"]:
-                                                import html
-                                                country = html.escape(str(val.get("isocode", "??")))
-                                                isp = html.escape(str(val.get("provider", ""))[:15])
-                                                ip_type = html.escape(str(val.get("type", "Unknown")))
-                                                risk = val.get("risk", "N/A")
+                                                ip_type = str(val.get("type", "Unknown"))
+                                                risk = val.get("risk", 0)
                                                 
-                                                if "Datacenter" in ip_type or "VPN" in ip_type or "Business" in ip_type:
-                                                    ip_quality = f"[🚨 {ip_type} | {country} | {isp} | Fraud Score: {risk}]"
-                                                elif "Mobile" in ip_type:
-                                                    ip_quality = f"[📱 {ip_type} | {country} | {isp} | Fraud Score: {risk}]"
-                                                else:
-                                                    ip_quality = f"[🏠 {ip_type} | {country} | {isp} | Fraud Score: {risk}]"
+                                                if "Datacenter" in ip_type or "VPN" in ip_type or "Business" in ip_type or risk > 33:
+                                                    is_weak = True
                                                 break
                     except Exception:
-                        ip_quality = "[IP Check Failed]"
+                        pass
                         
-                    return True, False, f"✅ Live {ip_quality} | {p['raw']}", p['raw']
+                    return True, False, is_weak, p['raw']
                 else:
-                    return False, True, f"❌ Blocked by Provider | {p['raw']}", p['raw']
+                    return False, True, False, p['raw']
     except:
-        return False, True, f"❌ Dead/Timeout | {p['raw']}", p['raw']
+        return False, True, False, p['raw']
 
 async def test_proxy_list(proxies_to_test, is_pool, user_id):
-    results = []
     live_count = 0
     dead_count = 0
+    weak_proxies = []
     
     tasks = [test_proxy_single(p, is_pool, user_id) for p in proxies_to_test]
     completed = await asyncio.gather(*tasks)
     
-    for success, is_dead, res_str, raw in completed:
-        results.append(res_str)
+    for success, is_dead, is_weak, raw in completed:
         if success:
             live_count += 1
+            if is_weak:
+                weak_proxies.append(raw)
         if is_dead:
             dead_count += 1
             if is_pool:
                 await ProxyManager.remove(user_id, raw)
                 
-    return results, live_count, dead_count
+    return live_count, dead_count, weak_proxies
 
 @dp.message(Command("chkproxy"))
 async def chkproxy_command(message: types.Message):
@@ -476,20 +470,64 @@ async def chkproxy_command(message: types.Message):
 
     status_msg = await message.answer(f"🔍 Testing {len(proxies_to_test)} proxies. Please wait...")
     
-    results, live_count, dead_count = await test_proxy_list(proxies_to_test, is_pool, user_id)
+    live_count, dead_count, weak_proxies = await test_proxy_list(proxies_to_test, is_pool, user_id)
             
-    res_text = "\n".join(results)
-    if len(res_text) > 3500:
-        res_text = res_text[:3500] + "\n... (truncated)"
-        
-    final_msg = f"🏁 <b>Proxy Check Completed</b>\n\n{res_text}\n\n✅ Live: {live_count}\n❌ Dead: {dead_count}"
+    weak_count = len(weak_proxies)
+    premium_count = live_count - weak_count
+    
+    final_msg = (
+        f"🏁 <b>Proxy Check Completed</b>\n\n"
+        f"✅ <b>Total Live:</b> {live_count}\n"
+        f"❌ <b>Total Dead:</b> {dead_count}\n\n"
+        f"💎 <b>Premium IPs (Residential/Mobile):</b> {premium_count}\n"
+        f"🚨 <b>Weak IPs (Datacenter/VPN/High Risk):</b> {weak_count}"
+    )
+    
     if is_pool and dead_count > 0:
-        final_msg += f"\n\n🗑 <i>{dead_count} dead proxies were automatically removed from your pool.</i>"
+        final_msg += f"\n\n🗑 <i>{dead_count} dead proxies were auto-removed.</i>"
+        
+    markup = None
+    if is_pool and weak_count > 0:
+        # Save weak proxies to memory for deletion callback
+        if not hasattr(bot, 'weak_proxies_cache'):
+            bot.weak_proxies_cache = {}
+        bot.weak_proxies_cache[user_id] = weak_proxies
+        
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"🗑 Remove {weak_count} Weak IPs", callback_data="rm_weak_proxies")]
+        ])
         
     try:
-        await status_msg.edit_text(final_msg)
+        if markup:
+            await status_msg.edit_text(final_msg, reply_markup=markup)
+        else:
+            await status_msg.edit_text(final_msg)
     except Exception:
-        await message.answer(final_msg)
+        if markup:
+            await message.answer(final_msg, reply_markup=markup)
+        else:
+            await message.answer(final_msg)
+
+@dp.callback_query(F.data == "rm_weak_proxies")
+async def process_rm_weak(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    weak_proxies = getattr(bot, 'weak_proxies_cache', {}).get(user_id, [])
+    
+    if not weak_proxies:
+        await callback.answer("No weak proxies found or session expired.", show_alert=True)
+        return
+        
+    removed = 0
+    for p in weak_proxies:
+        await ProxyManager.remove(user_id, p)
+        removed += 1
+        
+    bot.weak_proxies_cache[user_id] = []
+    
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.reply(f"🗑 <b>Removed {removed} weak Datacenter/VPN proxies!</b>\nYour pool is now clean.")
+    await callback.answer("Proxies removed successfully!")
 
 
 
