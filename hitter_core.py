@@ -803,8 +803,7 @@ class StripeAPIHitter:
                                     return result
 
                             if state != "challenge_required":
-                                intent_type = "setup_intents" if is_setup_intent else "payment_intents"
-                                poll_url = f"https://api.stripe.com/v1/{intent_type}/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
+                                poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
                                 poll_headers = {
                                     "accept": "application/json",
                                     "origin": "https://js.stripe.com",
@@ -823,7 +822,7 @@ class StripeAPIHitter:
                                         if redirect_url:
                                             await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                             
-                                            poll_url_3 = f"https://api.stripe.com/v1/{intent_type}/{pi}?key={pk}"
+                                            poll_url_3 = f"https://api.stripe.com/v1/payment_intents/{pi}?key={pk}"
                                             poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                             poll_json_3 = poll_res_3.json()
                                             poll_status_3 = poll_res_3.get('status')
@@ -854,8 +853,7 @@ class StripeAPIHitter:
                                 if redirect_url:
                                     await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     
-                                    intent_type = "setup_intents" if is_setup_intent else "payment_intents"
-                                    poll_url = f"https://api.stripe.com/v1/{intent_type}/{pi}?key={pk}"
+                                    poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?key={pk}"
                                     poll_res = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     poll_json = poll_res.json()
                                     poll_status = poll_json.get('status')
