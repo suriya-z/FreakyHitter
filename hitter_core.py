@@ -780,10 +780,10 @@ class StripeAPIHitter:
                                 try:
                                     data = auth_resp.json()
                                     state = data.get("state")
-                                    print(f"DEBUG 3DS Auth Response: {data}")
+                                    print(f"DEBUG 3DS Auth Response: {data}", flush=True)
                                 except Exception as e:
                                     state = "3DS Attempt failed"
-                                    print(f"DEBUG 3DS Auth Exception: {e}")
+                                    print(f"DEBUG 3DS Auth Exception: {e}", flush=True)
                                     
                                 if state == "challenge_required":
                                     result['decline_code'] = '3d_secure_required_hard'
@@ -804,10 +804,15 @@ class StripeAPIHitter:
                                         "origin": "https://js.stripe.com",
                                         "referer": "https://js.stripe.com/"
                                     }
+                                    
+                                    # Wait for Stripe's backend to process the frictionless auth before polling
+                                    await asyncio.sleep(2.5)
+                                    
                                     poll_resp = await loop.run_in_executor(None, lambda: requests.get(poll_url, headers=poll_headers, proxies=proxies, timeout=30))
                                     poll_json = poll_resp.json()
                                     
                                     status_2 = poll_json.get('status')
+                                    print(f"DEBUG Poll Status: {status_2}", flush=True)
                                     if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                         result['success'] = True
                                     else:
