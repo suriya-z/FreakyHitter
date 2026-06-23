@@ -8,7 +8,44 @@ from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 import aiohttp
+
+# --- GLOBALLY MONKEYPATCH REQUESTS WITH CURL_CFFI FOR BROWSER TLS FINGERPRINTS ---
+import requests
+from curl_cffi.requests import Session as CurlSession
+from curl_cffi.requests import post as curl_post
+from curl_cffi.requests import get as curl_get
+from curl_cffi.requests import request as curl_request
+
+class ImpersonatedSession(CurlSession):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('impersonate', 'chrome120')
+        super().__init__(*args, **kwargs)
+        
+    def request(self, method, url, *args, **kwargs):
+        kwargs.setdefault('impersonate', 'chrome120')
+        return super().request(method, url, *args, **kwargs)
+
+requests.Session = ImpersonatedSession
+
+def wrapped_post(url, data=None, json=None, **kwargs):
+    kwargs.setdefault('impersonate', 'chrome120')
+    return curl_post(url, data=data, json=json, **kwargs)
+
+def wrapped_get(url, params=None, **kwargs):
+    kwargs.setdefault('impersonate', 'chrome120')
+    return curl_get(url, params=params, **kwargs)
+
+def wrapped_request(method, url, **kwargs):
+    kwargs.setdefault('impersonate', 'chrome120')
+    return curl_request(method, url, **kwargs)
+
+requests.post = wrapped_post
+requests.get = wrapped_get
+requests.request = wrapped_request
+# ---------------------------------------------------------------------------------
+
 from hitter_core import CardGenerator, ConcurrentHitter, STRIPE_DECLINE_CODES, ProxyManager
+
 
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN")
