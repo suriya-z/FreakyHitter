@@ -359,27 +359,19 @@ async def hit_command(message: types.Message):
                     try: await status_msg.delete()
                     except: pass
                     
-                if res['success']:
-                    try:
-                        await message.answer(hit_text)
-                    except Exception as e:
-                        import re
-                        plain_text = re.sub(r'<[^>]+>', '', hit_text)
-                        await message.answer(f"⚠️ UI Formatting Error: {e}\n\nRAW RESULT:\n{plain_text}")
-                else:
-                    hit_text += "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
-                    try:
-                        sent_msg = await message.answer(hit_text)
-                    except Exception as e:
-                        import re
-                        plain_text = re.sub(r'<[^>]+>', '', hit_text)
-                        sent_msg = await message.answer(f"⚠️ UI Formatting Error: {e}\n\nRAW RESULT:\n{plain_text}")
-                        
-                    async def auto_delete(m):
-                        await asyncio.sleep(30)
-                        try: await m.delete()
-                        except: pass
-                    asyncio.create_task(auto_delete(sent_msg))
+                hit_text += "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
+                try:
+                    sent_msg = await message.answer(hit_text)
+                except Exception as e:
+                    import re
+                    plain_text = re.sub(r'<[^>]+>', '', hit_text)
+                    sent_msg = await message.answer(f"⚠️ UI Formatting Error: {e}\n\nRAW RESULT:\n{plain_text}")
+                    
+                async def auto_delete(m):
+                    await asyncio.sleep(30)
+                    try: await m.delete()
+                    except: pass
+                asyncio.create_task(auto_delete(sent_msg))
             
             # Update the main progress message
             if len(cards) > 1:
@@ -390,15 +382,30 @@ async def hit_command(message: types.Message):
                         f"💳 <code>{card_str}</code>{amt_str_msg}{merchant_str}{url_str_msg}\n"
                         f"⏱ {res['response_time']:.2f}s\n\n"
                         f"<b>Session Results:</b>\n"
-                        f"{results_str}"
+                        f"{results_str}\n\n"
+                        f"<i>Note: this message will be deleted automatically after 30sec</i>"
                     )
+                    
+                    sent_msg = None
                     if status_msg:
-                        try: await status_msg.edit_text(success_text)
+                        try:
+                            await status_msg.edit_text(success_text)
+                            sent_msg = status_msg
                         except:
-                            try: await message.answer(success_text)
+                            try:
+                                sent_msg = await message.answer(success_text)
                             except: pass
                     else:
-                        await message.answer(success_text)
+                        try:
+                            sent_msg = await message.answer(success_text)
+                        except: pass
+                        
+                    if sent_msg:
+                        async def auto_delete(m):
+                            await asyncio.sleep(30)
+                            try: await m.delete()
+                            except: pass
+                        asyncio.create_task(auto_delete(sent_msg))
                 else:
                     total = data["total"]
                     comp = data["completed"]
