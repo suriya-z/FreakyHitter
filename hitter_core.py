@@ -83,27 +83,45 @@ class StripeAPIExtractor:
                 resp_json = response.json()
                 amount = None
                 merchant = "Unknown"
-                lig = resp_json.get('line_item_group')
-                if lig and isinstance(lig, dict) and lig.get('total') is not None:
-                    amount = lig['total']
-                elif resp_json.get('amount') is not None:
-                    amount = resp_json['amount']
-                elif resp_json.get('payment_intent') and isinstance(resp_json.get('payment_intent'), dict) and resp_json['payment_intent'].get('amount') is not None:
-                    amount = resp_json['payment_intent']['amount']
-                else:
-                    def _find_amount(d):
-                        if isinstance(d, dict):
-                            for k in ['amount_total', 'amount_due']:
-                                if k in d and isinstance(d[k], int): return d[k]
-                            for v in d.values():
-                                res = _find_amount(v)
-                                if res is not None: return res
-                        elif isinstance(d, list):
-                            for item in d:
-                                res = _find_amount(item)
-                                if res is not None: return res
-                        return None
-                    amount = _find_amount(resp_json)
+                
+                # Prioritize invoice and total_summary for subscriptions and adaptive local currency pricing
+                invoice = resp_json.get('invoice')
+                if isinstance(invoice, dict):
+                    if invoice.get('amount_due') is not None:
+                        amount = invoice['amount_due']
+                    elif invoice.get('total') is not None:
+                        amount = invoice['total']
+                
+                if amount is None:
+                    ts = resp_json.get('total_summary')
+                    if isinstance(ts, dict):
+                        if ts.get('due') is not None:
+                            amount = ts['due']
+                        elif ts.get('total') is not None:
+                            amount = ts['total']
+                            
+                if amount is None:
+                    lig = resp_json.get('line_item_group')
+                    if lig and isinstance(lig, dict) and lig.get('total') is not None:
+                        amount = lig['total']
+                    elif resp_json.get('amount') is not None:
+                        amount = resp_json['amount']
+                    elif resp_json.get('payment_intent') and isinstance(resp_json.get('payment_intent'), dict) and resp_json['payment_intent'].get('amount') is not None:
+                        amount = resp_json['payment_intent']['amount']
+                    else:
+                        def _find_amount(d):
+                            if isinstance(d, dict):
+                                for k in ['amount_total', 'amount_due']:
+                                    if k in d and isinstance(d[k], int): return d[k]
+                                for v in d.values():
+                                    res = _find_amount(v)
+                                    if res is not None: return res
+                            elif isinstance(d, list):
+                                for item in d:
+                                    res = _find_amount(item)
+                                    if res is not None: return res
+                            return None
+                        amount = _find_amount(resp_json)
                     
                 acct = resp_json.get('account_settings')
                 if acct and isinstance(acct, dict) and acct.get('display_name'):
