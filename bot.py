@@ -586,10 +586,18 @@ async def allproxies_command(message: types.Message):
     if not OWNER_ID or str(user_id) != str(OWNER_ID):
         return
         
-    proxies_map = await ProxyManager.get_all_proxies_map()
-    if not proxies_map:
-        await message.answer("📁 <b>No proxies loaded in the database.</b>")
+    db_pool = ProxyManager.db_pool
+    if not db_pool:
+        await message.answer("📁 <b>Database connection not active.</b>")
         return
+        
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id, proxies FROM user_proxies")
+        proxies_map = {}
+        for row in rows:
+            if row['proxies']:
+                import json
+                proxies_map[row['user_id']] = json.loads(row['proxies'])
         
     lines = []
     lines.append("📁 <b>All Loaded Proxies:</b>\n")

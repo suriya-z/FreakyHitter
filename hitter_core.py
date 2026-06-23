@@ -166,16 +166,6 @@ class ProxyManager:
             rows = await conn.fetch("SELECT user_id FROM user_proxies")
             return [row['user_id'] for row in rows]
 
-    @classmethod
-    async def get_all_proxies_map(cls) -> Dict[int, List[Dict]]:
-        if not cls.db_pool: return {}
-        async with cls.db_pool.acquire() as conn:
-            rows = await conn.fetch("SELECT user_id, proxies FROM user_proxies")
-            res = {}
-            for row in rows:
-                if row['proxies']:
-                    res[row['user_id']] = json.loads(row['proxies'])
-            return res
 
     @classmethod
     async def save_user_proxies(cls, user_id: int, proxies: List[Dict]):
