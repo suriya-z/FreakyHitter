@@ -703,6 +703,10 @@ class StripeAPIHitter:
                     match = re.search(r'actual amount \((\d+)\)', err_msg.lower())
                     if match:
                         confirm_data['expected_amount'] = int(match.group(1))
+                    elif 'subscription' in err_msg.lower() or 'computed invoice' in err_msg.lower():
+                        # For subscription checkouts, delete expected_amount to let Stripe confirm the computed invoice
+                        if 'expected_amount' in confirm_data:
+                            del confirm_data['expected_amount']
                     else:
                         # Fallback to 0 for SetupIntents / Free Trials if regex fails
                         confirm_data['expected_amount'] = 0
