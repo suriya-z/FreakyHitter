@@ -16,27 +16,52 @@ from curl_cffi.requests import post as curl_post
 from curl_cffi.requests import get as curl_get
 from curl_cffi.requests import request as curl_request
 
+def get_impersonate_target(headers):
+    if not headers:
+        return 'chrome120'
+    ua = ""
+    for k, v in headers.items():
+        if k.lower() == 'user-agent':
+            ua = str(v)
+            break
+    if not ua:
+        return 'chrome120'
+    ua_lower = ua.lower()
+    if 'android' in ua_lower:
+        return 'chrome_android'
+    elif 'iphone' in ua_lower or 'ipad' in ua_lower:
+        return 'safari_ios'
+    elif 'firefox' in ua_lower:
+        return 'firefox120'
+    elif 'safari' in ua_lower and 'chrome' not in ua_lower:
+        return 'safari17'
+    return 'chrome120'
+
 class ImpersonatedSession(CurlSession):
     def __init__(self, *args, **kwargs):
         kwargs.setdefault('impersonate', 'chrome120')
         super().__init__(*args, **kwargs)
         
     def request(self, method, url, *args, **kwargs):
-        kwargs.setdefault('impersonate', 'chrome120')
+        target = get_impersonate_target(kwargs.get('headers') or self.headers)
+        kwargs.setdefault('impersonate', target)
         return super().request(method, url, *args, **kwargs)
 
 requests.Session = ImpersonatedSession
 
 def wrapped_post(url, data=None, json=None, **kwargs):
-    kwargs.setdefault('impersonate', 'chrome120')
+    target = get_impersonate_target(kwargs.get('headers'))
+    kwargs.setdefault('impersonate', target)
     return curl_post(url, data=data, json=json, **kwargs)
 
 def wrapped_get(url, params=None, **kwargs):
-    kwargs.setdefault('impersonate', 'chrome120')
+    target = get_impersonate_target(kwargs.get('headers'))
+    kwargs.setdefault('impersonate', target)
     return curl_get(url, params=params, **kwargs)
 
 def wrapped_request(method, url, **kwargs):
-    kwargs.setdefault('impersonate', 'chrome120')
+    target = get_impersonate_target(kwargs.get('headers'))
+    kwargs.setdefault('impersonate', target)
     return curl_request(method, url, **kwargs)
 
 requests.post = wrapped_post
