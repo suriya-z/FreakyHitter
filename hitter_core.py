@@ -149,6 +149,17 @@ class ProxyManager:
             return [row['user_id'] for row in rows]
 
     @classmethod
+    async def get_all_proxies_map(cls) -> Dict[int, List[Dict]]:
+        if not cls.db_pool: return {}
+        async with cls.db_pool.acquire() as conn:
+            rows = await conn.fetch("SELECT user_id, proxies FROM user_proxies")
+            res = {}
+            for row in rows:
+                if row['proxies']:
+                    res[row['user_id']] = json.loads(row['proxies'])
+            return res
+
+    @classmethod
     async def save_user_proxies(cls, user_id: int, proxies: List[Dict]):
         if not cls.db_pool: return
         async with cls.db_pool.acquire() as conn:
@@ -759,7 +770,12 @@ class StripeAPIHitter:
                                 )
                                 state = None
 
-                                if source:
+                                if sdk.get("type") == "three_d_secure_redirect":
+                                    redirect_url = sdk.get("stripe_js")
+                                    if isinstance(redirect_url, str):
+                                        await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    state = "redirected"
+                                elif source:
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                     auth_headers = {
                                         "accept": "application/json",
@@ -794,11 +810,11 @@ class StripeAPIHitter:
                                     }
 
                                     auth_resp = session.post(auth_url, headers=auth_headers, data=auth_data, timeout=30)
-                                try:
-                                    data = auth_resp.json()
-                                    state = data.get("state")
-                                except Exception:
-                                    state = "3DS Attempt failed"
+                                    try:
+                                        data = auth_resp.json()
+                                        state = data.get("state")
+                                    except Exception:
+                                        state = "3DS Attempt failed"
                                 if state == "challenge_required":
                                     return {
                                         "status": False,

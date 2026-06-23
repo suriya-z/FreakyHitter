@@ -8,6 +8,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 import aiohttp
+from aiogram.types import FSInputFile
 
 # --- GLOBALLY MONKEYPATCH REQUESTS WITH CURL_CFFI FOR BROWSER TLS FINGERPRINTS ---
 import requests
@@ -75,6 +76,7 @@ from hitter_core import CardGenerator, ConcurrentHitter, STRIPE_DECLINE_CODES, P
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN")
 LOG_GROUP_ID = os.getenv("LOG_GROUP_ID")
+OWNER_ID = os.getenv("OWNER_ID")
 
 # Setup bot
 dp = Dispatcher()
@@ -500,6 +502,57 @@ async def test_proxy_list(proxies_to_test, is_pool, user_id):
                 await ProxyManager.remove(user_id, raw)
                 
     return live_proxies, dead_proxies, weak_proxies
+
+@dp.message(Command("allproxies"))
+async def allproxies_command(message: types.Message):
+    if not message.from_user:
+        return
+    user_id = message.from_user.id
+    if not OWNER_ID or str(user_id) != str(OWNER_ID):
+        return
+        
+    proxies_map = await ProxyManager.get_all_proxies_map()
+    if not proxies_map:
+        await message.answer("📁 <b>No proxies loaded in the database.</b>")
+        return
+        
+    lines = []
+    lines.append("📁 <b>All Loaded Proxies:</b>\n")
+    for u_id, proxies in proxies_map.items():
+        lines.append(f"👤 <b>User ID:</b> <code>{u_id}</code> (Total: {len(proxies)})")
+        for p in proxies:
+            raw_p = p.get('raw') or p.get('server')
+            lines.append(f"  • <code>{raw_p}</code>")
+        lines.append("")
+        
+    output_text = "\n".join(lines)
+    
+    if len(output_text) > 3500:
+        temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_file_path = os.path.join(temp_dir, 'all_proxies.txt')
+        
+        clean_lines = []
+        for u_id, proxies in proxies_map.items():
+            clean_lines.append(f"User ID: {u_id} (Total: {len(proxies)})")
+            for p in proxies:
+                raw_p = p.get('raw') or p.get('server')
+                clean_lines.append(f"  - {raw_p}")
+            clean_lines.append("")
+            
+        with open(temp_file_path, 'w', encoding='utf-8') as f:
+            f.write("\n".join(clean_lines))
+            
+        await message.reply_document(
+            document=FSInputFile(temp_file_path, filename="all_proxies.txt"),
+            caption=f"📁 All proxies list (Total users: {len(proxies_map)})"
+        )
+        try:
+            os.remove(temp_file_path)
+        except Exception:
+            pass
+    else:
+        await message.answer(output_text)
 
 @dp.message(Command("proxy", "setproxy", "chkproxy"))
 async def proxy_command(message: types.Message):
