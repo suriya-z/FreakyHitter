@@ -770,8 +770,13 @@ class StripeAPIHitter:
                                 )
                                 state = None
 
-                                if sdk.get("type") == "three_d_secure_redirect":
-                                    redirect_url = sdk.get("stripe_js")
+                                is_legacy_3ds = (
+                                    res.get("status") == "requires_source_action"
+                                    or sdk.get("type") == "three_d_secure_redirect"
+                                    or (isinstance(source, str) and source.startswith("src_"))
+                                )
+                                if is_legacy_3ds:
+                                    redirect_url = sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
                                     if isinstance(redirect_url, str):
                                         await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     state = "redirected"
