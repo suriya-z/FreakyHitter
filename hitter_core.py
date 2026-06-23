@@ -258,34 +258,48 @@ class RandomData:
                             if data.get("timezone"):
                                 timezone_id = data["timezone"]
                             new_country = data.get("countryCode")
-                            new_zip = str(data.get("zip", "")).strip()
-                            
                             if new_country:
-                                valid_zip = new_zip and len(new_zip) >= 3 and new_zip.lower() not in ['na', 'none', 'null', '0', '00', '000']
-                                
-                                fallbacks = {
-                                    "US": random.choice(RandomData.ZIP_CODES), "GB": "SW1A 1AA", "CA": "M5V 2L7", "AU": "2000",
-                                    "FR": "75001", "DE": "10115", "IT": "00118", "ES": "28001",
-                                    "BR": "01000-000", "MX": "06000", "IN": "110001", "JP": "100-0001",
-                                    "SG": "018956", "AE": "00000", "CH": "1000", "NL": "1011 AB",
-                                    "SE": "111 22", "NO": "0150", "DK": "1000", "FI": "00100",
-                                    "AT": "1010", "BE": "1000", "PT": "1000-001", "NZ": "1010",
-                                    "TW": "100", "HK": "000000", "MY": "50000", "TH": "10100",
-                                    "VN": "70000", "PH": "1000", "ID": "10110", "KR": "01000"
+                                fallback_addresses = {
+                                    "US": {"zip": random.choice(RandomData.ZIP_CODES), "city": "New York", "state": "NY"},
+                                    "GB": {"zip": "SW1A 1AA", "city": "London", "state": "London"},
+                                    "CA": {"zip": "M5V 2L7", "city": "Toronto", "state": "ON"},
+                                    "AU": {"zip": "2000", "city": "Sydney", "state": "NSW"},
+                                    "FR": {"zip": "75001", "city": "Paris", "state": "Paris"},
+                                    "DE": {"zip": "10115", "city": "Berlin", "state": "Berlin"},
+                                    "IT": {"zip": "00118", "city": "Roma", "state": "RM"},
+                                    "ES": {"zip": "28001", "city": "Madrid", "state": "Madrid"},
+                                    "BR": {"zip": "01000-000", "city": "Sao Paulo", "state": "SP"},
+                                    "MX": {"zip": "06000", "city": "Ciudad de Mexico", "state": "DF"},
+                                    "IN": {"zip": "110001", "city": "New Delhi", "state": "Delhi"},
+                                    "JP": {"zip": "100-0001", "city": "Chiyoda-ku", "state": "Tokyo"},
+                                    "SG": {"zip": "018956", "city": "Singapore", "state": "Singapore"},
+                                    "AE": {"zip": "00000", "city": "Dubai", "state": "Dubai"},
+                                    "CH": {"zip": "1000", "city": "Lausanne", "state": "VD"},
+                                    "NL": {"zip": "1011 AB", "city": "Amsterdam", "state": "North Holland"},
+                                    "SE": {"zip": "111 22", "city": "Stockholm", "state": "Stockholm"},
+                                    "NO": {"zip": "0150", "city": "Oslo", "state": "Oslo"},
+                                    "DK": {"zip": "1000", "city": "Kobenhavn", "state": "Kobenhavn"},
+                                    "FI": {"zip": "00100", "city": "Helsinki", "state": "Uusimaa"},
+                                    "AT": {"zip": "1010", "city": "Wien", "state": "Wien"},
+                                    "BE": {"zip": "1000", "city": "Bruxelles", "state": "Bruxelles"},
+                                    "PT": {"zip": "1000-001", "city": "Lisboa", "state": "Lisboa"},
+                                    "NZ": {"zip": "1010", "city": "Auckland", "state": "Auckland"},
+                                    "TW": {"zip": "100", "city": "Taipei", "state": "Taipei"},
+                                    "HK": {"zip": "000000", "city": "Hong Kong", "state": "Hong Kong"},
+                                    "MY": {"zip": "50000", "city": "Kuala Lumpur", "state": "Kuala Lumpur"},
+                                    "TH": {"zip": "10100", "city": "Bangkok", "state": "Bangkok"},
+                                    "VN": {"zip": "70000", "city": "Ho Chi Minh City", "state": "Ho Chi Minh City"},
+                                    "PH": {"zip": "1000", "city": "Manila", "state": "Metro Manila"},
+                                    "ID": {"zip": "10110", "city": "Jakarta", "state": "DKI Jakarta"},
+                                    "KR": {"zip": "01000", "city": "Seoul", "state": "Seoul"}
                                 }
                                 
-                                resolved_zip = None
-                                if valid_zip:
-                                    resolved_zip = new_zip.split('-')[0] if new_country == "US" else new_zip
-                                elif new_country in fallbacks:
-                                    resolved_zip = fallbacks[new_country]
-                                
-                                if resolved_zip:
+                                if new_country in fallback_addresses:
+                                    addr_data = fallback_addresses[new_country]
                                     address["country"] = new_country
-                                    address["zip"] = resolved_zip
-                                    # Sync the billing address city/state to match the IP perfectly only if we have a valid country and zip!
-                                    if data.get("city"): address["city"] = data["city"]
-                                    if data.get("region"): address["state"] = data["region"]
+                                    address["zip"] = addr_data["zip"]
+                                    address["city"] = addr_data["city"]
+                                    address["state"] = addr_data["state"]
             except: pass
             
         # Map country to locale
