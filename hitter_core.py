@@ -840,9 +840,19 @@ class StripeAPIHitter:
                                         "browserTZ": "-300",
                                         "browserUserAgent": auth_headers["user-agent"]
                                     }
+                                    import uuid
+                                    app_data = {
+                                        "sdk_trans_id": str(uuid.uuid4()),
+                                        "device_render_options": {
+                                            "sdk_interface": "03",
+                                            "sdk_ui_type": ["01", "02", "03", "04", "05"]
+                                        }
+                                    }
+                                    
                                     auth_data = {
                                         "source": source,
                                         "browser": json.dumps(browser),
+                                        "app": json.dumps(app_data, separators=(",", ":")),
                                         "one_click_authn_device_support[hosted]": "false",
                                         "one_click_authn_device_support[same_origin_frame]": "false",
                                         "one_click_authn_device_support[spc_eligible]": "false",
