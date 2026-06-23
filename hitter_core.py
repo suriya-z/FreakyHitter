@@ -743,6 +743,21 @@ class StripeAPIHitter:
                         
                     if status in ['succeeded', 'requires_capture', 'complete']:
                         result['success'] = True
+                        receipt_url = None
+                        if isinstance(pi, dict):
+                            charges = pi.get("charges", {}).get("data", [])
+                            if charges and isinstance(charges, list):
+                                receipt_url = charges[0].get("receipt_url")
+                        if not receipt_url and isinstance(confirm_json, dict):
+                            charges = confirm_json.get("charges", {}).get("data", [])
+                            if charges and isinstance(charges, list):
+                                receipt_url = charges[0].get("receipt_url")
+                        if not receipt_url and isinstance(confirm_json, dict):
+                            receipt_url = confirm_json.get("receipt_url")
+                        if not receipt_url and isinstance(pi, dict):
+                            receipt_url = pi.get("receipt_url")
+                        if receipt_url:
+                            result['receipt_url'] = receipt_url
                         return result
                     elif status in ['requires_action', 'requires_source_action']:
                         try:
@@ -849,6 +864,15 @@ class StripeAPIHitter:
                                 status_2 = poll_json.get('status')
                                 if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                     result['success'] = True
+                                    receipt_url = None
+                                    if isinstance(poll_json, dict):
+                                        charges = poll_json.get("charges", {}).get("data", [])
+                                        if charges and isinstance(charges, list):
+                                            receipt_url = charges[0].get("receipt_url")
+                                        if not receipt_url:
+                                            receipt_url = poll_json.get("receipt_url")
+                                    if receipt_url:
+                                        result['receipt_url'] = receipt_url
                                 else:
                                     next_act_2 = poll_json.get('next_action') or {}
                                     if status_2 == 'requires_action' and next_act_2.get('type') == 'redirect_to_url':
@@ -865,6 +889,15 @@ class StripeAPIHitter:
                                             if poll_status_3 in ['succeeded', 'requires_capture', 'complete']:
                                                 result['success'] = True
                                                 result['final_url'] = return_url or redirect_url
+                                                receipt_url = None
+                                                if isinstance(poll_json_3, dict):
+                                                    charges = poll_json_3.get("charges", {}).get("data", [])
+                                                    if charges and isinstance(charges, list):
+                                                        receipt_url = charges[0].get("receipt_url")
+                                                    if not receipt_url:
+                                                        receipt_url = poll_json_3.get("receipt_url")
+                                                if receipt_url:
+                                                    result['receipt_url'] = receipt_url
                                                 return result
                                                 
                                             result['decline_code'] = '3d_secure_required_hard'
@@ -896,6 +929,15 @@ class StripeAPIHitter:
                                     if poll_status in ['succeeded', 'requires_capture', 'complete']:
                                         result['success'] = True
                                         result['final_url'] = return_url or redirect_url
+                                        receipt_url = None
+                                        if isinstance(poll_json, dict):
+                                            charges = poll_json.get("charges", {}).get("data", [])
+                                            if charges and isinstance(charges, list):
+                                                receipt_url = charges[0].get("receipt_url")
+                                            if not receipt_url:
+                                                receipt_url = poll_json.get("receipt_url")
+                                        if receipt_url:
+                                            result['receipt_url'] = receipt_url
                                         return result
                                         
                                     result['decline_code'] = '3d_secure_required_hard'
@@ -1067,6 +1109,14 @@ class ConcurrentHitter:
                             'proxy_raw': proxy_data['raw'] if proxy_data else None,
                             'error': friend_res.get("result", {}).get("message")
                         }
+                        if 'final_url' in friend_res:
+                            result['final_url'] = friend_res['final_url']
+                        elif 'final_url' in friend_res.get('result', {}):
+                            result['final_url'] = friend_res['result']['final_url']
+                        if 'receipt_url' in friend_res:
+                            result['receipt_url'] = friend_res['receipt_url']
+                        elif 'receipt_url' in friend_res.get('result', {}):
+                            result['receipt_url'] = friend_res['result']['receipt_url']
                     result['amount'] = self.url_info.get('amount')
                     result['merchant'] = self.url_info.get('merchant')
                     
@@ -1086,6 +1136,13 @@ class ConcurrentHitter:
                 self.completed += 1
                 if result['success']:
                     self.successes += 1
+                    self.is_running = False
+                    while not queue.empty():
+                        try:
+                            queue.get_nowait()
+                            queue.task_done()
+                        except asyncio.QueueEmpty:
+                            break
                 else:
                     self.fails += 1
                     

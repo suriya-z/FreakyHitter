@@ -270,10 +270,17 @@ async def hit_command(message: types.Message):
             
             if res['success']:
                 final_url = res.get('final_url')
+                receipt_url = res.get('receipt_url')
+                
+                url_str = ""
                 if final_url:
                     import html
                     final_url = html.escape(final_url)
-                url_str = f"\n🔗 <b>Confirmation:</b> {final_url}" if final_url else ""
+                    url_str += f"\n🔗 <b>Confirmation:</b> {final_url}"
+                if receipt_url:
+                    import html
+                    receipt_url = html.escape(receipt_url)
+                    url_str += f"\n🧾 <b>Receipt:</b> {receipt_url}"
                 
                 merchant_name = res.get('merchant') or 'Unknown'
                 if isinstance(merchant_name, str):
