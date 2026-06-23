@@ -733,7 +733,7 @@ class StripeAPIHitter:
                     if status in ['succeeded', 'requires_capture', 'complete']:
                         result['success'] = True
                         return result
-                    elif status == 'requires_action':
+                    elif status in ['requires_action', 'requires_source_action']:
                         try:
                             state = None
                             res = confirm_json.get('payment_intent') or confirm_json.get('setup_intent') or confirm_json
@@ -745,7 +745,7 @@ class StripeAPIHitter:
                             if proxies:
                                 session.proxies = proxies
 
-                            if res.get("status") == "requires_action":
+                            if res.get("status") in ["requires_action", "requires_source_action"]:
                                 next_action = res.get("next_action", {})
                                 sdk = next_action.get("use_stripe_sdk", {})
                                 if isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {}):
