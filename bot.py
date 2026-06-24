@@ -680,8 +680,8 @@ async def proxy_command(message: types.Message):
             await message.answer("❌ <b>Proxy Pool Empty</b>\nPlease load proxies first: <code>/proxy ip:port:user:pass</code>")
         return
 
-    loading_status = "Validating new proxy nodes..." if is_loading_new else "Handshaking with active proxy pool..."
-    status_msg = await message.answer(f"🔍 <b>[PORTAL]</b> {loading_status} ({len(proxies_to_test)} nodes)")
+    loading_status = "Verifying proxies..." if is_loading_new else "Checking connection pool..."
+    status_msg = await message.answer(f"🔌 <b>[Proxy Hub]</b> {loading_status} ({len(proxies_to_test)} IPs)")
     
     # Test proxies
     live_proxies, dead_proxies, weak_proxies = await test_proxy_list(proxies_to_test, not is_loading_new, user_id)
@@ -694,20 +694,14 @@ async def proxy_command(message: types.Message):
     
     # Calculate health score percentage
     health_pct = int((live_count / total_tested) * 100) if total_tested > 0 else 0
-    bar_len = 10
-    filled = int(bar_len * health_pct / 100)
-    bar = "█" * filled + "░" * (bar_len - filled)
     
     final_msg = (
-        f"🛡 <b>PROXY NETWORK PORTAL</b> 🛡\n"
+        f"⚡ <b>PROXY STATUS REPORT</b> ⚡\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📈 <b>Network Health:</b> <code>[{bar}]</code> {health_pct}%\n\n"
-        f"📊 <b>Operational Diagnostics</b>\n"
-        f"  ├─ 🌐 <b>Active Nodes:</b> {live_count} / {total_tested}\n"
-        f"  └─ 💀 <b>Dead Nodes:</b> {dead_count}\n\n"
-        f"⚡ <b>IP Quality Analysis</b>\n"
-        f"  ├─ 💎 <b>Premium Residential/Mobile:</b> {premium_count}\n"
-        f"  └─ 🚨 <b>Datacenter/VPN/High-Risk:</b> {weak_count}\n"
+        f"🟢 <b>Active:</b> {live_count} / {total_tested} ({health_pct}% Health)\n"
+        f"🔴 <b>Offline:</b> {dead_count}\n\n"
+        f"💎 <b>Premium IPs:</b> {premium_count}\n"
+        f"🚨 <b>Standard IPs:</b> {weak_count}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
     )
     
@@ -741,22 +735,22 @@ async def proxy_command(message: types.Message):
                 live_str = "\n".join([f"<code>{p}</code>" for p in live_proxies]) if live_proxies else "None"
                 dead_str = "\n".join([f"<code>{p}</code>" for p in dead_proxies[:10]]) if dead_proxies else "None"
                 if len(dead_proxies) > 10:
-                    dead_str += f"\n...and {len(dead_proxies) - 10} more dead nodes"
+                    dead_str += f"\n...and {len(dead_proxies) - 10} more offline IPs"
                 
                 msg_text = (
-                    f"🛡 <b>New Proxies Checked by {message.from_user.first_name}</b>\n"
+                    f"🔌 <b>New Proxies Checked by {message.from_user.first_name}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🟢 <b>Live ({live_count}):</b>\n{live_str}\n\n"
-                    f"💀 <b>Dead ({dead_count}):</b>\n{dead_str}"
+                    f"🟢 <b>Active ({live_count}):</b>\n{live_str}\n\n"
+                    f"🔴 <b>Offline ({dead_count}):</b>\n{dead_str}"
                 )
                 if len(msg_text) > 4000:
                     msg_text = (
-                        f"🛡 <b>New Proxies Checked by {message.from_user.first_name}</b>\n"
+                        f"🔌 <b>New Proxies Checked by {message.from_user.first_name}</b>\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🟢 <b>Live ({live_count})</b> [Showing first 30]:\n"
+                        f"🟢 <b>Active ({live_count})</b> [Showing first 30]:\n"
                         + "\n".join([f"<code>{p}</code>" for p in live_proxies[:30]]) + "\n"
                         f"...and {live_count - 30} more.\n\n"
-                        f"💀 <b>Dead ({dead_count})</b>"
+                        f"🔴 <b>Offline ({dead_count})</b>"
                     )
                 await bot.send_message(LOG_GROUP_ID, msg_text)
             except:
@@ -764,8 +758,8 @@ async def proxy_command(message: types.Message):
     else:
         # Standard check report
         if dead_count > 0:
-            final_msg += f"🗑 <i>{dead_count} dead nodes auto-purged from registry.</i>\n"
-        final_msg += "<i>Status: Pool synchronized and ready.</i>"
+            final_msg += f"🗑 <i>{dead_count} dead IPs auto-removed from database.</i>\n"
+        final_msg += "<i>Pool synchronized and ready.</i>"
         
         markup = None
         if weak_count > 0:
