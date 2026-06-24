@@ -262,10 +262,10 @@ async def hit_command(message: types.Message):
             card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
             amt = res.get('amount')
             if isinstance(amt, int) or (isinstance(amt, str) and amt.isdigit()):
-                amt_str_formatted = f" (${int(amt)/100:.2f})"
+                amt_str_formatted = f" <code>[${int(amt)/100:.2f}]</code>"
                 amt_str_msg = f"\n💰 <b>Amount:</b> ${int(amt)/100:.2f}"
             elif amt:
-                amt_str_formatted = f" ({amt})"
+                amt_str_formatted = f" <code>[{amt}]</code>"
                 amt_str_msg = f"\n💰 <b>Amount:</b> {amt}"
             else:
                 amt_str_formatted = ""
@@ -294,7 +294,7 @@ async def hit_command(message: types.Message):
                     url_str_formatted += f" <a href='{escaped_receipt}'>[🧾 Receipt]</a>"
                     url_str_msg += f"\n🧾 <b>Receipt:</b> {escaped_receipt}"
                     
-                log_entry = f"✅ <code>{card_str}</code>{amt_str_formatted} -> <b>SUCCESS</b>{url_str_formatted} ({res['response_time']:.2f}s)"
+                log_entry = f"🟢 <code>{card_str}</code>{amt_str_formatted} ➔ <b>SUCCESS</b>{url_str_formatted} • {res['response_time']:.2f}s"
                 
                 merchant_name = res.get('merchant') or 'Unknown'
                 if isinstance(merchant_name, str):
@@ -317,7 +317,7 @@ async def hit_command(message: types.Message):
                 else:
                     code_escaped = str(code)
                     
-                log_entry = f"❌ <code>{card_str}</code>{amt_str_formatted} -> <code>{code_escaped.lower()}</code> ({res['response_time']:.2f}s)"
+                log_entry = f"🔴 <code>{card_str}</code>{amt_str_formatted} ➔ <code>{code_escaped.lower()}</code> • {res['response_time']:.2f}s"
                 
                 # Live Card Detection
                 hit_text = f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n💳 <code>{card_str}</code>{amt_str_msg}\n"
@@ -417,10 +417,11 @@ async def hit_command(message: types.Message):
                     
                     results_str = "\n".join(session_results)
                     prog_text = (
-                        f"🎯 <b>Hitting Session Running</b>\n\n"
-                        f"📊 <code>[{bar}]</code> {pct}%\n"
-                        f"⏳ <b>Progress:</b> {comp}/{total}\n"
-                        f"✅ {data['successes']}  |  ❌ {data['fails']}\n\n"
+                        f"⚡ <b>HITTING SESSION IN PROGRESS</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📊 <b>Progress:</b> <code>[{bar}]</code> {pct}% ({comp}/{total})\n"
+                        f"🟢 <b>Live:</b> {data['successes']}  |  🔴 <b>Dead:</b> {data['fails']}\n\n"
+                        f"<b>Card Results:</b>\n"
                         f"{results_str}"
                     )
                     try:
@@ -437,9 +438,11 @@ async def hit_command(message: types.Message):
             if len(cards) > 1:
                 results_str = "\n".join(session_results)
                 text = (
-                    f"🎯 <b>Hitting Session Completed!</b>\n\n"
-                    f"✅ <b>Live:</b> {data['successes']}\n"
-                    f"❌ <b>Dead:</b> {data['fails']}\n\n"
+                    f"✨ <b>HITTING SESSION COMPLETED</b> ✨\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🟢 <b>Live:</b> {data['successes']}\n"
+                    f"🔴 <b>Dead:</b> {data['fails']}\n\n"
+                    f"<b>Final Results:</b>\n"
                     f"{results_str}"
                 )
                 if status_msg:
