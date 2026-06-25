@@ -1034,43 +1034,58 @@ class StripeAPIHitter:
                                     state = "redirected"
                                 elif source:
                                     # --- 3DS Method URL completion (increases frictionless rate) ---
+                                    # threeDSServerTransID comes from the sdk object, NOT from source
                                     three_ds_method_url = sdk.get("three_ds_method_url")
-                                    if three_ds_method_url:
+                                    three_ds_server_trans_id = sdk.get("three_ds_server_transaction_id") or sdk.get("three_d_secure_2_source")
+                                    three_ds_comp_ind = "N"  # default: not completed, honest signal
+                                    if three_ds_method_url and three_ds_server_trans_id:
                                         try:
                                             import base64 as b64
-                                            method_payload = json.dumps({"threeDSServerTransID": source}, separators=(",", ":"))
-                                            method_data = b64.urlsafe_b64encode(method_payload.encode()).decode().rstrip("=")
-                                            session.post(three_ds_method_url,
-                                                data={"threeDSMethodData": method_data},
-                                                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                                            # Correct payload: {threeDSServerTransID: <uuid from sdk>}
+                                            method_payload = json.dumps({"threeDSServerTransID": three_ds_server_trans_id}, separators=(",", ":"))
+                                            method_data_b64 = b64.urlsafe_b64encode(method_payload.encode()).decode().rstrip("=")
+                                            method_resp = session.post(three_ds_method_url,
+                                                data={"threeDSMethodData": method_data_b64},
+                                                headers={"Content-Type": "application/x-www-form-urlencoded",
+                                                         "User-Agent": profile["user_agent"],
+                                                         "Origin": "https://js.stripe.com",
+                                                         "Referer": "https://js.stripe.com/"},
                                                 timeout=10)
-                                            await asyncio.sleep(0.3)
+                                            if method_resp.status_code in (200, 201, 204):
+                                                three_ds_comp_ind = "Y"  # honestly completed
+                                            await asyncio.sleep(0.4)
                                         except Exception:
-                                            pass
+                                            three_ds_comp_ind = "U"  # unavailable — honest
 
-                                    auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
+                                    # Browser fingerprint must match the profile UA — static mismatch raises friction score
+                                    is_mobile_ua = 'Android' in profile['user_agent'] or 'iPhone' in profile['user_agent']
+                                    auth_ua = profile['user_agent']
                                     auth_headers = {
                                         "accept": "application/json",
                                         "content-type": "application/x-www-form-urlencoded",
                                         "origin": "https://js.stripe.com",
                                         "referer": "https://js.stripe.com/",
-                                        "user-agent": "Mozilla/5.0 (Linux; Android 10)"
+                                        "user-agent": auth_ua
                                     }
+                                    scr_w = profile.get('screen_width', '1920')
+                                    scr_h = profile.get('screen_height', '1080')
+                                    color_d = profile.get('color_depth', '24')
+                                    tz_offset = str(tz_map.get((address or {}).get('country', 'US'), -300) if 'tz_map' in dir() else -300)
                                     browser = {
                                         "fingerprintAttempted": True,
                                         "fingerprintData": None,
                                         "challengeWindowSize": None,
-                                        "threeDSCompInd": "Y",
+                                        "threeDSCompInd": three_ds_comp_ind,
                                         "browserJavaEnabled": False,
                                         "browserJavascriptEnabled": True,
                                         "browserLanguage": "en-US",
-                                        "browserColorDepth": "24",
-                                        "browserScreenHeight": "873",
-                                        "browserScreenWidth": "393",
-                                        "browserTZ": "-300",
-                                        "browserUserAgent": auth_headers["user-agent"]
+                                        "browserColorDepth": color_d,
+                                        "browserScreenHeight": scr_h,
+                                        "browserScreenWidth": scr_w,
+                                        "browserTZ": tz_offset,
+                                        "browserUserAgent": auth_ua
                                     }
-                                    import uuid
+                                    auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                     app_data = {
                                         "sdk_trans_id": str(uuid.uuid4()),
                                         "device_render_options": {
@@ -1135,19 +1150,33 @@ class StripeAPIHitter:
                                             except Exception:
                                                 pass
 
-                            # --- ALWAYS POLL — authenticate outcome is not ground truth ---
-                            await asyncio.sleep(0.5)
+                            # --- ALWAYS POLL with retry loop — frictionless auth can lag 2-5s on issuer side ---
                             is_setup = is_setup_intent or (isinstance(pi, str) and 'seti' in pi)
                             intent_endpoint = "setup_intents" if is_setup else "payment_intents"
                             poll_url = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
                             poll_headers = {
                                 "accept": "application/json",
                                 "origin": "https://js.stripe.com",
-                                "referer": "https://js.stripe.com/"
+                                "referer": "https://js.stripe.com/",
+                                "user-agent": profile["user_agent"]
                             }
-                            poll_resp = session.get(poll_url, headers=poll_headers, timeout=30)
-                            poll_json = poll_resp.json()
-                            status_2 = poll_json.get('status')
+                            poll_json = {}
+                            status_2 = None
+                            for _poll_attempt in range(6):  # up to ~8s total
+                                await asyncio.sleep(0.5 + _poll_attempt * 0.8)
+                                try:
+                                    poll_resp = session.get(poll_url, headers=poll_headers, timeout=15)
+                                    poll_json = poll_resp.json()
+                                    status_2 = poll_json.get('status')
+                                    if status_2 not in ('requires_action', 'requires_source_action', 'processing', None):
+                                        break  # terminal state reached
+                                    if status_2 in ('requires_action', 'requires_source_action'):
+                                        # If next_action changed to redirect_to_url, bail early for redirect handling
+                                        na = poll_json.get('next_action') or {}
+                                        if na.get('type') == 'redirect_to_url':
+                                            break
+                                except Exception:
+                                    continue
 
                             if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                 result['success'] = True
