@@ -1137,7 +1137,9 @@ class StripeAPIHitter:
 
                             # --- ALWAYS POLL — authenticate outcome is not ground truth ---
                             await asyncio.sleep(0.5)
-                            poll_url = f"https://api.stripe.com/v1/payment_intents/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
+                            is_setup = is_setup_intent or (isinstance(pi, str) and 'seti' in pi)
+                            intent_endpoint = "setup_intents" if is_setup else "payment_intents"
+                            poll_url = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
                             poll_headers = {
                                 "accept": "application/json",
                                 "origin": "https://js.stripe.com",
@@ -1164,7 +1166,7 @@ class StripeAPIHitter:
                                 if redir_url:
                                     await loop.run_in_executor(None, lambda u=redir_url: cffi_requests.get(u, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     await asyncio.sleep(0.5)
-                                    poll_url_3 = f"https://api.stripe.com/v1/payment_intents/{pi}?key={pk}"
+                                    poll_url_3 = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?key={pk}"
                                     poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     poll_json_3 = poll_res_3.json()
                                     if poll_json_3.get('status') in ['succeeded', 'requires_capture', 'complete']:
