@@ -1057,20 +1057,16 @@ class StripeAPIHitter:
                                         except Exception:
                                             three_ds_comp_ind = "U"  # unavailable — honest
 
-                                    # Browser fingerprint must match the profile UA — static mismatch raises friction score
-                                    is_mobile_ua = 'Android' in profile['user_agent'] or 'iPhone' in profile['user_agent']
-                                    auth_ua = profile['user_agent']
+                                    # authenticate is an SDK-facing endpoint — use Android UA, not browser UA
+                                    # browser fingerprint fields must be internally consistent with the UA
+                                    _auth_ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                                     auth_headers = {
                                         "accept": "application/json",
                                         "content-type": "application/x-www-form-urlencoded",
                                         "origin": "https://js.stripe.com",
                                         "referer": "https://js.stripe.com/",
-                                        "user-agent": auth_ua
+                                        "user-agent": _auth_ua
                                     }
-                                    scr_w = profile.get('screen_width', '1920')
-                                    scr_h = profile.get('screen_height', '1080')
-                                    color_d = profile.get('color_depth', '24')
-                                    tz_offset = str(tz_map.get((address or {}).get('country', 'US'), -300) if 'tz_map' in dir() else -300)
                                     browser = {
                                         "fingerprintAttempted": True,
                                         "fingerprintData": None,
@@ -1079,11 +1075,11 @@ class StripeAPIHitter:
                                         "browserJavaEnabled": False,
                                         "browserJavascriptEnabled": True,
                                         "browserLanguage": "en-US",
-                                        "browserColorDepth": color_d,
-                                        "browserScreenHeight": scr_h,
-                                        "browserScreenWidth": scr_w,
-                                        "browserTZ": tz_offset,
-                                        "browserUserAgent": auth_ua
+                                        "browserColorDepth": "24",
+                                        "browserScreenHeight": "873",
+                                        "browserScreenWidth": "393",
+                                        "browserTZ": "-300",
+                                        "browserUserAgent": _auth_ua
                                     }
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                     app_data = {
