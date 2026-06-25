@@ -1102,10 +1102,14 @@ class StripeAPIHitter:
                                         "key": pk
                                     }
 
-                                    auth_resp = session.post(auth_url, headers=auth_headers, data=auth_data, timeout=30)
+                                    # Use cffi_requests for Stripe API calls to match Chrome TLS fingerprint
+                                    _auth_impersonate = "chrome120"  # Chrome TLS stack, Android UA in headers
+                                    auth_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                        auth_url, headers=auth_headers, data=auth_data,
+                                        proxies=proxies, timeout=30, impersonate=_auth_impersonate))
                                     auth_json = {}
                                     try:
-                                        auth_json = auth_resp.json()
+                                        auth_json = auth_resp_raw.json()
                                         state = auth_json.get("state")
                                     except Exception:
                                         state = None
@@ -1134,11 +1138,14 @@ class StripeAPIHitter:
                                                     cres_match = re.search(r'["\']cres["\']\s*:\s*["\']([^"\']+)', acs_text, re.I)
                                                 if cres_match:
                                                     cres_val = cres_match.group(1)
-                                                    ch_resp = session.post("https://api.stripe.com/v1/3ds2/challenge",
+                                                    # /v1/3ds2/challenge is Stripe infra — use cffi for Chrome TLS
+                                                    ch_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                                        "https://api.stripe.com/v1/3ds2/challenge",
                                                         data={"source": source, "cres": cres_val, "key": pk},
-                                                        headers=auth_headers, timeout=15)
+                                                        headers=auth_headers, proxies=proxies,
+                                                        timeout=15, impersonate="chrome120"))
                                                     try:
-                                                        ch_data = ch_resp.json()
+                                                        ch_data = ch_resp_raw.json()
                                                         if ch_data.get("state") in ["succeeded", "complete"]:
                                                             state = ch_data.get("state")
                                                     except Exception:
@@ -1161,8 +1168,11 @@ class StripeAPIHitter:
                             for _poll_attempt in range(6):  # up to ~8s total
                                 await asyncio.sleep(0.5 + _poll_attempt * 0.8)
                                 try:
-                                    poll_resp = session.get(poll_url, headers=poll_headers, timeout=15)
-                                    poll_json = poll_resp.json()
+                                    # Use cffi for Chrome TLS on Stripe API poll
+                                    poll_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.get(
+                                        poll_url, headers=poll_headers, proxies=proxies,
+                                        timeout=15, impersonate=profile["impersonate"]))
+                                    poll_json = poll_resp_raw.json()
                                     status_2 = poll_json.get('status')
                                     if status_2 not in ('requires_action', 'requires_source_action', 'processing', None):
                                         break  # terminal state reached
