@@ -385,7 +385,43 @@ async def hit_command(message: types.Message):
                     try: await status_msg.delete()
                     except: pass
                     
-                hit_text += "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
+                if res['success']:
+                    receipt_url = res.get('receipt_url') or res.get('final_url')
+                    escaped_receipt = html.escape(receipt_url) if receipt_url else ""
+                    receipt_line = f"\n🧾 Receipt: <a href='{escaped_receipt}'>{escaped_receipt}</a>" if escaped_receipt else ""
+                    hit_text = (
+                        f"✅ <b>PAYMENT SUCCESSFUL</b>\n"
+                        f"💳 <code>{card_str}</code>\n"
+                        f"💰 Amount: {amt_val}\n"
+                        f"🛒 Merchant: {merchant_name}\n"
+                        f"⏱ {res['response_time']:.2f}s"
+                        f"{receipt_line}\n\n"
+                        f"<i>Note: this message will be deleted automatically after 30sec</i>"
+                    )
+                else:
+                    reason_msg = ""
+                    if code == 'exception':
+                        reason_msg = "proxy connection failed or cloudflare block"
+                    elif code == 'stripe_captcha_bypass_failed':
+                        reason_msg = "Stripe CAPTCHA (rqdata) triggered because Proxy IP is flagged/dirty. Try clean/premium target proxies."
+                    elif res.get('error') is not None and str(res.get('error')).strip() != "":
+                        reason_msg = str(res.get('error'))[:250]
+                        if code == 'checkout_confirm_error' and 'An error has occurred confirming' in reason_msg:
+                            reason_msg = "session locked/expired or strict checkout binding"
+                    else:
+                        reason_msg = code_escaped.lower()
+
+                    hit_text = (
+                        f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n"
+                        f"💳 <code>{card_str}</code>\n"
+                        f"💰 Amount: {amt_val}\n"
+                        f"🛒 Merchant: {merchant_name}\n"
+                        f"📉 Reason: {code_escaped.lower()}\n"
+                        f"⏱ {res['response_time']:.2f}s\n"
+                        f"🐛 {reason_msg}\n\n"
+                        f"<i>Note: this message will be deleted automatically after 30sec</i>"
+                    )
+
                 try:
                     sent_msg = await message.answer(hit_text)
                 except Exception as e:
