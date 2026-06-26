@@ -401,7 +401,8 @@ async def hit_command(message: types.Message):
                 else:
                     reason_msg = ""
                     if code == 'exception':
-                        reason_msg = "proxy connection failed or cloudflare block"
+                        actual_err = str(res.get('error', '') or '').strip()
+                        reason_msg = actual_err[:200] if actual_err else "proxy connection failed or cloudflare block"
                     elif code == 'stripe_captcha_bypass_failed':
                         reason_msg = "Stripe CAPTCHA (rqdata) triggered because Proxy IP is flagged/dirty. Try clean/premium target proxies."
                     elif res.get('error') is not None and str(res.get('error')).strip() != "":
