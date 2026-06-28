@@ -138,8 +138,14 @@ class StripeAPIExtractor:
                 elif isinstance(resp_json.get('customer_details'), dict) and resp_json['customer_details'].get('email'): locked_email = resp_json['customer_details']['email']
                 
                 return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount is not None else None, 'raw_amount': amount, 'merchant': merchant, 'locked_email': locked_email}
-            return {'success': False}
-        except: return {'success': False}
+            
+            try:
+                err_msg = response.json().get('error', {}).get('message', f'Status {response.status_code}')
+            except:
+                err_msg = f'Status {response.status_code}'
+            return {'success': False, 'error': err_msg}
+        except Exception as e:
+            return {'success': False, 'error': f"Connection failed: {str(e)}"}
 
     @staticmethod
     async def fetch_invoice_data(user_id: int, url: str) -> Dict:
@@ -1021,6 +1027,16 @@ class StripeAPIHitter:
                         "key": self.pk_live,
                         "client_secret": self.cs_live
                     }
+                    # Add Low-Value SCA Exemption Hint if transaction size warrants it ($30/€30 equivalent)
+                    if self.raw_amount is not None and 0 < self.raw_amount < 3000:
+                        confirm_data["payment_method_options[card][mit_exemption][reason]"] = "low_value"
+                    
+                    if self.raw_amount is None or self.raw_amount == 0:
+                        confirm_data["save_payment_method"] = "true"
+                        confirm_data["allow_redisplay"] = "always"
+
+                    if self.raw_amount is not None and self.raw_amount > 0:
+                        confirm_data["expected_amount"] = self.raw_amount
                 elif is_seti:
                     seti_id = self.cs_live.split('_secret_')[0]
                     confirm_url = f"https://api.stripe.com/v1/setup_intents/{seti_id}/confirm"
@@ -1030,6 +1046,9 @@ class StripeAPIHitter:
                         "key": self.pk_live,
                         "client_secret": self.cs_live
                     }
+                    if self.raw_amount is None or self.raw_amount == 0:
+                        confirm_data["save_payment_method"] = "true"
+                        confirm_data["allow_redisplay"] = "always"
                 else:
                     confirm_url = f"https://api.stripe.com/v1/payment_pages/{self.cs_live}/confirm"
                     confirm_data = {
@@ -1038,18 +1057,6 @@ class StripeAPIHitter:
                         "consent[terms_of_service]": "accepted",
                         "key": self.pk_live,
                     }
-                
-                # Add Low-Value SCA Exemption Hint if transaction size warrants it ($30/€30 equivalent)
-                if self.raw_amount is not None and 0 < self.raw_amount < 3000:
-                    confirm_data["payment_method_options[card][mit_exemption][reason]"] = "low_value"
-                
-                # Setup Intents / Subscriptions benefit from Merchant-Initiated / Future-Use declarations
-                if self.raw_amount is None or self.raw_amount == 0:
-                    confirm_data["save_payment_method"] = "true"
-                    confirm_data["allow_redisplay"] = "always"
-
-                if self.raw_amount is not None and self.raw_amount > 0:
-                    confirm_data["expected_amount"] = self.raw_amount
                 
                 confirm_headers = headers.copy()
                 confirm_headers["Idempotency-Key"] = confirm_idempotency
@@ -1616,7 +1623,12 @@ class ConcurrentHitter:
                 self.url_info['raw_amount'] = api_data.get('raw_amount')
                 self.url_info['merchant'] = api_data.get('merchant')
                 self.url_info['locked_email'] = api_data.get('locked_email')
-            return True
+                return True
+            else:
+                err_msg = api_data.get('error') or "Failed to init Stripe session"
+                if self.update_callback:
+                    await self.update_callback({"status": "error", "error": f"Stripe session inactive: {err_msg}"})
+                return False
 
         for _ in range(3):
             try:
@@ -1659,7 +1671,12 @@ class ConcurrentHitter:
                             self.url_info['raw_amount'] = api_data.get('raw_amount')
                             self.url_info['merchant'] = api_data.get('merchant')
                             self.url_info['locked_email'] = api_data.get('locked_email')
-                    return True
+                            return True
+                        else:
+                            err_msg = api_data.get('error') or "Failed to init Stripe session"
+                            if self.update_callback:
+                                await self.update_callback({"status": "error", "error": f"Stripe session inactive: {err_msg}"})
+                            return False
             except Exception as e:
                 continue
                 
