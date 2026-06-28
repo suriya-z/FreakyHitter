@@ -1103,6 +1103,8 @@ class StripeAPIHitter:
                         "consent[terms_of_service]": "accepted",
                         "key": self.pk_live,
                     }
+                    if self.raw_amount is not None and self.raw_amount > 0:
+                        confirm_data["expected_amount"] = self.raw_amount
                 
                 confirm_headers = headers.copy()
                 confirm_headers["Idempotency-Key"] = confirm_idempotency
@@ -1151,15 +1153,29 @@ class StripeAPIHitter:
 
                 
                 # Unified Amount Mismatch Bypass
+                # Check response.status_code != 200 OR check if error payload returned in response json dict
+                has_amount_mismatch = False
                 if confirm_res.status_code != 200 and (err_code == 'checkout_amount_mismatch' or 'expected amount' in err_msg.lower() or 'expected_amount' in err_msg):
+                    has_amount_mismatch = True
+                elif confirm_res.status_code == 200:
+                    temp_err = confirm_json.get('error', {})
+                    if temp_err:
+                        temp_code = temp_err.get('code')
+                        temp_msg = temp_err.get('message', '') or ''
+                        if temp_code == 'checkout_amount_mismatch' or 'expected amount' in temp_msg.lower() or 'computed invoice' in temp_msg.lower() or 'expected_amount' in temp_msg:
+                            has_amount_mismatch = True
+                            err_code = temp_code
+                            err_msg = temp_msg
+
+                if has_amount_mismatch:
                     # Stripe's error message usually contains the correct expected amount: 
                     # e.g., "The expected amount (2000) does not match the actual amount (0)."
                     import re
                     match = re.search(r'actual amount \((\d+)\)', err_msg.lower())
                     if match:
                         confirm_data['expected_amount'] = int(match.group(1))
-                    elif 'subscription' in err_msg.lower() or 'computed invoice' in err_msg.lower():
-                        # For subscription checkouts, delete expected_amount to let Stripe confirm the computed invoice
+                    elif 'subscription' in err_msg.lower() or 'computed invoice' in err_msg.lower() or 'latest invoice' in err_msg.lower():
+                        # For subscription checkouts, delete expected_amount to let Stripe confirm the computed invoice automatically
                         if 'expected_amount' in confirm_data:
                             del confirm_data['expected_amount']
                     else:
@@ -1172,7 +1188,7 @@ class StripeAPIHitter:
                 
                 result['response_time'] = time.time() - start
                 
-                if confirm_res.status_code == 200:
+                if confirm_res.status_code == 200 and 'error' not in confirm_json:
                     pi = confirm_json.get('payment_intent', {})
                     si = confirm_json.get('setup_intent', {})
                     intent_id = pi.get('id') if isinstance(pi, dict) and pi.get('id') else (si.get('id') if isinstance(si, dict) else None)
