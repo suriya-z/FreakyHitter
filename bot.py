@@ -524,13 +524,13 @@ async def hit_command(message: types.Message):
             if len(cards) > 1:
                 results_str = "\n".join(session_results)
                 text = (
-                    f"<b>// freaky_hitter // engine_report</b>\n"
+                    f"<b>// hitter // report</b>\n"
                     f"<code>────────────────────────</code>\n"
                     f"<code>[ STATUS ] COMPLETED</code>\n"
                     f"<code>[ LIVE   ] {data['successes']}</code>\n"
                     f"<code>[ DEAD   ] {data['fails']}</code>\n"
                     f"<code>────────────────────────</code>\n"
-                    f"<b>[ FINAL RESULTS ]</b>\n"
+                    f"<b>[ RESULTS ]</b>\n"
                     f"{results_str}"
                 )
                 if status_msg:
@@ -846,8 +846,8 @@ async def proxy_command(message: types.Message):
     else:
         # Standard check report
         if dead_count > 0:
-            final_msg += f"\n<code>[ INFO   ] purged {dead_count} inactive channels from storage</code>"
-        final_msg += "\n<code>[ OK     ] channels synchronized</code>"
+            final_msg += f"\n<code>[ INFO   ] removed {dead_count} inactive proxy channels from storage</code>"
+        final_msg += "\n<code>[ OK     ] proxy channels verified</code>"
         
         markup = None
         if weak_count > 0:
