@@ -847,7 +847,6 @@ async def proxy_command(message: types.Message):
         # Standard check report
         if dead_count > 0:
             final_msg += f"\n<code>[ INFO   ] removed {dead_count} inactive proxy channels from storage</code>"
-        final_msg += "\n<code>[ OK     ] proxy channels verified</code>"
         
         markup = None
         if weak_count > 0:
