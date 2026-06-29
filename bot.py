@@ -203,6 +203,7 @@ async def hit_command(message: types.Message):
     
     anim_task = None
     session_results = []
+    sent_messages = []  # track all intermediate messages for bulk-delete on success
     session_succeeded = False
     successful_res = None
     
@@ -459,41 +460,36 @@ async def hit_command(message: types.Message):
             # Update the main progress message
             if len(cards) > 1:
                 if res['success']:
-                    results_str = "\n".join(session_results)
-                    success_text = (
-                        f"<b>Success</b>\n"
-                        f"<code>────────────────────────</code>\n"
-                        f"<code>[ CARD   ] {card_str}</code>\n"
-                        f"<code>[ TARGET ] {merchant_name}</code>\n"
-                        f"<code>[ VALUE  ] {amt_val}</code>\n"
-                        f"<code>[ TIME   ] {res['response_time']:.2f}s</code>"
-                        f"{url_str_msg}"
-                        f"\n<code>────────────────────────</code>\n"
-                        f"<b>[ SESSION RESULTS ]</b>\n"
-                        f"{results_str}\n\n"
+                    # Delete status_msg and all previously sent individual result messages
+                    if status_msg:
+                        try: await status_msg.delete()
+                        except: pass
+                    for old_msg in sent_messages:
+                        try: await old_msg.delete()
+                        except: pass
+                    sent_messages.clear()
+                    
+                    # Build clean success-only card
+                    receipt_url = res.get('receipt_url') or res.get('final_url')
+                    escaped_receipt = html.escape(receipt_url) if receipt_url else ""
+                    receipt_line = f"\n🧾 <b>Receipt:</b> <a href='{escaped_receipt}'>link</a>" if escaped_receipt else ""
+                    clean_success = (
+                        f"✅ <b>PAYMENT SUCCESSFUL</b>\n"
+                        f"💳 <code>{card_str}</code>\n"
+                        f"💰 Amount: {amt_val}\n"
+                        f"🛒 Merchant: {merchant_name}\n"
+                        f"⏱ {res['response_time']:.2f}s"
+                        f"{receipt_line}\n\n"
                         f"<i>Note: this message will be deleted automatically after 30sec</i>"
                     )
-                    
-                    sent_msg = None
-                    if status_msg:
-                        try:
-                            await status_msg.edit_text(success_text)
-                            sent_msg = status_msg
-                        except:
-                            try:
-                                sent_msg = await message.answer(success_text)
-                            except: pass
-                    else:
-                        try:
-                            sent_msg = await message.answer(success_text)
-                        except: pass
-                        
-                    if sent_msg:
-                        async def auto_delete(m):
+                    try:
+                        sent_success = await message.answer(clean_success)
+                        async def auto_delete_success(m):
                             await asyncio.sleep(30)
                             try: await m.delete()
                             except: pass
-                        asyncio.create_task(auto_delete(sent_msg))
+                        asyncio.create_task(auto_delete_success(sent_success))
+                    except: pass
                 else:
                     total = data["total"]
                     comp = data["completed"]
