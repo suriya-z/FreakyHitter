@@ -87,6 +87,8 @@ bot = Bot(
 
 # Global store for active sessions
 active_sessions = {}
+db_pool = None
+approved_users_set = set()
 
 @dp.message(CommandStart())
 async def command_start_handler(message: types.Message) -> None:
@@ -126,6 +128,44 @@ async def cmds_command(message: types.Message) -> None:
         "- Instantly aborts active session.\n"
         "<code>────────────────────────</code>"
     )
+
+@dp.message(Command("approve"))
+async def approve_command(message: types.Message):
+    user_id = message.from_user.id
+    if not OWNER_ID or str(user_id) != str(OWNER_ID):
+        await message.answer("<b>Error</b>\n<code>Unauthorized command. Only the owner can use /approve.</code>")
+        return
+
+    args = message.text.split(" ")
+    if len(args) < 2:
+        await message.answer("<b>Error</b>\n<code>Usage: /approve [userid]</code>")
+        return
+
+    target_id_str = args[1].strip()
+    if not target_id_str.isdigit():
+        await message.answer("<b>Error</b>\n<code>Invalid User ID. Must be numeric.</code>")
+        return
+
+    target_id = int(target_id_str)
+    approved_users_set.add(target_id)
+
+    if db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO approved_users (user_id)
+                    VALUES ($1)
+                    ON CONFLICT (user_id) DO NOTHING
+                """, target_id)
+        except Exception as e:
+            print(f"Failed to save approved status: {e}")
+
+    await message.answer(f"✅ <b>Approved</b>\n<code>User ID {target_id} has been approved. Hitting output messages will not be auto-deleted.</code>")
+    
+    try:
+        await bot.send_message(target_id, "🎉 <b>You've been approved by the owner!</b> Your transaction messages will no longer be auto-deleted. ⚡")
+    except Exception as e:
+        print(f"Failed to send peer notification to approved user: {e}")
 
 @dp.message(Command("hit"))
 async def hit_command(message: types.Message):
@@ -433,6 +473,9 @@ async def hit_command(message: types.Message):
                         reason_msg = code_escaped.lower()
 
 
+                    is_approved = user_id in approved_users_set
+                    note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
+                    
                     hit_text = (
                         f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n"
                         f"💳 <code>{card_str}</code>\n"
@@ -440,8 +483,7 @@ async def hit_command(message: types.Message):
                         f"🛒 Merchant: {merchant_name}\n"
                         f"📉 Reason: {code_escaped.lower()}\n"
                         f"⏱ {res['response_time']:.2f}s\n"
-                        f"🐛 {reason_msg}\n\n"
-                        f"<i>Note: this message will be deleted automatically after 30sec</i>"
+                        f"🐛 {reason_msg}" + note_line
                     )
 
                 try:
@@ -451,11 +493,12 @@ async def hit_command(message: types.Message):
                     plain_text = re.sub(r'<[^>]+>', '', hit_text)
                     sent_msg = await message.answer(f"⚠️ UI Formatting Error: {e}\n\nRAW RESULT:\n{plain_text}")
                     
-                async def auto_delete(m):
-                    await asyncio.sleep(30)
-                    try: await m.delete()
-                    except: pass
-                asyncio.create_task(auto_delete(sent_msg))
+                if not is_approved:
+                    async def auto_delete(m):
+                        await asyncio.sleep(30)
+                        try: await m.delete()
+                        except: pass
+                    asyncio.create_task(auto_delete(sent_msg))
             
             # Update the main progress message
             if len(cards) > 1:
@@ -473,22 +516,25 @@ async def hit_command(message: types.Message):
                     receipt_url = res.get('receipt_url') or res.get('final_url')
                     escaped_receipt = html.escape(receipt_url) if receipt_url else ""
                     receipt_line = f"\n🧾 <b>Receipt:</b> <a href='{escaped_receipt}'>link</a>" if escaped_receipt else ""
+                    is_approved = user_id in approved_users_set
+                    note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
+                    
                     clean_success = (
                         f"✅ <b>PAYMENT SUCCESSFUL</b>\n"
                         f"💳 <code>{card_str}</code>\n"
                         f"💰 Amount: {amt_val}\n"
                         f"🛒 Merchant: {merchant_name}\n"
                         f"⏱ {res['response_time']:.2f}s"
-                        f"{receipt_line}\n\n"
-                        f"<i>Note: this message will be deleted automatically after 30sec</i>"
+                        f"{receipt_line}" + note_line
                     )
                     try:
                         sent_success = await message.answer(clean_success)
-                        async def auto_delete_success(m):
-                            await asyncio.sleep(30)
-                            try: await m.delete()
-                            except: pass
-                        asyncio.create_task(auto_delete_success(sent_success))
+                        if not is_approved:
+                            async def auto_delete_success(m):
+                                await asyncio.sleep(30)
+                                try: await m.delete()
+                                except: pass
+                            asyncio.create_task(auto_delete_success(sent_success))
                     except: pass
                 else:
                     total = data["total"]
@@ -1044,6 +1090,7 @@ async def auto_proxy_checker_loop():
 
 async def main() -> None:
     print("Bot is starting...")
+    global db_pool
     db_url = os.environ.get("DATABASE_URL")
     if db_url:
         print("Connecting to Supabase...")
@@ -1055,8 +1102,16 @@ async def main() -> None:
                     proxies JSONB DEFAULT '[]'
                 );
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS approved_users (
+                    user_id BIGINT PRIMARY KEY
+                );
+            """)
+            rows = await conn.fetch("SELECT user_id FROM approved_users")
+            for r in rows:
+                approved_users_set.add(r['user_id'])
         await ProxyManager.init_db(db_pool)
-        print("Supabase connected and user_proxies table ready!")
+        print("Supabase connected, user_proxies, and approved_users tables ready!")
     else:
         print("WARNING: DATABASE_URL not set! Proxies will not be saved.")
         
