@@ -1546,7 +1546,8 @@ class StripeAPIHitter:
                             else:
                                 result['decline_code'] = status_2 or '3ds_unknown'
                                 next_act = poll_json.get('next_action') or {}
-                                result['error'] = f"Post-3DS status: {status_2}. next_action: {next_act}"
+                                action_type = next_act.get('type', 'unknown')
+                                result['error'] = f"3DS challenge not resolved. Action required: {action_type}. Card requires issuer verification."
                             return result
                         except Exception as ex:
                             print(f"DEBUG: 3DS bypass failed: {ex}")
