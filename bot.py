@@ -844,7 +844,6 @@ async def proxy_command(message: types.Message):
         f"<code>LIVE   :: {live_count} / {total_tested}</code>\n"
         f"<code>DEAD   :: {dead_count}</code>\n"
         f"<code>──────────────────────────</code>\n"
-        f"<code>FAST   :: {premium_count}  |  SLOW :: {weak_count}</code>\n"
     )
     
     if is_loading_new:
