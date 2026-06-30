@@ -1382,8 +1382,7 @@ class StripeAPIHitter:
                                         except Exception:
                                             three_ds_comp_ind = "U"  # unavailable — honest
 
-                                    # authenticate is an SDK-facing endpoint — use Android UA, not browser UA
-                                    # browser fingerprint fields must be internally consistent with the UA
+                                    # authenticate is an SDK-facing endpoint — use Android UA (mobile SDK path)
                                     _auth_ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                                     auth_headers = {
                                         "accept": "application/json",
@@ -1396,7 +1395,7 @@ class StripeAPIHitter:
                                         "fingerprintAttempted": True,
                                         "fingerprintData": None,
                                         "challengeWindowSize": None,
-                                        "threeDSCompInd": three_ds_comp_ind,
+                                        "threeDSCompInd": "Y",
                                         "browserJavaEnabled": False,
                                         "browserJavascriptEnabled": True,
                                         "browserLanguage": "en-US",
@@ -1407,18 +1406,9 @@ class StripeAPIHitter:
                                         "browserUserAgent": _auth_ua
                                     }
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
-                                    app_data = {
-                                        "sdk_trans_id": str(uuid.uuid4()),
-                                        "device_render_options": {
-                                            "sdk_interface": "03",
-                                            "sdk_ui_type": ["01", "02", "03", "04", "05"]
-                                        }
-                                    }
-                                    
                                     auth_data = {
                                         "source": source,
                                         "browser": json.dumps(browser),
-                                        "app": json.dumps(app_data, separators=(",", ":")),
                                         "one_click_authn_device_support[hosted]": "false",
                                         "one_click_authn_device_support[same_origin_frame]": "false",
                                         "one_click_authn_device_support[spc_eligible]": "false",
@@ -1426,9 +1416,7 @@ class StripeAPIHitter:
                                         "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
                                         "key": pk
                                     }
-
-                                    # Use cffi_requests for Stripe API calls to match Chrome TLS fingerprint
-                                    _auth_impersonate = "chrome120"  # Chrome TLS stack, Android UA in headers
+                                    _auth_impersonate = "chrome120"
                                     auth_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.post(
                                         auth_url, headers=auth_headers, data=auth_data,
                                         proxies=proxies, timeout=30, impersonate=_auth_impersonate))
