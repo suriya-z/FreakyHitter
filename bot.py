@@ -822,8 +822,8 @@ async def proxy_command(message: types.Message):
 
     loading_status = "verifying_channels" if is_loading_new else "running_self_check"
     status_msg = await message.answer(
-        f"⚡ <b>Re-routing tunnels...</b>\n"
-        f"<code>📡 Probing {len(proxies_to_test)} network nodes...</code>"
+        f"⏳ <b>Checking proxies...</b>\n"
+        f"<code>Testing {len(proxies_to_test)} proxy channels in background</code>"
     )
     
     # Test proxies
@@ -839,18 +839,17 @@ async def proxy_command(message: types.Message):
     health_pct = int((live_count / total_tested) * 100) if total_tested > 0 else 0
     
     final_msg = (
-        f"⚡ <b>PROXY PIPELINE STATUS</b>\n"
+        f"🟢 <b>ACTIVE PROXIES ({health_pct}%)</b>\n"
         f"<code>──────────────────────────</code>\n"
-        f"<code>🌐 STATUS   :: ACTIVE ({health_pct}%)</code>\n"
-        f"<code>🟢 LIVE     :: {live_count} / {total_tested}</code>\n"
-        f"<code>🔴 DEAD     :: {dead_count}</code>\n"
+        f"<code>LIVE   :: {live_count} / {total_tested}</code>\n"
+        f"<code>DEAD   :: {dead_count}</code>\n"
         f"<code>──────────────────────────</code>\n"
-        f"<code>💎 SPEED    :: High-Speed: {premium_count} | Med-Speed: {weak_count}</code>\n"
+        f"<code>FAST   :: {premium_count}  |  SLOW :: {weak_count}</code>\n"
     )
     
     if is_loading_new:
         if live_count == 0:
-            final_msg += "<code>⚠️ ERROR    :: All imported nodes failed connectivity checks</code>"
+            final_msg += "<code>⚠️ ERROR :: All imported proxies failed connection tests</code>"
             await status_msg.edit_text(final_msg)
             return
             
