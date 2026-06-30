@@ -110,8 +110,7 @@ async def command_start_handler(message: types.Message) -> None:
 @dp.message(Command("cmds"))
 async def cmds_command(message: types.Message) -> None:
     await message.answer(
-        "<b>Commands</b>\n"
-        "<code>────────────────────────</code>\n"
+        "<b>Commands</b>\n\n"
         "<code>/hit [url] [cc|mm|yy|cvc]</code>\n"
         "- Hits a single card against checkout.\n\n"
         "<code>/hit [url] [bin_pattern] [count]</code>\n"
@@ -125,8 +124,7 @@ async def cmds_command(message: types.Message) -> None:
         "<code>/offproxy</code>\n"
         "- Clears proxies and uses direct IP.\n\n"
         "<code>/stop</code>\n"
-        "- Instantly aborts active session.\n"
-        "<code>────────────────────────</code>"
+        "- Instantly aborts active session."
     )
 
 @dp.message(Command("approve"))
@@ -270,15 +268,12 @@ async def hit_command(message: types.Message):
                 
             if len(cards) > 1 and status_msg:
                 text = (
-                    f"<b>Progress</b>\n"
-                    f"<code>────────────────────────</code>\n"
+                    f"<b>Progress</b>\n\n"
                     f"<code>[ TARGET ] {merchant}</code>\n"
                     f"<code>[ AMOUNT ] {amt}</code>\n"
-                    f"<code>[ STATUS ] RUNNING</code>\n"
-                    f"<code>────────────────────────</code>\n"
+                    f"<code>[ STATUS ] RUNNING</code>\n\n"
                     f"<code>[ PROG   ] 0/{len(cards)} (0%)</code>\n"
-                    f"<code>[ LIVE   ] 0 | [ DEAD ] 0</code>\n"
-                    f"<code>────────────────────────</code>\n"
+                    f"<code>[ LIVE   ] 0 | [ DEAD ] 0</code>\n\n"
                     f"<b>[ LOG ]</b>\n"
                     f"<code>... queueing execution ...</code>"
                 )
@@ -291,8 +286,7 @@ async def hit_command(message: types.Message):
                     while True:
                         try:
                             text = (
-                                f"<b>Checking{'.' * dots}</b>\n"
-                                f"<code>────────────────────────</code>\n"
+                                f"<b>Checking{'.' * dots}</b>\n\n"
                                 f"<code>[ TARGET ] {merchant}</code>\n"
                                 f"<code>[ AMOUNT ] {amt}</code>\n"
                                 f"<code>[ BYPASS ] {data.get('autofill')}</code>"
@@ -352,8 +346,7 @@ async def hit_command(message: types.Message):
                 log_entry = f"<code>[✓] {card_str} [{amt_val}] -> success ({res['response_time']:.2f}s)</code>{url_str_formatted}"
                 
                 hit_text = (
-                    f"<b>Success</b>\n"
-                    f"<code>────────────────────────</code>\n"
+                    f"<b>Success</b>\n\n"
                     f"<code>[ CARD   ] {card_str}</code>\n"
                     f"<code>[ TARGET ] {merchant_name}</code>\n"
                     f"<code>[ VALUE  ] {amt_val}</code>\n"
@@ -364,8 +357,7 @@ async def hit_command(message: types.Message):
                 if LOG_GROUP_ID:
                     try:
                         log_text = (
-                            f"<b>Transaction Success</b>\n"
-                            f"<code>────────────────────────</code>\n"
+                            f"<b>Transaction Success</b>\n\n"
                             f"<code>[ CARD   ] {card_str}</code>\n"
                             f"<code>[ TARGET ] {merchant_name}</code>\n"
                             f"<code>[ VALUE  ] {amt_val}</code>\n"
@@ -391,8 +383,7 @@ async def hit_command(message: types.Message):
                 status_label = "live" if is_live else "failed"
                 
                 hit_text = (
-                    f"<b>Status: {status_label}</b>\n"
-                    f"<code>────────────────────────</code>\n"
+                    f"<b>Status: {status_label}</b>\n\n"
                     f"<code>[ CARD   ] {card_str}</code>\n"
                     f"<code>[ TARGET ] {merchant_name}</code>\n"
                     f"<code>[ VALUE  ] {amt_val}</code>\n"
@@ -413,8 +404,7 @@ async def hit_command(message: types.Message):
                 if LOG_GROUP_ID and is_live:
                     try:
                         log_text = (
-                            f"<b>Transaction Detected: {status_label}</b>\n"
-                            f"<code>────────────────────────</code>\n"
+                            f"<b>Transaction Detected: {status_label}</b>\n\n"
                             f"<code>[ CARD   ] {card_str}</code>\n"
                             f"<code>[ TARGET ] {merchant_name}</code>\n"
                             f"<code>[ VALUE  ] {amt_val}</code>\n"
@@ -547,15 +537,12 @@ async def hit_command(message: types.Message):
                     
                     results_str = "\n".join(session_results)
                     prog_text = (
-                        f"<b>Progress</b>\n"
-                        f"<code>────────────────────────</code>\n"
+                        f"<b>Progress</b>\n\n"
                         f"<code>[ TARGET ] {merchant_name}</code>\n"
                         f"<code>[ VALUE  ] {amt_val}</code>\n"
-                        f"<code>[ STATUS ] RUNNING</code>\n"
-                        f"<code>────────────────────────</code>\n"
+                        f"<code>[ STATUS ] RUNNING</code>\n\n"
                         f"<code>[ PROG   ] {comp}/{total} ({pct}%) [{bar}]</code>\n"
-                        f"<code>[ LIVE   ] {data['successes']} | [ DEAD ] {data['fails']}</code>\n"
-                        f"<code>────────────────────────</code>\n"
+                        f"<code>[ LIVE   ] {data['successes']} | [ DEAD ] {data['fails']}</code>\n\n"
                         f"<b>[ CARD LOG ]</b>\n"
                         f"{results_str}"
                     )
@@ -573,12 +560,10 @@ async def hit_command(message: types.Message):
             if len(cards) > 1:
                 results_str = "\n".join(session_results)
                 text = (
-                    f"<b>Report</b>\n"
-                    f"<code>────────────────────────</code>\n"
+                    f"<b>Report</b>\n\n"
                     f"<code>[ STATUS ] COMPLETED</code>\n"
                     f"<code>[ LIVE   ] {data['successes']}</code>\n"
-                    f"<code>[ DEAD   ] {data['fails']}</code>\n"
-                    f"<code>────────────────────────</code>\n"
+                    f"<code>[ DEAD   ] {data['fails']}</code>\n\n"
                     f"<b>RESULTS</b>\n"
                     f"{results_str}"
                 )
@@ -839,11 +824,9 @@ async def proxy_command(message: types.Message):
     health_pct = int((live_count / total_tested) * 100) if total_tested > 0 else 0
     
     final_msg = (
-        f"🟢 <b>ACTIVE PROXIES ({health_pct}%)</b>\n"
-        f"<code>──────────────────────────</code>\n"
+        f"🟢 <b>ACTIVE PROXIES ({health_pct}%)</b>\n\n"
         f"<code>LIVE   :: {live_count} / {total_tested}</code>\n"
-        f"<code>DEAD   :: {dead_count}</code>\n"
-        f"<code>──────────────────────────</code>\n"
+        f"<code>DEAD   :: {dead_count}</code>"
     )
     
     if is_loading_new:
@@ -881,12 +864,10 @@ async def proxy_command(message: types.Message):
                     dead_str += f"\n...and {len(dead_proxies) - 10} more offline channels"
                 
                 msg_text = (
-                    f"<b>Proxy Telemetry</b>\n"
-                    f"<code>────────────────────────</code>\n"
+                    f"<b>Proxy Telemetry</b>\n\n"
                     f"<code>[ USER   ] {message.from_user.first_name}</code>\n"
                     f"<code>[ ACTIVE ] {live_count}</code>\n"
-                    f"<code>[ DEAD   ] {dead_count}</code>\n"
-                    f"<code>────────────────────────</code>\n"
+                    f"<code>[ DEAD   ] {dead_count}</code>\n\n"
                     f"<b>[ ACTIVE IPS ]</b>\n{live_str}\n\n"
                     f"<b>[ DEAD IPS ]</b>\n{dead_str}"
                 )
@@ -1027,8 +1008,7 @@ async def process_rm_weak(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "show_commands")
 async def process_show_commands(callback: types.CallbackQuery):
     commands_text = (
-        "<b>Commands</b>\n"
-        "<code>────────────────────────</code>\n"
+        "<b>Commands</b>\n\n"
         "<code>/hit [url] [cc|mm|yy|cvc]</code>\n"
         "- Hits a single card against checkout.\n\n"
         "<code>/hit [url] [bin_pattern] [count]</code>\n"
@@ -1042,8 +1022,7 @@ async def process_show_commands(callback: types.CallbackQuery):
         "<code>/offproxy</code>\n"
         "- Clears proxies and uses direct IP.\n\n"
         "<code>/stop</code>\n"
-        "- Instantly aborts active session.\n"
-        "<code>────────────────────────</code>"
+        "- Instantly aborts active session."
     )
     await callback.message.answer(commands_text)
     await callback.answer()
