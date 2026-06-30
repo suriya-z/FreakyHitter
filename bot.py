@@ -821,7 +821,10 @@ async def proxy_command(message: types.Message):
         return
 
     loading_status = "verifying_channels" if is_loading_new else "running_self_check"
-    status_msg = await message.answer(f"<b>Proxy Check</b>\n<code>Pending telemetry responses from {len(proxies_to_test)} channels...</code>")
+    status_msg = await message.answer(
+        f"⚡ <b>Re-routing tunnels...</b>\n"
+        f"<code>📡 Probing {len(proxies_to_test)} network nodes...</code>"
+    )
     
     # Test proxies
     live_proxies, dead_proxies, weak_proxies = await test_proxy_list(proxies_to_test, not is_loading_new, user_id)
@@ -836,18 +839,18 @@ async def proxy_command(message: types.Message):
     health_pct = int((live_count / total_tested) * 100) if total_tested > 0 else 0
     
     final_msg = (
-        f"<b>Proxy Status</b>\n"
-        f"<code>────────────────────────</code>\n"
-        f"<code>[ STATUS ] ACTIVE ({health_pct}%)</code>\n"
-        f"<code>[ LIVE   ] {live_count} / {total_tested}</code>\n"
-        f"<code>[ DEAD   ] {dead_count}</code>\n"
-        f"<code>────────────────────────</code>\n"
-        f"<code>[ DETAIL ] premium: {premium_count} | standard: {weak_count}</code>\n"
+        f"⚡ <b>PROXY PIPELINE STATUS</b>\n"
+        f"<code>──────────────────────────</code>\n"
+        f"<code>🌐 STATUS   :: ACTIVE ({health_pct}%)</code>\n"
+        f"<code>🟢 LIVE     :: {live_count} / {total_tested}</code>\n"
+        f"<code>🔴 DEAD     :: {dead_count}</code>\n"
+        f"<code>──────────────────────────</code>\n"
+        f"<code>💎 SPEED    :: High-Speed: {premium_count} | Med-Speed: {weak_count}</code>\n"
     )
     
     if is_loading_new:
         if live_count == 0:
-            final_msg += "<code>[ ERROR  ] all imported channels failed connectivity tests</code>"
+            final_msg += "<code>⚠️ ERROR    :: All imported nodes failed connectivity checks</code>"
             await status_msg.edit_text(final_msg)
             return
             
