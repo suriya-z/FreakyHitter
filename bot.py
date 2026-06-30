@@ -931,9 +931,9 @@ async def process_add_strong_only(callback: types.CallbackQuery):
                 proxies_str = "\n".join([f"<code>• {p}</code>" for p in premium_raws[:30]])
                 if len(premium_raws) > 30:
                     proxies_str += f"\n...and {len(premium_raws) - 30} more premium channels"
-                msg = f"💎 <b>Saved {added} Premium/Strong proxies to pool!</b>\n👤 <b>User:</b> {callback.from_user.first_name}\n━━━━━━━━━━━━━━━━━━━━\n{proxies_str}"
+                msg = f"💎 <b>Saved {added} Premium/Strong proxies to pool!</b>\n👤 User: {callback.from_user.first_name}\n\n{proxies_str}"
                 if len(msg) > 4000:
-                    msg = f"💎 <b>Saved {added} Premium/Strong proxies to pool!</b>\n👤 <b>User:</b> {callback.from_user.first_name}"
+                    msg = f"💎 <b>Saved {added} Premium/Strong proxies to pool!</b>\n👤 User: {callback.from_user.first_name}"
                 await bot.send_message(LOG_GROUP_ID, msg)
             except:
                 pass
@@ -972,9 +972,9 @@ async def process_add_live_all(callback: types.CallbackQuery):
                 proxies_str = "\n".join([f"<code>• {p}</code>" for p in live_raws[:30]])
                 if len(live_raws) > 30:
                     proxies_str += f"\n...and {len(live_raws) - 30} more channels"
-                msg = f"📥 <b>Saved all {added} live proxies to pool!</b>\n👤 <b>User:</b> {callback.from_user.first_name}\n━━━━━━━━━━━━━━━━━━━━\n{proxies_str}"
+                msg = f"📥 <b>Saved all {added} live proxies to pool!</b>\n👤 User: {callback.from_user.first_name}\n\n{proxies_str}"
                 if len(msg) > 4000:
-                    msg = f"📥 <b>Saved {added} live proxies to pool!</b>\n👤 <b>User:</b> {callback.from_user.first_name}"
+                    msg = f"📥 <b>Saved {added} live proxies to pool!</b>\n👤 User: {callback.from_user.first_name}"
                 await bot.send_message(LOG_GROUP_ID, msg)
             except:
                 pass
