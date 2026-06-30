@@ -343,7 +343,7 @@ async def hit_command(message: types.Message):
                     url_str_formatted += f" <a href='{escaped_receipt}'>[RECEIPT]</a>"
                     url_str_msg += f"\n🧾 Receipt: <a href='{escaped_receipt}'>link</a>"
                     
-                log_entry = f"<code>[✓] {card_str} [{amt_val}] -> success ({res['response_time']:.2f}s)</code>{url_str_formatted}"
+                log_entry = f"✅ <code>{card_str}</code> | {amt_val} | {res['response_time']:.2f}s{url_str_formatted}"
                 
                 hit_text = (
                     f"✅ <b>PAYMENT SUCCESSFUL</b>\n"
@@ -375,7 +375,7 @@ async def hit_command(message: types.Message):
                 else:
                     code_escaped = str(code)
                     
-                log_entry = f"<code>[×] {card_str} [{amt_val}] -> {code_escaped.lower()} ({res['response_time']:.2f}s)</code>"
+                log_entry = f"❌ <code>{card_str}</code> | {amt_val} | {code_escaped.lower()} | {res['response_time']:.2f}s"
                 
                 # Live Card Detection
                 live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin', 'withdrawal_count_limit_exceeded']
