@@ -785,7 +785,7 @@ class StripeAPIHitter:
 
             payload = {
                 "v": 2,
-                "tag": "4.7.0_js_fp",
+                "tag": "5.6.8_js_fp",
                 "src": "js-tokenize-inner-v3",
                 "a": {
                     "a": self.pk_live,
@@ -873,35 +873,35 @@ class StripeAPIHitter:
         
         BROWSER_PROFILES = [
             {
-                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "impersonate": "chrome120",
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "impersonate": "chrome124",
                 "platform": "Win32",
                 "color_depth": "32",
                 "screen_height": "1080",
                 "screen_width": "1920",
-                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"Windows"'
             },
             {
-                "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "impersonate": "chrome120",
+                "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "impersonate": "chrome124",
                 "platform": "MacIntel",
                 "color_depth": "30",
                 "screen_height": "1050",
                 "screen_width": "1680",
-                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"macOS"'
             },
             {
-                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
-                "impersonate": "chrome116",
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "impersonate": "chrome120",
                 "platform": "Win32",
                 "color_depth": "24",
                 "screen_height": "1440",
                 "screen_width": "2560",
-                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="116", "Google Chrome";v="116"',
+                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"Windows"'
             },
