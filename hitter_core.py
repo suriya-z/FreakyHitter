@@ -1605,7 +1605,12 @@ class StripeAPIHitter:
                                 result['error'] = 'challenge_required'
                             elif captcha_triggered:
                                 result['decline_code'] = 'stripe_captcha_bypass_failed'
-                                result['error'] = 'stripe_captcha_rqdata_triggered'
+                                # Dump full raw response so user can inspect exact rqdata payload
+                                try:
+                                    _raw_dump = json.dumps(confirm_json, indent=None, default=str)
+                                except Exception:
+                                    _raw_dump = str(confirm_json)
+                                result['error'] = f'rqdata_captcha | raw: {_raw_dump}'
                             else:
                                 result['decline_code'] = status_2 or '3ds_unknown'
                                 next_act = poll_json.get('next_action') or {}
