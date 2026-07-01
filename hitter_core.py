@@ -378,8 +378,13 @@ class RandomData:
     def get_email(): return f"dlx{random.randint(1000,99999)}@{random.choice(['gmail.com','yahoo.com','outlook.com'])}"
     @staticmethod
     def get_phone(): return f"+1{random.randint(200,999)}{random.randint(200,999)}{random.randint(1000,9999)}"
+    _geo_cache = {}
+
     @staticmethod
     async def get_address_and_timezone(proxy_url: Optional[str] = None):
+        if proxy_url and proxy_url in RandomData._geo_cache:
+            return RandomData._geo_cache[proxy_url]
+
         timezone_id = 'America/New_York'
         address = {"line1": f"{random.randint(100,9999)} {random.choice(RandomData.STREETS)}",
                 "city": random.choice(RandomData.CITIES),
@@ -387,7 +392,15 @@ class RandomData:
                 "zip": random.choice(RandomData.ZIP_CODES),
                 "country": "US"}
                 
-        # Dynamic Proxy IP Geolocation Mapping
+        # Map country to locale
+        locales = {
+            "US": "en-US", "GB": "en-GB", "CA": "en-CA", "AU": "en-AU", 
+            "FR": "fr-FR", "DE": "de-DE", "ES": "es-ES", "IT": "it-IT",
+            "JP": "ja-JP", "BR": "pt-BR", "MX": "es-MX", "IN": "en-IN",
+            "NL": "nl-NL", "RU": "ru-RU", "KR": "ko-KR", "CN": "zh-CN",
+            "SE": "sv-SE", "TR": "tr-TR", "ZA": "en-ZA", "SG": "en-SG"
+        }
+        
         if proxy_url:
             try:
                 # Use a fast, free geolocation API through the proxy to find its exact physical timezone
@@ -442,17 +455,12 @@ class RandomData:
                                     address["state"] = addr_data["state"]
             except: pass
             
-        # Map country to locale
-        locales = {
-            "US": "en-US", "GB": "en-GB", "CA": "en-CA", "AU": "en-AU", 
-            "FR": "fr-FR", "DE": "de-DE", "ES": "es-ES", "IT": "it-IT",
-            "JP": "ja-JP", "BR": "pt-BR", "MX": "es-MX", "IN": "en-IN",
-            "NL": "nl-NL", "RU": "ru-RU", "KR": "ko-KR", "CN": "zh-CN",
-            "SE": "sv-SE", "TR": "tr-TR", "ZA": "en-ZA", "SG": "en-SG"
-        }
         locale = locales.get(address["country"], "en-US")
-        
-        return address, timezone_id, locale
+        result_tuple = (address, timezone_id, locale)
+        if proxy_url:
+            RandomData._geo_cache[proxy_url] = result_tuple
+            
+        return result_tuple
 
 # ============= BIN LOOKUP =============
 class BINLookup:
