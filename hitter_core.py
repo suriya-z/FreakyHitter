@@ -1063,7 +1063,7 @@ class StripeAPIHitter:
                     el_headers = headers.copy()
                     el_headers["referer"] = checkout_page_url
                     el_headers["accept-language"] = "en-US,en;q=0.9"
-                    el_headers["Stripe-Version"] = "2023-10-16"
+                    el_headers["Stripe-Version"] = "2026-04-22.dahlia"
                     el_headers["sec-fetch-site"] = "cross-site"
                     el_headers["sec-fetch-mode"] = "cors"
                     el_headers["sec-fetch-dest"] = "empty"
