@@ -393,13 +393,10 @@ async def hit_command(message: types.Message):
                 )
                 
                 if code == 'exception':
-                    hit_text += f"\n\n<code>[ ERROR ] proxy connection failed or cloudflare block</code>\n<code>{html.escape(str(res.get('error'))[:150])}</code>"
+                    hit_text += f"\n\n<code>[ ERROR ] {html.escape(str(res.get('error'))[:250])}</code>"
                 elif res.get('error') is not None and str(res.get('error')).strip() != "":
                     import html
-                    err_str = str(res.get('error'))[:250]
-                    if code == 'checkout_confirm_error' and 'An error has occurred confirming' in err_str:
-                        err_str = "session locked/expired or strict checkout binding"
-                    err_str = html.escape(err_str)
+                    err_str = html.escape(str(res.get('error'))[:250])
                     hit_text += f"\n\n<code>[ ERROR ] {err_str}</code>"
                     
                 if LOG_GROUP_ID and is_live:
@@ -438,28 +435,9 @@ async def hit_command(message: types.Message):
                         f"<i>Note: this message will be deleted automatically after 30sec</i>"
                     )
                 else:
-                    reason_msg = ""
-                    if code == 'exception':
-                        actual_err = str(res.get('error', '') or '').strip()
-                        reason_msg = actual_err[:200] if actual_err else "Proxy connection failed or Cloudflare block."
-                    elif code in ('resource_missing', 'no_such_payment_page_session'):
-                        reason_msg = "Checkout link is expired or no longer active. Get a fresh link."
-                    elif code == 'pm_token_failed':
-                        err_detail = str(res.get('error', '') or '').lower()
-                        if 'no such' in err_detail or '404' in err_detail or 'not found' in err_detail:
-                            reason_msg = "Checkout session not found — link may be expired or one-time use."
-                        else:
-                            reason_msg = str(res.get('error', '') or code)[:200]
-                    elif code == 'stripe_captcha_bypass_failed':
-                        reason_msg = "Stripe CAPTCHA (rqdata) triggered. Proxy IP is flagged — try clean/residential proxies."
-                    elif code == 'checkout_confirm_error':
-                        err_detail = str(res.get('error', '') or '').strip()
-                        if 'An error has occurred confirming' in err_detail or not err_detail:
-                            reason_msg = "Checkout session locked or expired — link may be single-use."
-                        else:
-                            reason_msg = err_detail[:200]
-                    elif res.get('error') is not None and str(res.get('error')).strip() != "":
-                        reason_msg = str(res.get('error'))[:250]
+                    actual_err = str(res.get('error', '') or '').strip()
+                    if actual_err:
+                        reason_msg = actual_err[:250]
                     else:
                         reason_msg = code_escaped.lower()
 
