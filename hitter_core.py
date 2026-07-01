@@ -1539,7 +1539,7 @@ class StripeAPIHitter:
                                             result['receipt_url'] = receipt_url
                                         return result
                                     result['decline_code'] = '3d_secure_required_hard'
-                                    result['error'] = 'Card issuer demands interactive 3D Secure authentication (Bank-side OTP/App approval required).'
+                                    result['error'] = f"3d_secure_required_hard: redir_url={redir_url}"
                                     result['final_url'] = ret_url or redir_url
                                     return result
 
@@ -1549,15 +1549,15 @@ class StripeAPIHitter:
                                 result['error'] = err.get('message', 'Unknown error')
                             elif state == "challenge_required":
                                 result['decline_code'] = 'challenge_required'
-                                result['error'] = 'Card issuer requires interactive 3D Secure (OTP/app approval).'
+                                result['error'] = 'challenge_required'
                             elif captcha_triggered:
                                 result['decline_code'] = 'stripe_captcha_bypass_failed'
-                                result['error'] = 'Stripe CAPTCHA (rqdata) triggered and bypass could not resolve it. Try cleaner proxies.'
+                                result['error'] = 'stripe_captcha_rqdata_triggered'
                             else:
                                 result['decline_code'] = status_2 or '3ds_unknown'
                                 next_act = poll_json.get('next_action') or {}
                                 action_type = next_act.get('type', 'unknown')
-                                result['error'] = f"3DS challenge not resolved. Action required: {action_type}. Card requires issuer verification."
+                                result['error'] = f"3ds_challenge_unresolved: action_type={action_type}"
                             return result
                         except Exception as ex:
                             print(f"DEBUG: 3DS bypass failed: {ex}")
@@ -1565,7 +1565,7 @@ class StripeAPIHitter:
                             return result
                     elif status == 'requires_payment_method':
                         result['decline_code'] = 'generic_decline'
-                        result['error'] = 'Payment requires a new payment method (generic decline)'
+                        result['error'] = 'requires_payment_method'
                     elif status == 'open':
                         err = confirm_json.get('error')
                         if isinstance(err, dict):
