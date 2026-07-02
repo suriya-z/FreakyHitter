@@ -1455,7 +1455,7 @@ class StripeAPIHitter:
                                         "fingerprintAttempted": True,
                                         "fingerprintData": None,
                                         "challengeWindowSize": None,
-                                        "threeDSCompInd": "Y",
+                                        "threeDSCompInd": three_ds_comp_ind,
                                         "browserJavaEnabled": False,
                                         "browserJavascriptEnabled": True,
                                         "browserLanguage": "en-US",
