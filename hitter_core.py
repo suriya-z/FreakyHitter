@@ -7,7 +7,6 @@ import requests
 import aiohttp
 from datetime import datetime
 from typing import Dict, List, Optional
-import aiohttp
 from curl_cffi import requests as cffi_requests
 from dotenv import load_dotenv
 import math
@@ -405,7 +404,7 @@ class RandomData:
             try:
                 # Use a fast, free geolocation API through the proxy to find its exact physical timezone
                 async with aiohttp.ClientSession() as session:
-                    async with session.get("http://ip-api.com/json/", proxy=proxy_url, timeout=3) as resp:
+                    async with session.get("http://ip-api.com/json/", proxy=proxy_url, timeout=aiohttp.ClientTimeout(total=3)) as resp:
                         if resp.status == 200:
                             data = await resp.json()
                             if data.get("timezone"):
@@ -1061,7 +1060,7 @@ class StripeAPIHitter:
                 timing_ms = random.randint(9000, 24000)
 
                 # Scrape real Stripe.js build hash from live CDN — fabricated hashes are instant bot flags
-                _js_hash = StripeAPIHitter._fetch_live_stripe_js_hash()
+                _js_hash = await loop.run_in_executor(None, StripeAPIHitter._fetch_live_stripe_js_hash)
                 _payment_user_agent = f"stripe.js/{_js_hash}; stripe-js-v3/{_js_hash}; checkout"
                 
                 # Step 1: Tokenize the raw card into a PaymentMethod
@@ -1234,7 +1233,7 @@ class StripeAPIHitter:
                     if not _stripped:
                         break
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
-                    confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                    confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
                     confirm_json = confirm_res.json()
                     err_code = confirm_json.get('error', {}).get('code')
                     err_msg = confirm_json.get('error', {}).get('message', '') or ''
@@ -1272,7 +1271,7 @@ class StripeAPIHitter:
                         confirm_data['expected_amount'] = 0
                         
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
-                    confirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(confirm_url, headers=confirm_headers, data=confirm_data, proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                    confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
                     confirm_json = confirm_res.json()
                 
                 result['response_time'] = time.time() - start
@@ -1950,7 +1949,6 @@ class ConcurrentHitter:
                     while not queue.empty():
                         try:
                             queue.get_nowait()
-                            queue.task_done()
                         except asyncio.QueueEmpty:
                             break
                 else:
