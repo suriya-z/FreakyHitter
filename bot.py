@@ -441,6 +441,25 @@ async def hit_command(message: types.Message):
                     else:
                         reason_msg = code_escaped.lower()
 
+                    raw_resp = res.get('raw_response')
+                    if raw_resp:
+                        import json
+                        try:
+                            if isinstance(raw_resp, dict) and "error" in raw_resp:
+                                raw_err = raw_resp["error"]
+                                if isinstance(raw_err, dict):
+                                    items = []
+                                    for k, v in raw_err.items():
+                                        if v and k not in ['message', 'type']:
+                                            items.append(f"{k}: {v}")
+                                    if items:
+                                        reason_msg += f"\nℹ️ Details: {', '.join(items)}"
+                            else:
+                                raw_dump = json.dumps(raw_resp, indent=None, default=str)
+                                reason_msg += f"\n📋 Raw: <code>{html.escape(raw_dump[:200])}</code>"
+                        except Exception:
+                            reason_msg += f"\n📋 Raw: <code>{html.escape(str(raw_resp)[:200])}</code>"
+
 
                     is_approved = user_id in approved_users_set
                     note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
