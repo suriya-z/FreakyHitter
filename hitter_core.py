@@ -1153,6 +1153,8 @@ class StripeAPIHitter:
                     confirm_data = {
                         "payment_method": pm_id,
                         "expected_payment_method_type": "card",
+                        "use_stripe_sdk": "true",
+                        "return_url": checkout_page_url,
                         "key": self.pk_live,
                         "client_secret": self.cs_live
                     }
@@ -1172,6 +1174,8 @@ class StripeAPIHitter:
                     confirm_data = {
                         "payment_method": pm_id,
                         "expected_payment_method_type": "card",
+                        "use_stripe_sdk": "true",
+                        "return_url": checkout_page_url,
                         "key": self.pk_live,
                         "client_secret": self.cs_live
                     }
@@ -1183,6 +1187,7 @@ class StripeAPIHitter:
                     confirm_data = {
                         "payment_method": pm_id,
                         "expected_payment_method_type": "card",
+                        "use_stripe_sdk": "true",
                         "consent[terms_of_service]": "accepted",
                         "key": self.pk_live,
                     }
@@ -1406,7 +1411,6 @@ class StripeAPIHitter:
                                 is_legacy_3ds = (
                                     res.get("status") == "requires_source_action"
                                     or sdk.get("type") == "three_d_secure_redirect"
-                                    or (isinstance(source, str) and source.startswith("src_"))
                                 )
                                 if is_legacy_3ds:
                                     redirect_url = sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
@@ -1477,7 +1481,7 @@ class StripeAPIHitter:
                                     }
                                     poll_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.get(
                                         poll_url, headers=poll_headers, proxies=proxies,
-                                        timeout=30, impersonate=profile["impersonate"]))
+                                        timeout=30, impersonate="chrome120"))
                                     poll_json = poll_resp_raw.json()
                                     status_2 = poll_json.get('status')
                                     
