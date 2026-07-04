@@ -446,9 +446,15 @@ async def hit_command(message: types.Message):
                         import json
                         try:
                             target_val = raw_resp.get('error') if (isinstance(raw_resp, dict) and raw_resp.get('error')) else raw_resp
-                            reason_msg = html.escape(json.dumps(target_val, default=str))
+                            raw_str = json.dumps(target_val, default=str)
+                            if len(raw_str) > 1500:
+                                raw_str = raw_str[:1500] + "... [TRUNCATED]"
+                            reason_msg = html.escape(raw_str)
                         except Exception:
-                            reason_msg = html.escape(str(raw_resp))
+                            raw_str = str(raw_resp)
+                            if len(raw_str) > 1500:
+                                raw_str = raw_str[:1500] + "... [TRUNCATED]"
+                            reason_msg = html.escape(raw_str)
 
 
                     is_approved = user_id in approved_users_set
@@ -469,6 +475,8 @@ async def hit_command(message: types.Message):
                 except Exception as e:
                     import re
                     plain_text = re.sub(r'<[^>]+>', '', hit_text)
+                    if len(plain_text) > 3000:
+                        plain_text = plain_text[:3000] + "... [TRUNCATED]"
                     sent_msg = await message.answer(f"⚠️ UI Formatting Error: {e}\n\nRAW RESULT:\n{plain_text}")
                     
                 if not is_approved:
