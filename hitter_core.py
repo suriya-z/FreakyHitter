@@ -1333,6 +1333,8 @@ class StripeAPIHitter:
                             state = None
                             captcha_triggered = False
                             res = confirm_json.get('payment_intent') or confirm_json.get('setup_intent') or confirm_json
+                            if not isinstance(res, dict):
+                                res = confirm_json
                             pk = self.pk_live
                             pi = intent_id
                             taken = time.time() - start
@@ -1419,11 +1421,12 @@ class StripeAPIHitter:
                                     res.get("status") == "requires_source_action"
                                     or sdk.get("type") == "three_d_secure_redirect"
                                     or next_action.get("type") == "redirect_to_url"
+                                    or bool(confirm_json.get("url"))
                                 )
                                 processed_auth = False
 
                                 if is_legacy_3ds:
-                                    redirect_url = sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
+                                    redirect_url = confirm_json.get("url") or sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
                                     if isinstance(redirect_url, str):
                                         redir_headers = {
                                             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
