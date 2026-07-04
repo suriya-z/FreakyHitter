@@ -1513,9 +1513,15 @@ class StripeAPIHitter:
                                         result['error'] = f"3ds_challenge_unresolved"
                                     result['raw_response'] = poll_json
                                     return result
+                                else:
+                                    result['decline_code'] = 'no_3ds_source'
+                                    result['error'] = f'3DS required but no source found in next_action'
+                                    result['raw_response'] = confirm_json
+                                    return result
                         except Exception as ex:
                             print(f"DEBUG: 3DS bypass failed: {ex}")
                             result['decline_code'] = f'3d_secure_exception_{str(ex)[:30]}'
+                            result['raw_response'] = confirm_json
                             return result
                     elif status == 'requires_payment_method':
                         result['decline_code'] = 'generic_decline'
@@ -1541,6 +1547,11 @@ class StripeAPIHitter:
                     result['error'] = err.get('message', 'Unknown error')
                     result['raw_response'] = confirm_json
                     
+                # Catch-all: if no code path set decline_code, dump raw response
+                if result['decline_code'] is None:
+                    result['decline_code'] = status or 'unknown'
+                    result['error'] = f'Unhandled status: {status}'
+                    result['raw_response'] = confirm_json
                 # If we reach here without exception, do not retry!
                 return result
                     
