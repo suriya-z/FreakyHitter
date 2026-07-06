@@ -1362,6 +1362,60 @@ class StripeAPIHitter:
                                     or next_action.get("source")
                                 )
 
+                                # If CAPTCHA triggered and no source found, retry confirm for fresh 3DS path
+                                if captcha_triggered and not source:
+                                    try:
+                                        if is_pi or is_seti:
+                                            reconfirm_data = {
+                                                "payment_method": pm_id,
+                                                "expected_payment_method_type": "card",
+                                                "key": self.pk_live,
+                                                "client_secret": self.cs_live
+                                            }
+                                        else:
+                                            reconfirm_data = {
+                                                "payment_method": pm_id,
+                                                "expected_payment_method_type": "card",
+                                                "payment_method_options[card][request_three_d_secure]": "any",
+                                                "consent[terms_of_service]": "accepted",
+                                                "key": self.pk_live,
+                                            }
+                                        if self.raw_amount is not None and self.raw_amount > 0:
+                                            reconfirm_data["expected_amount"] = self.raw_amount
+                                        import uuid as _uuid
+                                        reconfirm_headers = headers.copy()
+                                        reconfirm_headers["Idempotency-Key"] = str(_uuid.uuid4())
+                                        await asyncio.sleep(1)
+                                        reconfirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                            confirm_url, headers=reconfirm_headers, data=reconfirm_data,
+                                            proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                                        reconfirm_json = reconfirm_res.json()
+                                        rc_pi = reconfirm_json.get('payment_intent') or reconfirm_json.get('setup_intent') or reconfirm_json
+                                        if not isinstance(rc_pi, dict):
+                                            rc_pi = reconfirm_json
+                                        rc_status = rc_pi.get('status') if isinstance(rc_pi, dict) else None
+                                        if rc_status in ['succeeded', 'requires_capture', 'complete']:
+                                            result['success'] = True
+                                            receipt_url = find_receipt_url(reconfirm_json)
+                                            if receipt_url:
+                                                result['receipt_url'] = receipt_url
+                                            return result
+                                        elif rc_status in ['requires_action', 'requires_source_action']:
+                                            rc_sdk = (rc_pi.get('next_action', {}) or {}).get('use_stripe_sdk', {}) or {}
+                                            source = (
+                                                rc_sdk.get("three_d_secure_2_source")
+                                                or rc_sdk.get("source")
+                                                or (rc_pi.get('next_action', {}) or {}).get("source")
+                                            )
+                                            if isinstance(rc_pi, dict) and rc_pi.get('id'):
+                                                pi = rc_pi.get('id')
+                                                intent_id = pi
+                                                client_secret = rc_pi.get('client_secret') or client_secret
+                                                res = rc_pi
+                                                next_action = rc_pi.get('next_action', {}) or {}
+                                                sdk = next_action.get('use_stripe_sdk', {}) or {}
+                                    except Exception as reconfirm_ex:
+                                        print(f"DEBUG: reconfirm retry failed: {reconfirm_ex}")
                                 state = None
 
                                 is_legacy_3ds = (
