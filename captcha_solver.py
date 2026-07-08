@@ -44,10 +44,7 @@ def _get_config_key(key: str, env_var: str) -> str:
 
 
 def get_nopecha_key() -> str:
-    key = _get_config_key("nopecha_api_key", "NOPECHA_API_KEY")
-    if key and key.startswith("sub_"):
-        return ""
-    return key
+    return _get_config_key("nopecha_api_key", "NOPECHA_API_KEY")
 
 def get_captchaai_key() -> str:
     return _get_config_key("captchaai_api_key", "CAPTCHAAI_API_KEY")
