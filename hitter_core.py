@@ -1412,6 +1412,7 @@ class StripeAPIHitter:
                                             reconfirm_data = {
                                                 "payment_method": pm_id,
                                                 "expected_payment_method_type": "card",
+                                                "use_stripe_sdk": "true",
                                                 "key": self.pk_live,
                                                 "client_secret": self.cs_live
                                             }
@@ -1419,6 +1420,7 @@ class StripeAPIHitter:
                                             reconfirm_data = {
                                                 "payment_method": pm_id,
                                                 "expected_payment_method_type": "card",
+                                                "use_stripe_sdk": "true",
                                                 "payment_method_options[card][request_three_d_secure]": "any",
                                                 "consent[terms_of_service]": "accepted",
                                                 "key": self.pk_live,
