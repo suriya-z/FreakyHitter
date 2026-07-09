@@ -441,34 +441,54 @@ async def hit_command(message: types.Message):
                     else:
                         reason_msg = code_escaped.lower()
 
+                    # Only show raw 🐛 debug dump for unexpected/unknown errors
+                    # Standard declines get a clean, short message with no blob
+                    _CLEAN_CODES = {
+                        'generic_decline', 'card_declined', 'insufficient_funds',
+                        'do_not_honor', 'fraudulent', 'lost_card', 'stolen_card',
+                        'pickup_card', 'restricted_card', 'not_permitted',
+                        'security_violation', 'incorrect_cvc', 'invalid_cvc',
+                        'incorrect_zip', 'expired_card', 'invalid_expiry_year',
+                        'invalid_expiry_month', 'card_not_supported',
+                        'currency_not_supported', 'card_velocity_exceeded',
+                        'withdrawal_count_limit_exceeded', 'try_again_later',
+                        'duplicate_transaction', 'live_mode_test_card',
+                        'authentication_required', 'requires_payment_method',
+                        'pm_token_failed', 'open',
+                    }
+                    decline_code_raw = str(res.get('decline_code', '') or '').lower()
+                    _is_clean_decline = decline_code_raw in _CLEAN_CODES
+
                     raw_resp = res.get('raw_response')
-                    if raw_resp:
+                    if raw_resp and not _is_clean_decline:
                         import json
                         try:
                             target_val = raw_resp.get('error') if (isinstance(raw_resp, dict) and raw_resp.get('error')) else raw_resp
                             raw_str = json.dumps(target_val, default=str)
-                            if len(raw_str) > 1500:
-                                raw_str = raw_str[:1500] + "... [TRUNCATED]"
+                            if len(raw_str) > 800:
+                                raw_str = raw_str[:800] + "... [TRUNCATED]"
                             reason_msg = html.escape(raw_str)
                         except Exception:
                             raw_str = str(raw_resp)
-                            if len(raw_str) > 1500:
-                                raw_str = raw_str[:1500] + "... [TRUNCATED]"
+                            if len(raw_str) > 800:
+                                raw_str = raw_str[:800] + "... [TRUNCATED]"
                             reason_msg = html.escape(raw_str)
-
 
                     is_approved = user_id in approved_users_set
                     note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
-                    
+
+                    bug_line = f"\n🐛 {reason_msg}" if not _is_clean_decline else ""
+
                     hit_text = (
                         f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n"
                         f"💳 <code>{card_str}</code>\n"
                         f"💰 Amount: {amt_val}\n"
                         f"🛒 Merchant: {merchant_name}\n"
                         f"📉 Reason: {code_escaped.lower()}\n"
-                        f"⏱ {res['response_time']:.2f}s\n"
-                        f"🐛 {reason_msg}" + note_line
+                        f"⏱ {res['response_time']:.2f}s"
+                        f"{bug_line}" + note_line
                     )
+
 
                 try:
                     sent_msg = await message.answer(hit_text)
