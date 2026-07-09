@@ -455,6 +455,14 @@ async def hit_command(message: types.Message):
                         'duplicate_transaction', 'live_mode_test_card',
                         'authentication_required', 'requires_payment_method',
                         'pm_token_failed', 'open',
+                        # 3DS authentication failures — known outcome, no blob needed
+                        'payment_intent_authentication_failure',
+                        'setup_intent_authentication_failure',
+                        'payment_intent_unexpected_state',
+                        'setup_intent_unexpected_state',
+                        'challenge_required',
+                        'no_3ds_source',
+                        'stripe_captcha_bypass_failed',
                     }
                     decline_code_raw = str(res.get('decline_code', '') or '').lower()
                     _is_clean_decline = decline_code_raw in _CLEAN_CODES
