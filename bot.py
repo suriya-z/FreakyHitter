@@ -8,6 +8,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 import aiohttp
+import html
 from aiogram.types import FSInputFile
 
 # --- GLOBALLY MONKEYPATCH REQUESTS WITH CURL_CFFI FOR BROWSER TLS FINGERPRINTS ---
@@ -317,7 +318,6 @@ async def hit_command(message: types.Message):
                 
             merchant_name = res.get('merchant') or 'Unknown'
             if isinstance(merchant_name, str):
-                import html
                 merchant_name = html.escape(merchant_name)
                 
             # Log forwarding and entry creation
@@ -333,12 +333,10 @@ async def hit_command(message: types.Message):
                 url_str_formatted = ""
                 url_str_msg = ""
                 if final_url:
-                    import html
                     escaped_final = html.escape(final_url)
                     url_str_formatted += f" <a href='{escaped_final}'>[CONFIRMATION]</a>"
                     url_str_msg += f"\n🔗 Confirmation: <a href='{escaped_final}'>link</a>"
                 if receipt_url:
-                    import html
                     escaped_receipt = html.escape(receipt_url)
                     url_str_formatted += f" <a href='{escaped_receipt}'>[RECEIPT]</a>"
                     url_str_msg += f"\n🧾 Receipt: <a href='{escaped_receipt}'>link</a>"
@@ -370,7 +368,6 @@ async def hit_command(message: types.Message):
             else:
                 code = res.get('decline_code') or res.get('error') or 'unknown'
                 if isinstance(code, str):
-                    import html
                     code_escaped = html.escape(code)
                 else:
                     code_escaped = str(code)
@@ -395,7 +392,6 @@ async def hit_command(message: types.Message):
                 if code == 'exception':
                     hit_text += f"\n\n<code>[ ERROR ] {html.escape(str(res.get('error'))[:250])}</code>"
                 elif res.get('error') is not None and str(res.get('error')).strip() != "":
-                    import html
                     err_str = html.escape(str(res.get('error'))[:250])
                     hit_text += f"\n\n<code>[ ERROR ] {err_str}</code>"
                     
@@ -417,6 +413,7 @@ async def hit_command(message: types.Message):
             
             # Send separate message only if len(cards) == 1
             if len(cards) == 1:
+                is_approved = user_id in approved_users_set
                 if status_msg:
                     try: await status_msg.delete()
                     except: pass
@@ -425,14 +422,14 @@ async def hit_command(message: types.Message):
                     receipt_url = res.get('receipt_url') or res.get('final_url')
                     escaped_receipt = html.escape(receipt_url) if receipt_url else ""
                     receipt_line = f"\n🧾 Receipt: <a href='{escaped_receipt}'>{escaped_receipt}</a>" if escaped_receipt else ""
+                    note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
                     hit_text = (
                         f"✅ <b>PAYMENT SUCCESSFUL</b>\n"
                         f"💳 <code>{card_str}</code>\n"
                         f"💰 Amount: {amt_val}\n"
                         f"🛒 Merchant: {merchant_name}\n"
                         f"⏱ {res['response_time']:.2f}s"
-                        f"{receipt_line}\n\n"
-                        f"<i>Note: this message will be deleted automatically after 30sec</i>"
+                        f"{receipt_line}" + note_line
                     )
                 else:
                     actual_err = str(res.get('error', '') or '').strip()
@@ -465,7 +462,7 @@ async def hit_command(message: types.Message):
                         'stripe_captcha_bypass_failed',
                     }
                     decline_code_raw = str(res.get('decline_code', '') or '').lower()
-                    _is_clean_decline = decline_code_raw in _CLEAN_CODES
+                    _is_clean_decline = decline_code_raw in _CLEAN_CODES or code_escaped.lower() in _CLEAN_CODES
 
                     raw_resp = res.get('raw_response')
                     if raw_resp and not _is_clean_decline:
@@ -482,7 +479,6 @@ async def hit_command(message: types.Message):
                                 raw_str = raw_str[:800] + "... [TRUNCATED]"
                             reason_msg = html.escape(raw_str)
 
-                    is_approved = user_id in approved_users_set
                     note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
 
                     bug_line = f"\n🐛 {reason_msg}" if not _is_clean_decline else ""
@@ -608,7 +604,6 @@ async def hit_command(message: types.Message):
                 except: pass
                 
             error_msg = str(data.get("error", "Unknown error"))
-            import html
             error_msg = html.escape(error_msg)
             
             if len(cards) > 1 and session_results:

