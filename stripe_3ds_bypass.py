@@ -523,7 +523,7 @@ async def poll_intent_status(loop, session, pk, client_secret, intent_id, intent
 
 # ============= HCAPTCHA CHALLENGE HANDLER (STRIPE CHECKOUT) =============
 
-async def attempt_captcha_verification(loop, session, pk, client_secret, intent_id, intent_type, sdk_data, headers):
+async def attempt_captcha_verification(loop, session, pk, client_secret, intent_id, intent_type, sdk_data, headers, pm_id=None):
     """
     Handle Stripe's intent_confirmation_challenge (hCaptcha) flow.
     Solves the captcha and submits the token to Stripe's verification endpoint.
@@ -592,23 +592,46 @@ async def attempt_captcha_verification(loop, session, pk, client_secret, intent_
         vr = await loop.run_in_executor(None, lambda: session.post(
             verify_endpoint, data=verify_data, headers=js_headers, timeout=25))
         vr_json = vr.json()
-        vr_status = vr_json.get("status", "")
+        
+        intent_obj = vr_json.get("payment_intent") or vr_json.get("setup_intent") or vr_json
+        if not isinstance(intent_obj, dict):
+            intent_obj = vr_json
+        status = intent_obj.get("status", vr_json.get("status", ""))
 
         if vr.status_code == 200:
-            if vr_status == "succeeded":
+            if status == "requires_confirmation" and pm_id:
+                logger.info("Captcha verified, intent requires confirmation. Confirming with pm_id...")
+                confirm_url = f"{STRIPE_API}/v1/{intent_type}s/{intent_id}/confirm"
+                confirm_data = {
+                    "client_secret": client_secret,
+                    "key": pk,
+                    "payment_method": pm_id,
+                    "use_stripe_sdk": "true",
+                }
+                cr = await loop.run_in_executor(None, lambda: session.post(
+                    confirm_url, data=confirm_data, headers=js_headers, timeout=25))
+                cr_json = cr.json()
+                intent_obj = cr_json.get("payment_intent") or cr_json.get("setup_intent") or cr_json
+                if not isinstance(intent_obj, dict):
+                    intent_obj = cr_json
+                status = intent_obj.get("status", "")
+
+            if status == "succeeded":
                 return "charged", "Charged (Captcha Solved)"
-            if vr_status == "requires_capture":
+            if status == "requires_capture":
                 return "charged", "Authorized (Captcha Solved)"
-            if vr_status == "processing":
+            if status == "processing":
                 return "approved", "Processing"
-            if vr_status == "requires_payment_method":
+            if status == "requires_action":
+                return "requires_action", intent_obj
+            if status == "requires_payment_method":
                 error_key = "last_payment_error" if intent_type == "payment_intent" else "last_setup_error"
-                last_error = vr_json.get(error_key, {})
+                last_error = intent_obj.get(error_key, {})
                 if last_error:
                     return _classify_error(last_error)
                 return "declined", "Payment method failed"
-            if "error" in vr_json:
-                err = vr_json["error"]
+            if "error" in intent_obj:
+                err = intent_obj["error"]
                 code = err.get("code", "")
                 decline = err.get("decline_code", "")
                 if code == "card_declined" and decline:
@@ -624,7 +647,10 @@ async def attempt_captcha_verification(loop, session, pk, client_secret, intent_
                 verify_endpoint, data={"client_secret": client_secret, "key": pk},
                 headers=js_headers, timeout=20))
             vr2_json = vr2.json()
-            v2_status = vr2_json.get("status", "")
+            intent2_obj = vr2_json.get("payment_intent") or vr2_json.get("setup_intent") or vr2_json
+            if not isinstance(intent2_obj, dict):
+                intent2_obj = vr2_json
+            v2_status = intent2_obj.get("status", "")
             if v2_status == "succeeded":
                 return "charged", "Charged (Captcha Solved)"
             if v2_status == "requires_capture":

