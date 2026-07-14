@@ -1808,8 +1808,6 @@ class ConcurrentHitter:
                         self._stripe_profile = random.choice(BROWSER_PROFILES)
                     proxy_data = await ProxyManager.get_geo_matched(self.user_id, bin_country) if bin_country else await ProxyManager.get_random(self.user_id)
                     hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email, profile=self._stripe_profile)
-                    
-                    import random
                     await asyncio.sleep(random.uniform(0.05, 0.2))  # Micro-random delay per card attempt  
                     
                     # Reuse session-level stripe tokens — all cards in the batch should carry the same
