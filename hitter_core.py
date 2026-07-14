@@ -1553,8 +1553,10 @@ class ConcurrentHitter:
                     proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
                     proxies = {"http": proxy_url, "https": proxy_url}
                 
-                async with cffi_requests.AsyncSession(impersonate="chrome120", proxies=proxies) as s:
-                    resp = await s.get(self.url, timeout=8)
+                loop = asyncio.get_event_loop()
+                s = cffi_requests.Session(impersonate="chrome120", proxies=proxies)
+                try:
+                    resp = await loop.run_in_executor(None, lambda: s.get(self.url, timeout=8))
                     final_url = str(resp.url) if hasattr(resp, 'url') else self.url
                     html = resp.text
                     
@@ -1578,6 +1580,8 @@ class ConcurrentHitter:
                     
                     if cs_token and pk_key:
                         return {'cs_token': cs_token, 'pk_key': pk_key}
+                finally:
+                    s.close()
             except Exception:
                 continue
         return None
@@ -1649,8 +1653,10 @@ class ConcurrentHitter:
                 
                 if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Fast-analyzing Stripe endpoint..."})
                 
-                async with cffi_requests.AsyncSession(impersonate="chrome120", proxies=proxies) as s:
-                    resp = await s.get(self.url, timeout=5)
+                loop = asyncio.get_event_loop()
+                s = cffi_requests.Session(impersonate="chrome120", proxies=proxies)
+                try:
+                    resp = await loop.run_in_executor(None, lambda: s.get(self.url, timeout=5))
                     html = resp.text
                     
                     cs_token = StripeAPIExtractor.extract_cs_live(self.url, html)
@@ -1685,6 +1691,8 @@ class ConcurrentHitter:
                             if self.update_callback:
                                 await self.update_callback({"status": "error", "error": f"Stripe session inactive: {err_msg}"})
                             return False
+                finally:
+                    s.close()
             except Exception as e:
                 continue
                 
@@ -1745,27 +1753,7 @@ class ConcurrentHitter:
             if not session_cookies and isinstance(result, dict) and result.get('_session_cookies'):
                 self._session_cookies = result['_session_cookies']
                 
-            if isinstance(result, dict) and "status" in result and "result" in result:
-                friend_res = result
-                result = {
-                    'attempt': attempt_num,
-                    'card': card,
-                    'success': friend_res.get("status", False),
-                    'decline_code': friend_res.get("result", {}).get("status"),
-                    'response_time': friend_res.get("result", {}).get("time", 0),
-                    'amount': self.url_info.get('amount'),
-                    'merchant': self.url_info.get('merchant'),
-                    'proxy_raw': proxy_data['raw'] if proxy_data else None,
-                    'error': friend_res.get("result", {}).get("message")
-                }
-                if 'final_url' in friend_res:
-                    result['final_url'] = friend_res['final_url']
-                elif 'final_url' in friend_res.get('result', {}):
-                    result['final_url'] = friend_res['result']['final_url']
-                if 'receipt_url' in friend_res:
-                    result['receipt_url'] = friend_res['receipt_url']
-                elif 'receipt_url' in friend_res.get('result', {}):
-                    result['receipt_url'] = friend_res['result']['receipt_url']
+
             result['amount'] = self.url_info.get('amount')
             result['merchant'] = self.url_info.get('merchant')
             
