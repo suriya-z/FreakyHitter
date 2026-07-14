@@ -84,11 +84,11 @@ async def attempt_reconfirm_bypass(loop, session, pk, intent_id, client_secret, 
         endpoint = f"{STRIPE_API}/payment_intents/{intent_id}/confirm"
 
     bypass_attempts = [
-        # Attempt 1: request_three_d_secure=any + setup_future_usage
+        # Attempt 1: request_three_d_secure=automatic + setup_future_usage
         {
             "client_secret": client_secret,
             "payment_method": pm_id,
-            "payment_method_options[card][request_three_d_secure]": "any",
+            "payment_method_options[card][request_three_d_secure]": "automatic",
             "payment_method_options[card][setup_future_usage]": "off_session",
             "error_on_requires_action": "true",
             "key": pk,
