@@ -30,7 +30,7 @@ load_dotenv()
 
 # ============= CONFIGURATION =============
 MAX_ATTEMPTS = 10
-CONCURRENT_BATCH_SIZE = 10  # Worker pool size
+CONCURRENT_BATCH_SIZE = 1  # Sequential processing default
 BATCH_DELAY = 5
 
 BROWSER_PROFILES = [
@@ -1707,7 +1707,7 @@ class ConcurrentHitter:
             await self.update_callback({"status": "error", "error": "Failed to analyze Stripe endpoint. Proxies might be dead."})
         return False
 
-    async def _process_single_card(self, card: dict, attempt_num: int, queue: asyncio.Queue, session=None):
+    async def _process_single_card(self, card: dict, attempt_num: int, queue: asyncio.Queue = None, session=None):
         max_retries = 2
         bin_info = await BINLookup.lookup(card['card'])
         bin_country = bin_info.get('country', '')
@@ -1797,17 +1797,12 @@ class ConcurrentHitter:
                 self.fails += 1
         
         if result['success']:
-            # Cancel all other workers immediately to stop them
-            current_task = asyncio.current_task()
-            for w in getattr(self, 'workers', []):
-                if w != current_task and not w.done():
-                    w.cancel()
-                    
-            while not queue.empty():
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
+            if queue is not None:
+                while not queue.empty():
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
             
         if self.update_callback:
             await self.update_callback({
@@ -1819,54 +1814,6 @@ class ConcurrentHitter:
                 "fails": self.fails
             })
 
-    async def _worker(self, queue: asyncio.Queue):
-        # Create a single long-lived Session for this worker stream
-        worker_session = cffi_requests.Session(impersonate=self._stripe_profile["impersonate"])
-        # Set proxies if any profile-specific configurations require it
-        if self._session_cookies:
-            for ck_name, ck_val in self._session_cookies.items():
-                worker_session.cookies.set(ck_name, ck_val)
-        
-        try:
-            while self.is_running:
-                try:
-                    card, attempt_num = queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                    
-                try:
-                    await self._process_single_card(card, attempt_num, queue, session=worker_session)
-                except asyncio.CancelledError:
-                    # Worker was cancelled. Clean exit.
-                    return
-        except Exception as e:
-            import traceback
-            print(f"DEBUG: _worker processing card failed completely: {str(e)}\n{traceback.format_exc()}", flush=True)
-            
-            # Race-condition guard for exception block too
-            if not self.is_running:
-                return
-                
-            async with self._counter_lock:
-                self.completed += 1
-                self.fails += 1
-            if self.update_callback:
-                err_res = {'success': False, 'card': None, 'response_time': 0, 'decline_code': 'exception', 'error': f"Internal bot crash: {str(e)}"}
-                await self.update_callback({
-                    "status": "progress",
-                    "result": err_res,
-                    "completed": self.completed,
-                    "total": self.total,
-                    "successes": self.successes,
-                    "fails": self.fails
-                })
-        finally:
-            queue.task_done()
-            try:
-                worker_session.close()
-            except Exception:
-                pass
-    
     async def run(self):
         if self.update_callback:
             await self.update_callback({"status": "analyzing", "step": "Extracting Stripe keys and payload..."})
@@ -1878,40 +1825,29 @@ class ConcurrentHitter:
         if self.update_callback:
             await self.update_callback({"status": "starting", "url_info": self.url_info})
             
-        import asyncio
-        queue = asyncio.Queue()
-        for idx, card in enumerate(self.cards[:MAX_ATTEMPTS]):
-            queue.put_nowait((card, idx+1))
+        if not self._stripe_profile:
+            self._stripe_profile = random.choice(BROWSER_PROFILES)
             
-        self.workers = []
-
-        # 1. Pop and run the first card sequentially to initialize/warmup cookies and tokens
-        if not queue.empty():
-            first_card, first_attempt = queue.get_nowait()
-            warmup_session = cffi_requests.Session(impersonate=self._stripe_profile["impersonate"])
-            try:
-                await self._process_single_card(first_card, first_attempt, queue, session=warmup_session)
-            except Exception as e:
-                import traceback
-                print(f"DEBUG: Sequential first card failed: {e}\n{traceback.format_exc()}")
-            finally:
+        shared_session = cffi_requests.Session(impersonate=self._stripe_profile["impersonate"])
+        try:
+            for idx, card in enumerate(self.cards[:MAX_ATTEMPTS]):
+                if not self.is_running:
+                    break
+                
+                attempt_num = idx + 1
                 try:
-                    warmup_session.close()
-                except Exception:
-                    pass
-                queue.task_done()
-            
-        # 2. Run the remaining cards in parallel
-        # Note: if first card succeeded and self.is_running was set to False, workers will exit immediately
-        for _ in range(min(CONCURRENT_BATCH_SIZE, len(self.cards) - 1 if not queue.empty() else len(self.cards))):
-            task = asyncio.create_task(self._worker(queue))
-            self.workers.append(task)
-            
-        await queue.join()
-        
-        for w in self.workers:
-            if not w.done():
-                w.cancel()
+                    await self._process_single_card(card, attempt_num, queue=None, session=shared_session)
+                except Exception as e:
+                    import traceback
+                    print(f"DEBUG: Processing card failed: {e}\n{traceback.format_exc()}")
+                    
+                if not self.is_running:
+                    break
+        finally:
+            try:
+                shared_session.close()
+            except Exception:
+                pass
             
         if self.update_callback:
             await self.update_callback({"status": "completed", "successes": self.successes, "fails": self.fails})
