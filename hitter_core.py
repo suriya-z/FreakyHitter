@@ -1515,7 +1515,7 @@ class ConcurrentHitter:
         # All cards in the same session share the same muid/sid/guid, just like a real browser
         self._stripe_tokens: dict = {}
         self._stripe_tokens_ts: float = 0.0
-        self._stripe_profile: dict = None
+        self._stripe_profile: dict = BROWSER_PROFILES[0]
         self._session_cookies: dict = {}
         
     async def _fetch_fresh_session(self) -> dict:
@@ -1709,8 +1709,7 @@ class ConcurrentHitter:
                     except Exception:
                         pass
             
-            if not self._stripe_profile:
-                self._stripe_profile = random.choice(BROWSER_PROFILES)
+
             proxy_data = await ProxyManager.get_geo_matched(self.user_id, bin_country) if bin_country else await ProxyManager.get_random(self.user_id)
             hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email, profile=self._stripe_profile)
             await asyncio.sleep(random.uniform(0.05, 0.2))  # Micro-random delay per card attempt  
@@ -1794,8 +1793,7 @@ class ConcurrentHitter:
         if self.update_callback:
             await self.update_callback({"status": "starting", "url_info": self.url_info})
             
-        if not self._stripe_profile:
-            self._stripe_profile = random.choice(BROWSER_PROFILES)
+
             
         shared_session = cffi_requests.Session(impersonate=self._stripe_profile["impersonate"])
         try:
