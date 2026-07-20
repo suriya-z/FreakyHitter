@@ -36,7 +36,7 @@ BATCH_DELAY = 5
 BROWSER_PROFILES = [
     {
         "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-        "impersonate": "chrome131_android",
+        "impersonate": "chrome131",
         "platform": "Linux armv81",
         "color_depth": "24",
         "screen_height": "873",
@@ -115,7 +115,7 @@ class StripeAPIExtractor:
                 proxies = {"http": proxy_url, "https": proxy_url}
                 
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, lambda: cffi_requests.post(url, headers=headers, data=data, proxies=proxies, timeout=5, impersonate="chrome131_android"))
+            response = await loop.run_in_executor(None, lambda: cffi_requests.post(url, headers=headers, data=data, proxies=proxies, timeout=5, impersonate="chrome131"))
             if response.status_code == 200:
                 resp_json = response.json()
                 amount = None
@@ -213,7 +213,7 @@ class StripeAPIExtractor:
             }
             
             loop = asyncio.get_event_loop()
-            resp = await loop.run_in_executor(None, lambda: cffi_requests.get(invoicedata_url, headers=headers, proxies=proxies, timeout=10, impersonate="chrome131_android"))
+            resp = await loop.run_in_executor(None, lambda: cffi_requests.get(invoicedata_url, headers=headers, proxies=proxies, timeout=10, impersonate="chrome131"))
             if resp.status_code != 200:
                 return {'success': False, 'error': f'Failed invoicedata check: {resp.status_code}'}
                 
@@ -233,7 +233,7 @@ class StripeAPIExtractor:
                 "user-agent": headers["user-agent"]
             }
             
-            hosted_resp = await loop.run_in_executor(None, lambda: cffi_requests.get(hosted_url, headers=hosted_headers, proxies=proxies, timeout=10, impersonate="chrome131_android"))
+            hosted_resp = await loop.run_in_executor(None, lambda: cffi_requests.get(hosted_url, headers=hosted_headers, proxies=proxies, timeout=10, impersonate="chrome131"))
             if hosted_resp.status_code != 200:
                 return {'success': False, 'error': f'Failed invoices/hosted check: {hosted_resp.status_code}'}
                 
@@ -633,7 +633,7 @@ class StripeAPIHitter:
             return StripeAPIHitter._live_js_hash_cache
         try:
             import re as _re_hash
-            resp = cffi_requests.get("https://js.stripe.com/v3/", timeout=8, impersonate="chrome131_android")
+            resp = cffi_requests.get("https://js.stripe.com/v3/", timeout=8, impersonate="chrome131")
             if resp.status_code == 200:
                 text = resp.text[:10000]
                 # Look for fingerprint version like "X.Y.Z" near "js_fp" or "fingerprint" in the JS bundle
@@ -1548,7 +1548,7 @@ class ConcurrentHitter:
                     proxies = {"http": proxy_url, "https": proxy_url}
                 
                 loop = asyncio.get_event_loop()
-                s = cffi_requests.Session(impersonate="chrome131_android", proxies=proxies)
+                s = cffi_requests.Session(impersonate="chrome131", proxies=proxies)
                 try:
                     resp = await loop.run_in_executor(None, lambda: s.get(self.url, timeout=8))
                     final_url = str(resp.url) if hasattr(resp, 'url') else self.url
@@ -1648,7 +1648,7 @@ class ConcurrentHitter:
                 if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Fast-analyzing Stripe endpoint..."})
                 
                 loop = asyncio.get_event_loop()
-                s = cffi_requests.Session(impersonate="chrome131_android", proxies=proxies)
+                s = cffi_requests.Session(impersonate="chrome131", proxies=proxies)
                 try:
                     resp = await loop.run_in_executor(None, lambda: s.get(self.url, timeout=5))
                     html = resp.text
