@@ -944,8 +944,6 @@ class StripeAPIHitter:
                     "sid": stripe_tokens['sid'],
                     "key": self.pk_live,
                 }
-                if isinstance(self.cs_live, str) and self.cs_live.startswith('cs_'):
-                    pm_data["payment_pages_checkout_session"] = self.cs_live
                 # Step 1.5: Algorithm 4 - Stripe Link Enrollment Bypass
                 # [DISABLED] Initiating unverified Link sessions often triggers `rqdata` (hCaptcha) 
                 # bot protection on strict merchants like Foyer Tech. It's safer to skip it.
