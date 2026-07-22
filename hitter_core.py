@@ -1,3 +1,4 @@
+# Stripe Hitting Core Engine - Updated 2026-07-22
 import re
 import json
 import time
