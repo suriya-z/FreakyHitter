@@ -1086,12 +1086,15 @@ class StripeAPIHitter:
                     if pm_res.status_code == 400 and err.get('code') == 'parameter_unknown' and _pm_param_retries < _pm_param_retry_limit:
                         import re as _re_pm
                         err_msg = err.get('message', '')
-                        _param_match = _re_pm.search(r'unknown parameter[:\s]+([^\s\.\,]+)', err_msg, _re_pm.IGNORECASE)
+                        _param_match = _re_pm.search(r'unknown parameter[s]?[:\s]+([^\.]+)', err_msg, _re_pm.IGNORECASE)
                         if _param_match:
-                            _bad_param = _param_match.group(1).strip("'\"")
-                            _keys_to_del = [k for k in list(pm_data.keys()) if _bad_param in k]
+                            _bad_params_raw = _param_match.group(1).strip()
+                            _bad_params_list = [p.strip().strip("'\"") for p in _bad_params_raw.split(',')]
+                            _keys_to_del = []
+                            for _bp in _bad_params_list:
+                                _keys_to_del.extend([k for k in list(pm_data.keys()) if _bp in k])
                             for _k in _keys_to_del:
-                                del pm_data[_k]
+                                if _k in pm_data: del pm_data[_k]
                             if _keys_to_del:
                                 _pm_param_retries += 1
                                 await asyncio.sleep(0.5)
@@ -1120,8 +1123,6 @@ class StripeAPIHitter:
                         "guid": stripe_tokens.get('guid', ''),
                         "muid": stripe_tokens.get('muid', ''),
                         "sid": stripe_tokens.get('sid', ''),
-                        "payment_user_agent": _payment_user_agent,
-                        "time_on_page": str(random.randint(25000, 45000)),
                         "key": self.pk_live,
                         "client_secret": self.cs_live
                     }
@@ -1146,8 +1147,6 @@ class StripeAPIHitter:
                         "guid": stripe_tokens.get('guid', ''),
                         "muid": stripe_tokens.get('muid', ''),
                         "sid": stripe_tokens.get('sid', ''),
-                        "payment_user_agent": _payment_user_agent,
-                        "time_on_page": str(random.randint(25000, 45000)),
                         "key": self.pk_live,
                         "client_secret": self.cs_live
                     }
@@ -1164,8 +1163,6 @@ class StripeAPIHitter:
                         "guid": stripe_tokens.get('guid', ''),
                         "muid": stripe_tokens.get('muid', ''),
                         "sid": stripe_tokens.get('sid', ''),
-                        "payment_user_agent": _payment_user_agent,
-                        "time_on_page": str(random.randint(25000, 45000)),
                         "key": self.pk_live,
                     }
                     if self.raw_amount is not None and self.raw_amount > 0:
@@ -1196,15 +1193,18 @@ class StripeAPIHitter:
                     # Extract the offending parameter name from the error message
                     # e.g. "Received unknown parameter: allow_redisplay" or "... payment_method_options[card][request_three_d_secure]"
                     import re as _re2
-                    _param_match = _re2.search(r'unknown parameter[:\s]+([^\s\.\,]+)', err_msg, _re2.IGNORECASE)
+                    _param_match = _re2.search(r'unknown parameter[s]?[:\s]+([^\.]+)', err_msg, _re2.IGNORECASE)
                     _stripped = False
                     if _param_match:
-                        _bad_param = _param_match.group(1).strip("'\"")
-                        # Find and remove any key in confirm_data that contains the offending param segment
-                        _keys_to_del = [k for k in list(confirm_data.keys()) if _bad_param in k]
+                        _bad_params_raw = _param_match.group(1).strip()
+                        _bad_params_list = [p.strip().strip("'\"") for p in _bad_params_raw.split(',')]
+                        _keys_to_del = []
+                        for _bp in _bad_params_list:
+                            _keys_to_del.extend([k for k in list(confirm_data.keys()) if _bp in k])
                         for _k in _keys_to_del:
-                            del confirm_data[_k]
-                            _stripped = True
+                            if _k in confirm_data:
+                                del confirm_data[_k]
+                                _stripped = True
                     else:
                         # Fallback: strip known optional params one by one
                         for _fallback_param in ['allow_redisplay', 'save_payment_method', 'payment_method_options[card][request_three_d_secure]', 'payment_method_options[card][mit_exemption][reason]']:
