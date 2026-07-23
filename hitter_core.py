@@ -1074,11 +1074,30 @@ class StripeAPIHitter:
                 pm_headers["sec-fetch-mode"] = "cors"
                 pm_headers["sec-fetch-dest"] = "empty"
                 pm_headers["referer"] = checkout_page_url
-                # Use persistent session — stripe_mid cookies from warmup flow into tokenization
-                pm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(pm_url, headers=pm_headers, data=pm_data, timeout=30))
-                pm_json = pm_res.json()
-
                 
+                # Use persistent session — stripe_mid cookies from warmup flow into tokenization
+                _pm_param_retry_limit = 4
+                _pm_param_retries = 0
+                while True:
+                    pm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(pm_url, headers=pm_headers, data=pm_data, timeout=30))
+                    pm_json = pm_res.json()
+                    
+                    err = pm_json.get('error', {})
+                    if pm_res.status_code == 400 and err.get('code') == 'parameter_unknown' and _pm_param_retries < _pm_param_retry_limit:
+                        import re as _re_pm
+                        err_msg = err.get('message', '')
+                        _param_match = _re_pm.search(r'unknown parameter[:\s]+([^\s\.\,]+)', err_msg, _re_pm.IGNORECASE)
+                        if _param_match:
+                            _bad_param = _param_match.group(1).strip("'\"")
+                            _keys_to_del = [k for k in list(pm_data.keys()) if _bad_param in k]
+                            for _k in _keys_to_del:
+                                del pm_data[_k]
+                            if _keys_to_del:
+                                _pm_param_retries += 1
+                                await asyncio.sleep(0.5)
+                                continue
+                    break
+
                 if 'id' not in pm_json:
                     err = pm_json.get('error', {})
                     result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'pm_token_failed')
