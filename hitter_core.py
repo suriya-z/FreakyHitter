@@ -942,7 +942,7 @@ class StripeAPIHitter:
                         if "sec-ch-ua-platform" in profile: warmup_headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
 
                         warmup_res = await loop.run_in_executor(None, lambda: _cffi_session.get(
-                            checkout_page_url, headers=warmup_headers, timeout=15))
+                            checkout_page_url, headers=warmup_headers, timeout=10))
                     except Exception:
                         pass  # warmup failure is non-fatal — continue
 
@@ -1033,7 +1033,7 @@ class StripeAPIHitter:
                 #     link_data["payment_pages_checkout_session"] = self.cs_live
                 #     
                 # link_headers = headers.copy()
-                # link_res = await loop.run_in_executor(None, lambda: cffi_requests.post(link_url, headers=link_headers, data=link_data, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                # link_res = await loop.run_in_executor(None, lambda: cffi_requests.post(link_url, headers=link_headers, data=link_data, proxies=proxies, timeout=10, impersonate=profile["impersonate"]))
                 # if link_res.status_code == 200:
                 #     link_json = link_res.json()
                 #     if link_json.get("client_secret"):
@@ -1057,7 +1057,7 @@ class StripeAPIHitter:
                 _pm_param_retry_limit = 4
                 _pm_param_retries = 0
                 while True:
-                    pm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(pm_url, headers=pm_headers, data=pm_data, timeout=30))
+                    pm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(pm_url, headers=pm_headers, data=pm_data, timeout=12))
                     try:
                         pm_json = pm_res.json()
                     except Exception:
@@ -1157,7 +1157,7 @@ class StripeAPIHitter:
                 for h in ["sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "referer", "origin"]:
                     if h in confirm_headers: del confirm_headers[h]
                 # Use persistent session — cookies from warmup + elements session propagate to confirm
-                confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
+                confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=12))
                 try:
                     confirm_json = confirm_res.json()
                 except Exception:
@@ -1198,7 +1198,7 @@ class StripeAPIHitter:
                     if not _stripped:
                         break
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
-                    confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
+                    confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=12))
                     try:
                         confirm_json = confirm_res.json()
                     except Exception:
@@ -1239,7 +1239,7 @@ class StripeAPIHitter:
                         confirm_data['expected_amount'] = 0
                         
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
-                    confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
+                    confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=12))
                     confirm_json = confirm_res.json()
                 
                 result['response_time'] = time.time() - start
@@ -1376,7 +1376,7 @@ class StripeAPIHitter:
                                         reconfirm_headers["Idempotency-Key"] = str(_uuid.uuid4())
                                         await asyncio.sleep(1)
                                         reconfirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(
-                                            confirm_url, headers=reconfirm_headers, data=reconfirm_data, timeout=30))
+                                            confirm_url, headers=reconfirm_headers, data=reconfirm_data, timeout=12))
                                         reconfirm_json = reconfirm_res.json()
                                         rc_pi = reconfirm_json.get('payment_intent') or reconfirm_json.get('setup_intent') or reconfirm_json
                                         if not isinstance(rc_pi, dict):
@@ -1422,7 +1422,7 @@ class StripeAPIHitter:
                                                 "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                                                 "user-agent": profile["user_agent"]
                                             }
-                                            await loop.run_in_executor(None, lambda: _cffi_session.get(redirect_url, headers=redir_headers, timeout=15))
+                                            await loop.run_in_executor(None, lambda: _cffi_session.get(redirect_url, headers=redir_headers, timeout=10))
                                         await asyncio.sleep(2)
                                         state = "redirected"
                                         processed_auth = True
@@ -1461,7 +1461,7 @@ class StripeAPIHitter:
                                             "key": pk
                                         }
                                         auth_resp_raw = await loop.run_in_executor(None, lambda: _cffi_session.post(
-                                            auth_url, headers=auth_headers, data=auth_data, timeout=30))
+                                            auth_url, headers=auth_headers, data=auth_data, timeout=12))
                                         auth_json = {}
                                         try:
                                             auth_json = auth_resp_raw.json()
@@ -1495,7 +1495,7 @@ class StripeAPIHitter:
                                         }
                                         try:
                                             poll_resp_raw = await loop.run_in_executor(None, lambda: _cffi_session.get(
-                                                poll_url, headers=poll_headers, timeout=30))
+                                                poll_url, headers=poll_headers, timeout=12))
                                             poll_json = poll_resp_raw.json()
                                             if poll_json.get('status') in ['succeeded', 'requires_capture', 'complete']:
                                                 result['success'] = True
@@ -1521,7 +1521,7 @@ class StripeAPIHitter:
                                         "referer": "https://js.stripe.com/"
                                     }
                                     poll_resp_raw = await loop.run_in_executor(None, lambda: _cffi_session.get(
-                                        poll_url, headers=poll_headers, timeout=30))
+                                        poll_url, headers=poll_headers, timeout=12))
                                     poll_json = poll_resp_raw.json()
                                     status_2 = poll_json.get('status')
                                     
