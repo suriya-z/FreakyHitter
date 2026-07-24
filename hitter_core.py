@@ -1080,6 +1080,12 @@ class StripeAPIHitter:
                                 _pm_param_retries += 1
                                 await asyncio.sleep(0.5)
                                 continue
+                    elif pm_res.status_code == 400 and err.get('type') == 'invalid_request_error' and 'postal code' in err.get('message', '').lower() and _pm_param_retries < _pm_param_retry_limit:
+                        if "billing_details[address][postal_code]" in pm_data:
+                            del pm_data["billing_details[address][postal_code]"]
+                            _pm_param_retries += 1
+                            await asyncio.sleep(0.5)
+                            continue
                     break
 
                 if 'id' not in pm_json:
