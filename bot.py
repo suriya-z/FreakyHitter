@@ -640,6 +640,10 @@ async def stop_command(message: types.Message):
 
 @dp.message(Command("setlog"))
 async def setlog_command(message: types.Message):
+    user_id = message.from_user.id
+    if not OWNER_ID or str(user_id) != str(OWNER_ID):
+        await message.answer("<b>Error</b>\n<code>Unauthorized command. Only the owner can use /setlog.</code>")
+        return
     global LOG_GROUP_ID
     LOG_GROUP_ID = str(message.chat.id)
     with open(".env", "a") as f:
