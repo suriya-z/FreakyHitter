@@ -8,6 +8,7 @@ import aiohttp
 from datetime import datetime
 from typing import Dict, List, Optional
 from curl_cffi import requests as cffi_requests
+from curl_compat import ChromeSession
 from dotenv import load_dotenv
 import math
 import numpy as np
@@ -1620,7 +1621,7 @@ class ConcurrentHitter:
                     proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
                     proxies = {"http": proxy_url, "https": proxy_url}
                 
-                async with cffi_requests.AsyncSession(impersonate="chrome120", proxies=proxies) as s:
+                async with ChromeSession(impersonate="chrome120", proxies=proxies) as s:
                     resp = await s.get(self.url, timeout=8)
                     final_url = str(resp.url) if hasattr(resp, 'url') else self.url
                     html = resp.text
@@ -1716,7 +1717,7 @@ class ConcurrentHitter:
                 
                 if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Fast-analyzing Stripe endpoint..."})
                 
-                async with cffi_requests.AsyncSession(impersonate="chrome120", proxies=proxies) as s:
+                async with ChromeSession(impersonate="chrome120", proxies=proxies) as s:
                     resp = await s.get(self.url, timeout=5)
                     html = resp.text
                     
