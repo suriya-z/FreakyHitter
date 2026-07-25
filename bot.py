@@ -96,37 +96,48 @@ async def command_start_handler(message: types.Message) -> None:
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Commands ⚡", callback_data="show_commands")]
+        [InlineKeyboardButton(text="⚡ Commands Menu ⚡", callback_data="show_commands")]
     ])
     
     welcome_text = (
-        "🩸 <b>Welcome to Freaky Hitter</b> 🩸\n\n"
-        "I've been waiting for you...\n\n"
+        "🩸 <b>Welcome to Freaky Hitter</b> 🩸\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>I've been waiting for you...</i>\n\n"
         "Tell me what we're breaking today. No checkout is safe, no proxy is fast enough, and I won't stop until it bleeds green.\n\n"
         "Feed me the cards. Let the obsession begin.\n\n"
-        "Use <code>/cmds</code> or click below to unlock my secrets."
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "👉 Use <code>/cmds</code> or click below to unlock my secrets."
     )
     await message.answer(welcome_text, reply_markup=markup)
 
 @dp.message(Command("cmds"))
 async def cmds_command(message: types.Message) -> None:
-    await message.answer(
-        "<b>Commands</b>\n\n"
-        "<code>/hit [url] [cc|mm|yy|cvc]</code>\n"
-        "- Hits a single card against checkout.\n\n"
-        "<code>/hit [url] [bin_pattern] [count]</code>\n"
-        "- Generates cards and hits concurrently.\n\n"
-        "<code>/proxy [ip:port:user:pass]</code>\n"
-        "- Imports and validates new proxies.\n\n"
-        "<code>/proxy</code>\n"
-        "- Runs self-check and purges dead IPs.\n\n"
-        "<code>/proxystatus</code>\n"
-        "- Displays current active proxy count.\n\n"
-        "<code>/offproxy</code>\n"
-        "- Clears proxies and uses direct IP.\n\n"
-        "<code>/stop</code>\n"
-        "- Instantly aborts active session."
+    commands_text = (
+        "⚡ <b>FREAKY HITTER COMMANDS</b> ⚡\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💳 <b>/hit</b> <code>[url] [cc\|mm\|yy\|cvc]</code>\n"
+        "└ <i>Hits a single card against target checkout.</i>\n\n"
+        "🎲 <b>/hit</b> <code>[url] [bin_pattern] [count]</code>\n"
+        "└ <i>Generates BIN cards and hits concurrently.</i>\n\n"
+        "🌐 <b>/proxy</b> <code>[ip:port:user:pass]</code>\n"
+        "└ <i>Imports and validates new proxy pool.</i>\n\n"
+        "🧹 <b>/proxy</b>\n"
+        "└ <i>Runs self-check and purges dead IPs.</i>\n\n"
+        "📊 <b>/proxystatus</b>\n"
+        "└ <i>Displays active working proxy count.</i>\n\n"
+        "🔌 <b>/offproxy</b>\n"
+        "└ <i>Clears proxy pool & uses direct IP.</i>\n\n"
+        "🛑 <b>/stop</b>\n"
+        "└ <i>Instantly aborts your active session.</i>\n\n"
+        "👑 <b>/approve</b> <code>[user_id]</code>\n"
+        "└ <i>(Owner) Authorizes a user permanently.</i>\n\n"
+        "📢 <b>/setlog</b>\n"
+        "└ <i>(Owner) Sets channel for hit log forwards.</i>\n\n"
+        "📋 <b>/allproxies</b>\n"
+        "└ <i>(Owner) Displays raw proxy database.</i>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━"
     )
+    await message.answer(commands_text)
 
 @dp.message(Command("approve"))
 async def approve_command(message: types.Message):
@@ -179,20 +190,18 @@ async def hit_command(message: types.Message):
         await message.answer("<b>Error</b>\n<code>Proxy pool is empty. Please set a proxy first: /proxy ip:port:user:pass</code>")
         return
 
-    args = message.text.split(" ")
-    if len(args) < 3:
+    raw_tokens = message.text.strip().split()
+    if len(raw_tokens) < 3:
         await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hit [url] [bin_pattern] [count]\nOR\n/hit [url] [card|month|year|cvv]</code>")
         return
         
-    url = args[1]
-    
-    # Advanced Card/BIN Parsing (Immune to spacing issues)
-    # Extract everything after the URL
-    raw_payload = message.text[message.text.find(url) + len(url):].strip()
+    url = raw_tokens[1]
+    payload_tokens = raw_tokens[2:]
+    raw_payload = " ".join(payload_tokens)
     cards = []
     
     # Check if the last part is a count (for BIN gen)
-    parts = raw_payload.split(' ')
+    parts = payload_tokens
     count_val = parts[-1] if parts else ''
     
     if count_val.isdigit() and len(count_val) <= 3:
@@ -339,7 +348,7 @@ async def hit_command(message: types.Message):
                 if receipt_url:
                     escaped_receipt = html.escape(receipt_url)
                     url_str_formatted += f" <a href='{escaped_receipt}'>[RECEIPT]</a>"
-                    url_str_msg += f"\n🧾 Receipt: <a href='{escaped_receipt}'>link</a>"
+                    url_str_msg += f"\n🧾 <b>Receipt:</b> <a href='{escaped_receipt}'>{escaped_receipt}</a>"
                     
                 log_entry = f"✅ <code>{card_str}</code> | {amt_val} | {res['response_time']:.2f}s{url_str_formatted}"
                 
@@ -1031,22 +1040,31 @@ async def process_rm_weak(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "show_commands")
 async def process_show_commands(callback: types.CallbackQuery):
     commands_text = (
-        "<b>Commands</b>\n\n"
-        "<code>/hit [url] [cc|mm|yy|cvc]</code>\n"
-        "- Hits a single card against checkout.\n\n"
-        "<code>/hit [url] [bin_pattern] [count]</code>\n"
-        "- Generates cards and hits concurrently.\n\n"
-        "<code>/proxy [ip:port:user:pass]</code>\n"
-        "- Imports and validates new proxies.\n\n"
-        "<code>/proxy</code>\n"
-        "- Runs self-check and purges dead IPs.\n\n"
-        "<code>/proxystatus</code>\n"
-        "- Displays current active proxy count.\n\n"
-        "<code>/offproxy</code>\n"
-        "- Clears proxies and uses direct IP.\n\n"
-        "<code>/stop</code>\n"
-        "- Instantly aborts active session."
+        "⚡ <b>FREAKY HITTER COMMANDS</b> ⚡\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💳 <b>/hit</b> <code>[url] [cc\|mm\|yy\|cvc]</code>\n"
+        "└ <i>Hits a single card against target checkout.</i>\n\n"
+        "🎲 <b>/hit</b> <code>[url] [bin_pattern] [count]</code>\n"
+        "└ <i>Generates BIN cards and hits concurrently.</i>\n\n"
+        "🌐 <b>/proxy</b> <code>[ip:port:user:pass]</code>\n"
+        "└ <i>Imports and validates new proxy pool.</i>\n\n"
+        "🧹 <b>/proxy</b>\n"
+        "└ <i>Runs self-check and purges dead IPs.</i>\n\n"
+        "📊 <b>/proxystatus</b>\n"
+        "└ <i>Displays active working proxy count.</i>\n\n"
+        "🔌 <b>/offproxy</b>\n"
+        "└ <i>Clears proxy pool & uses direct IP.</i>\n\n"
+        "🛑 <b>/stop</b>\n"
+        "└ <i>Instantly aborts your active session.</i>\n\n"
+        "👑 <b>/approve</b> <code>[user_id]</code>\n"
+        "└ <i>(Owner) Authorizes a user permanently.</i>\n\n"
+        "📢 <b>/setlog</b>\n"
+        "└ <i>(Owner) Sets channel for hit log forwards.</i>\n\n"
+        "📋 <b>/allproxies</b>\n"
+        "└ <i>(Owner) Displays raw proxy database.</i>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━"
     )
+    await callback.message.answer(commands_text)
     await callback.message.answer(commands_text)
     await callback.answer()
 

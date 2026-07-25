@@ -709,8 +709,10 @@ HARDWARE_SPOOF_SCRIPT = """
 
 def find_receipt_url(d):
     if isinstance(d, dict):
-        if 'receipt_url' in d and isinstance(d['receipt_url'], str) and d['receipt_url'].startswith('http'):
-            return d['receipt_url']
+        for key in ['receipt_url', 'hosted_invoice_url', 'invoice_pdf']:
+            val = d.get(key)
+            if isinstance(val, str) and val.startswith('http'):
+                return val
         for v in d.values():
             res = find_receipt_url(v)
             if res:
@@ -884,7 +886,7 @@ class StripeAPIHitter:
             return None
             
         loop = asyncio.get_event_loop()
-        url = f"https://api.stripe.com/v1/payment_intents/{intent_id}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
+        url = f"https://api.stripe.com/v1/payment_intents/{intent_id}?expand[]=latest_charge&expand[]=charges.data&is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
         get_headers = {
             "accept": "application/json",
             "origin": "https://js.stripe.com",
