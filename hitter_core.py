@@ -762,6 +762,38 @@ def extract_intent_details(d):
                 
     return intent_id, client_secret
 
+def extract_deep_decline(data):
+    if not isinstance(data, dict):
+        return None, None
+        
+    # Check top level error
+    err = data.get('error', {})
+    if isinstance(err, dict) and (err.get('code') or err.get('decline_code') or err.get('message')):
+        decline = err.get('decline_code') or err.get('code') or err.get('type')
+        msg = err.get('message')
+        return decline, msg
+        
+    # Check payment_intent or setup_intent last_payment_error / last_setup_error
+    for key in ['payment_intent', 'setup_intent']:
+        obj = data.get(key)
+        if isinstance(obj, dict):
+            last_err = obj.get('last_payment_error') or obj.get('last_setup_error')
+            if isinstance(last_err, dict):
+                decline = last_err.get('decline_code') or last_err.get('code') or last_err.get('type')
+                msg = last_err.get('message')
+                if decline or msg:
+                    return decline, msg
+                    
+    # Check top-level last_payment_error / last_setup_error
+    last_err = data.get('last_payment_error') or data.get('last_setup_error')
+    if isinstance(last_err, dict):
+        decline = last_err.get('decline_code') or last_err.get('code') or last_err.get('type')
+        msg = last_err.get('message')
+        if decline or msg:
+            return decline, msg
+
+    return None, None
+
 class StripeAPIHitter:
     _live_js_hash_cache = None
 
@@ -1300,17 +1332,10 @@ class StripeAPIHitter:
                         client_secret = client_secret or fallback_secret
                     is_setup_intent = bool(si) or (isinstance(intent_id, str) and 'seti' in intent_id)
                     
-                    if isinstance(pi, dict) and pi.get('last_payment_error'):
-                        err = pi.get('last_payment_error')
-                        result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
-                        result['error'] = err.get('message', 'Unknown error')
-                        result['raw_response'] = confirm_json
-                        return result
-                        
-                    if isinstance(si, dict) and si.get('last_setup_error'):
-                        err = si.get('last_setup_error')
-                        result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
-                        result['error'] = err.get('message', 'Unknown error')
+                    deep_code, deep_msg = extract_deep_decline(confirm_json)
+                    if deep_code or deep_msg:
+                        result['decline_code'] = deep_code or 'declined'
+                        result['error'] = deep_msg or 'Declined'
                         result['raw_response'] = confirm_json
                         return result
     

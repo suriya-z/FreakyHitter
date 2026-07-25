@@ -384,7 +384,11 @@ async def hit_command(message: types.Message):
                 log_entry = f"❌ <code>{card_str}</code> | {amt_val} | {code_escaped.lower()} | {res['response_time']:.2f}s"
                 
                 # Live Card Detection
-                live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin', 'withdrawal_count_limit_exceeded']
+                live_codes = [
+                    'insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin',
+                    'withdrawal_count_limit_exceeded', 'card_velocity_exceeded',
+                    'authentication_required', 'challenge_required', '3d_secure'
+                ]
                 is_live = any(c in code_escaped.lower() for c in live_codes)
                 status_label = "live" if is_live else "failed"
                 
