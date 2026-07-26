@@ -709,9 +709,9 @@ async def hitad_command(message: types.Message):
     active_sessions[user_id] = True
     
     try:
-        from adyen_hitter import AdyenAPIHitter
+        from adyen_hitter import AdyenHitter
         proxy_data = await ProxyManager.get_random(user_id)
-        adyen_engine = AdyenAPIHitter(url, proxy_data=proxy_data)
+        adyen_engine = AdyenHitter(url, proxy_data=proxy_data)
         
         results = []
         for idx, card in enumerate(cards, 1):
@@ -731,20 +731,19 @@ async def hitad_command(message: types.Message):
             time_str = f"{res.get('response_time', 0):.2f}s"
             
             if res['success']:
-                receipt_url = res.get('receipt_url')
-                receipt_line = f"\n🧾 <b>Receipt:</b> <a href='{receipt_url}'>{receipt_url}</a>" if receipt_url else ""
+                psp = res.get('psp')
+                psp_line = f"\n🔖 PSP: <code>{psp}</code>" if psp else ""
                 note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
                 hit_text = (
                     f"✅ <b>PAYMENT SUCCESSFUL [ADYEN]</b>\n"
                     f"💳 <code>{card_str}</code>\n"
                     f"🛒 Merchant: {merchant_name}\n"
                     f"⏱ {time_str}"
-                    f"{receipt_line}" + note_line
+                    f"{psp_line}" + note_line
                 )
             else:
                 reason = res.get('error') or res.get('decline_code') or 'refused'
-                live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', '3ds_required', 'challenge_required']
-                is_live = any(c in str(reason).lower() for c in live_codes)
+                is_live = res.get('is_live', False)
                 status_title = "🟢 <b>CARD LIVE [ADYEN]</b>" if is_live else "❌ <b>PAYMENT UNSUCCESSFUL [ADYEN]</b>"
                 note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
                 hit_text = (
