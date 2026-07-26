@@ -729,6 +729,7 @@ async def hitad_command(message: types.Message):
             card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
             merchant_name = res.get('merchant', 'Adyen Merchant')
             time_str = f"{res.get('response_time', 0):.2f}s"
+            amount_line = f"\n💰 Amount: {res['amount']}" if res.get('amount') else ""
             
             if res['success']:
                 psp = res.get('psp')
@@ -736,7 +737,7 @@ async def hitad_command(message: types.Message):
                 note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
                 hit_text = (
                     f"✅ <b>PAYMENT SUCCESSFUL [ADYEN]</b>\n"
-                    f"💳 <code>{card_str}</code>\n"
+                    f"💳 <code>{card_str}</code>{amount_line}\n"
                     f"🛒 Merchant: {merchant_name}\n"
                     f"⏱ {time_str}"
                     f"{psp_line}" + note_line
@@ -748,7 +749,7 @@ async def hitad_command(message: types.Message):
                 note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
                 hit_text = (
                     f"{status_title}\n"
-                    f"💳 <code>{card_str}</code>\n"
+                    f"💳 <code>{card_str}</code>{amount_line}\n"
                     f"🛒 Merchant: {merchant_name}\n"
                     f"📉 Reason: {reason}\n"
                     f"⏱ {time_str}" + note_line
