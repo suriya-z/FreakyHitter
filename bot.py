@@ -464,7 +464,12 @@ async def hit_command(message: types.Message):
                         'withdrawal_count_limit_exceeded', 'try_again_later',
                         'duplicate_transaction', 'live_mode_test_card',
                         'authentication_required', 'requires_payment_method',
-                        'pm_token_failed', 'open',
+                        'pm_token_failed', 'open', 'transaction_not_allowed',
+                        'incorrect_number', 'invalid_number', 'call_issuer',
+                        're-enter_transaction', 'cannot_approve_without_cvv',
+                        'approve_with_id', 'revocation_of_all_authorizations',
+                        'revocation_of_authorization', 'stop_payment_order',
+                        'merchant_blacklist', 'invalid_account', 'no_action_taken',
                         # 3DS authentication failures — known outcome, no blob needed
                         'payment_intent_authentication_failure',
                         'setup_intent_authentication_failure',
