@@ -717,6 +717,9 @@ async def hitad_command(message: types.Message):
         for idx, card in enumerate(cards, 1):
             if user_id not in active_sessions:
                 break
+            if status_msg:
+                try: await status_msg.edit_text(f"⏳ <b>Checking Adyen Card {idx}/{len(cards)}...</b>")
+                except: pass
             res = await adyen_engine.hit(card, idx, user_id)
             results.append(res)
             
