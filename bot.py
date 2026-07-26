@@ -87,6 +87,44 @@ bot = Bot(
 )
 
 # Global store for active sessions
+STANDARD_DECLINE_MAP = {
+    'generic_decline': 'Card Declined',
+    'card_declined': 'Card Declined',
+    'transaction_not_allowed': 'Card Declined',
+    'do_not_honor': 'Do Not Honor',
+    'insufficient_funds': 'Insufficient Funds',
+    'incorrect_cvv': 'Incorrect CVV',
+    'invalid_cvc': 'Invalid CVC',
+    'incorrect_number': 'Incorrect Card Number',
+    'invalid_number': 'Invalid Card Number',
+    'expired_card': 'Expired Card',
+    'invalid_expiry_year': 'Invalid Expiry Year',
+    'invalid_expiry_month': 'Invalid Expiry Month',
+    'stolen_card': 'Stolen Card',
+    'lost_card': 'Lost Card',
+    'pickup_card': 'Pickup Card',
+    'restricted_card': 'Restricted Card',
+    'card_not_supported': 'Card Not Supported',
+    'currency_not_supported': 'Currency Not Supported',
+    'card_velocity_exceeded': 'Card Velocity Exceeded',
+    'withdrawal_count_limit_exceeded': 'Withdrawal Limit Exceeded',
+    'authentication_required': '3DS Required',
+    'challenge_required': '3DS Challenge Required',
+    'stripe_captcha': 'Stripe Captcha',
+    'parameter_unknown': 'Parameter Unknown',
+    'incorrect_zip': 'Incorrect Zip',
+    'fraudulent': 'Fraudulent Transaction',
+    'merchant_blacklist': 'Merchant Blacklist',
+    'processing_error': 'Processing Error',
+    'try_again_later': 'Try Again Later',
+}
+
+def get_standard_reason(raw_code):
+    clean_code = str(raw_code or '').strip().lower()
+    if clean_code in STANDARD_DECLINE_MAP:
+        return STANDARD_DECLINE_MAP[clean_code]
+    return clean_code.replace('_', ' ').title() if clean_code else 'Card Declined'
+
 active_sessions = {}
 db_pool = None
 approved_users_set = set()
@@ -381,7 +419,8 @@ async def hit_command(message: types.Message):
                 else:
                     code_escaped = str(code)
                     
-                log_entry = f"❌ <code>{card_str}</code> | {amt_val} | {code_escaped.lower()} | {res['response_time']:.2f}s"
+                display_reason = get_standard_reason(code_escaped)
+                log_entry = f"❌ <code>{card_str}</code> | {amt_val} | {display_reason} | {res['response_time']:.2f}s"
                 
                 # Live Card Detection
                 live_codes = [
@@ -398,7 +437,7 @@ async def hit_command(message: types.Message):
                     f"💳 <code>{card_str}</code>\n"
                     f"💰 Amount: {amt_val}\n"
                     f"🛒 Merchant: {merchant_name}\n"
-                    f"📉 Reason: {code_escaped.lower()}\n"
+                    f"📉 Reason: {display_reason}\n"
                     f"⏱ {res['response_time']:.2f}s"
                 )
                 
