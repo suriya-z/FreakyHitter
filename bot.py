@@ -724,11 +724,15 @@ async def hitad_command(message: types.Message):
         proxy_data = await ProxyManager.get_random(user_id)
         adyen_engine = AdyenHitter(url, proxy_data=proxy_data)
         
+        if status_msg:
+            try: await status_msg.edit_text("⏳ <b>Analyzing Adyen Checkout...</b>")
+            except: pass
+        
         results = []
         for idx, card in enumerate(cards, 1):
             if user_id not in active_sessions:
                 break
-            if status_msg:
+            if status_msg and len(cards) > 1:
                 try: await status_msg.edit_text(f"⏳ <b>Checking Adyen Card {idx}/{len(cards)}...</b>")
                 except: pass
             res = await adyen_engine.hit(card, idx, user_id)
@@ -775,8 +779,11 @@ async def hitad_command(message: types.Message):
                     await asyncio.sleep(30)
                     try: await m.delete()
                     except: pass
-                asyncio.create_task(auto_del_ad(sent_msg))
-                
+    except Exception as ex:
+        if status_msg:
+            try: await status_msg.delete()
+            except: pass
+        await message.answer(f"❌ <b>Error processing Adyen check:</b>\n<code>{html.escape(str(ex))}</code>")
     finally:
         if user_id in active_sessions:
             del active_sessions[user_id]

@@ -90,7 +90,10 @@ class ChromeSession:
     async def __aenter__(self):
         try:
             from curl_cffi.requests import AsyncSession
-            session_kwargs = {"impersonate": self.impersonate}
+            session_kwargs = {
+                "impersonate": self.impersonate,
+                "timeout": self._default_timeout,
+            }
             if self.proxies:
                 session_kwargs["proxies"] = self.proxies
             self._session = AsyncSession(**session_kwargs)
