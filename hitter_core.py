@@ -1733,16 +1733,17 @@ class ConcurrentHitter:
                     await self.update_callback({"status": "error", "error": f"Stripe session inactive: {err_msg}"})
                 return False
 
-        for _ in range(3):
+        for attempt in range(1, 4):
             try:
+                if self.update_callback:
+                    await self.update_callback({"status": "analyzing", "step": f"Analyzing Stripe endpoint (Attempt {attempt}/3)..."})
+                
                 proxy_data = await ProxyManager.get_random(self.user_id)
                 proxies = None
                 if proxy_data:
                     auth = f"{proxy_data['username']}:{proxy_data['password']}@" if 'username' in proxy_data else ""
                     proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
                     proxies = {"http": proxy_url, "https": proxy_url}
-                
-                if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Fast-analyzing Stripe endpoint..."})
                 
                 async with ChromeSession(impersonate="chrome120", proxies=proxies) as s:
                     resp = await s.get(self.url, timeout=5)
@@ -1780,11 +1781,16 @@ class ConcurrentHitter:
                             if self.update_callback:
                                 await self.update_callback({"status": "error", "error": f"Stripe session inactive: {err_msg}"})
                             return False
+                    else:
+                        if self.update_callback:
+                            await self.update_callback({"status": "error", "error": "Could not extract publishable key or client secret from link."})
+                        return False
             except Exception as e:
+                print(f"DEBUG: analyze_first attempt {attempt} failed: {e}", flush=True)
                 continue
                 
         if self.update_callback:
-            await self.update_callback({"status": "error", "error": "Failed to analyze Stripe endpoint. Proxies might be dead."})
+            await self.update_callback({"status": "error", "error": "Failed to analyze Stripe endpoint. Proxies might be dead or unreachable."})
         return False
 
     async def _worker(self, queue: asyncio.Queue):

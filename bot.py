@@ -641,8 +641,19 @@ async def hit_command(message: types.Message):
     hitter = ConcurrentHitter(user_id, url, cards, update_callback=update_status)
     active_sessions[user_id] = hitter
     
-    # Run the hitter asynchronously without blocking the bot dispatcher
-    asyncio.create_task(hitter.run())
+    async def safe_run():
+        try:
+            await hitter.run()
+        except Exception as ex:
+            if status_msg:
+                try: await status_msg.delete()
+                except: pass
+            await message.answer(f"❌ <b>Error processing session:</b>\n<code>{html.escape(str(ex))}</code>")
+        finally:
+            if user_id in active_sessions:
+                del active_sessions[user_id]
+                
+    asyncio.create_task(safe_run())
 
 @dp.message(Command("hitad"))
 async def hitad_command(message: types.Message):
