@@ -810,16 +810,9 @@ class AdyenHitter:
         if 'errorCode' in data or 'message' in data:
             msg = data.get('message') or data.get('errorCode') or 'error'
             err_code = str(data.get('errorCode', 'error'))
-            
-            if err_code == '903':
-                result['decline_code'] = 'link_exhausted'
-                result['error'] = 'Single-Use Pay by Link Exhausted (Create Reusable Link)'
-                result['is_live'] = False
-                return result
-
             result['decline_code'] = err_code
-            result['error'] = str(msg)[:120]
-            if psp and err_code in ('905', '702'):
+            result['error'] = f"{msg} ({err_code})"
+            if psp and err_code in ('903', '905', '702', '140', '150'):
                 result['is_live'] = True
             return result
 
@@ -902,11 +895,6 @@ class AdyenHitter:
                     result['response_time'] = round(time.time() - t0, 2)
                     return result
 
-                if attempt > 1 and cfg.get('pbl_reusable') is False:
-                    result['error'] = "Single-Use Pay by Link Exhausted (Only 1 hit allowed — create a reusable Pay by Link)"
-                    result['decline_code'] = 'link_exhausted'
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
 
                 sid   = cfg.get('sessionId')
                 sdata = cfg.get('sessionData')
