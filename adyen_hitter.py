@@ -179,15 +179,18 @@ class AdyenHitter:
         "Refused":                  "refused",
         "Declined":                 "declined",
         "Not enough balance":       "insufficient_funds",
+        "Insufficient Funds":       "insufficient_funds",
         "Expired Card":             "expired_card",
         "Invalid Card Number":      "invalid_number",
         "CVC Declined":             "incorrect_cvc",
+        "Invalid CVC":              "incorrect_cvc",
         "Restricted Card":          "restricted_card",
         "3d-secure":                "3ds_required",
         "Blocked Card":             "blocked_card",
         "Acquirer Fraud":           "fraud",
         "Issuer Suspected Fraud":   "fraud_suspected",
         "Not Permitted":            "not_permitted",
+        "Transaction Not Permitted": "not_permitted",
         "Revocation Of Auth":       "revoked",
         "Pin validation not possible": "pin_error",
         "Referral":                 "referral",
@@ -197,6 +200,21 @@ class AdyenHitter:
         "Withdrawal amount exceeded": "limit_exceeded",
         "Issuer Unavailable":       "issuer_unavailable",
         "Not Submitted":            "not_submitted",
+    }
+
+    REFUSAL_CODE_MAP = {
+        "2": "insufficient_funds",
+        "3": "referral",
+        "5": "blocked_card",
+        "6": "expired_card",
+        "8": "invalid_number",
+        "10": "incorrect_cvc",
+        "12": "not_permitted",
+        "14": "invalid_expiry",
+        "15": "revoked",
+        "17": "declined",
+        "18": "fraud",
+        "21": "issuer_unavailable",
     }
 
     LIVE_DECLINE = {
@@ -797,12 +815,12 @@ class AdyenHitter:
             return result
 
         # ── refused ──
-        if rc == 'Refused' or 'refusalReason' in data:
+        if rc == 'Refused' or 'refusalReason' in data or 'refusalReasonCode' in data:
             reason = data.get('refusalReason', 'Refused')
-            mapped = self.DECLINE_MAP.get(reason,
-                        reason.lower().replace(' ', '_') if reason else 'refused')
+            rcode = str(data.get('refusalReasonCode', ''))
+            mapped = self.REFUSAL_CODE_MAP.get(rcode) or self.DECLINE_MAP.get(reason, reason.lower().replace(' ', '_') if reason else 'refused')
             result['decline_code'] = mapped
-            result['error'] = reason
+            result['error'] = f"{reason} ({rcode})" if rcode else reason
             result['is_live'] = mapped in self.LIVE_DECLINE
             return result
 
