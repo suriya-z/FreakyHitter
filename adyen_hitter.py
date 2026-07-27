@@ -265,6 +265,7 @@ class AdyenHitter:
                     out['amount_currency'] = amt.get('currency')
                 out['pbl_status']    = pl.get('status')
                 out['pbl_reference'] = pl.get('reference')
+                out['pbl_reusable']  = pl.get('reusable', True)
                 out['countryCode']   = pl.get('countryCode')
                 out['returnUrl']     = pl.get('returnUrl')
                 out['shopperLocale'] = pl.get('shopperLocale')
@@ -809,10 +810,16 @@ class AdyenHitter:
         if 'errorCode' in data or 'message' in data:
             msg = data.get('message') or data.get('errorCode') or 'error'
             err_code = str(data.get('errorCode', 'error'))
+            
+            if err_code == '903':
+                result['decline_code'] = 'link_exhausted'
+                result['error'] = 'Single-Use Pay by Link Exhausted (Create Reusable Link)'
+                result['is_live'] = False
+                return result
+
             result['decline_code'] = err_code
             result['error'] = str(msg)[:120]
-            # Adyen internal error 903 with pspReference indicates live gateway reach
-            if psp and err_code in ('903', '905', '702'):
+            if psp and err_code in ('905', '702'):
                 result['is_live'] = True
             return result
 
@@ -842,7 +849,7 @@ class AdyenHitter:
 
         try:
             async with ChromeSession(impersonate="chrome131",
-                                     proxies=proxies, timeout=15) as sess:
+                                     proxies=proxies, timeout=7) as sess:
 
                 # ── 1. scrape config ────────────────────────────────────────
                 cfg = await self._scrape(sess)
@@ -892,6 +899,12 @@ class AdyenHitter:
                 if cfg.get('pbl_status') and cfg['pbl_status'] != 'active':
                     result['error'] = f"Pay by Link is {cfg['pbl_status']}"
                     result['decline_code'] = 'link_' + cfg['pbl_status']
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
+                if attempt > 1 and cfg.get('pbl_reusable') is False:
+                    result['error'] = "Single-Use Pay by Link Exhausted (Only 1 hit allowed — create a reusable Pay by Link)"
+                    result['decline_code'] = 'link_exhausted'
                     result['response_time'] = round(time.time() - t0, 2)
                     return result
 
