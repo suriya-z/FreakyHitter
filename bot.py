@@ -753,7 +753,19 @@ async def hitad_command(message: types.Message):
 
             rec_url = res.get('receipt_url') or res.get('redirect_url') or res.get('3ds_url')
             rec_escaped = html.escape(rec_url) if rec_url else ""
-            receipt_line = f"\n🧾 Receipt/3DS: <a href='{rec_escaped}'>{rec_escaped}</a>" if rec_escaped else ""
+            receipt_line = f"\n🧾 Receipt/3DS: <a href='{rec_escaped}'>{rec_escaped[:60]}{'…' if rec_url and len(rec_url)>60 else ''}</a>" if rec_escaped else ""
+
+            # 3DS bypass status
+            tds_line = ""
+            if res.get('3ds_attempted'):
+                tds_type = res.get('3ds_type', '3DS')
+                if res.get('3ds_resolved') and res.get('success'):
+                    tds_line = f"\n🔓 3DS: <b>BYPASSED</b> ({tds_type} → Authorised)"
+                elif res.get('3ds_resolved'):
+                    tds_line = f"\n🔐 3DS: Resolved ({tds_type}) → {res.get('decline_code', 'unknown')}"
+                else:
+                    tds_line = f"\n🔒 3DS: {tds_type} (requires OTP/biometric)"
+
             note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
             
             if res['success']:
@@ -763,6 +775,7 @@ async def hitad_command(message: types.Message):
                     f"🛒 Merchant: {merchant_name}\n"
                     f"⏱ {time_str}"
                     f"{psp_line}"
+                    f"{tds_line}"
                     f"{receipt_line}" + note_line
                 )
             else:
@@ -776,6 +789,7 @@ async def hitad_command(message: types.Message):
                     f"📉 Reason: {reason}\n"
                     f"⏱ {time_str}"
                     f"{psp_line}"
+                    f"{tds_line}"
                     f"{receipt_line}" + note_line
                 )
                 
