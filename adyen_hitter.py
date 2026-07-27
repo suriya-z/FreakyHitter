@@ -18,10 +18,14 @@ from typing import Dict, Optional, List
 from curl_compat import ChromeSession
 
 # ── crypto backend ──────────────────────────────────────────────────────────
-from cryptography.hazmat.primitives.ciphers.aead import AESCCM
-from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
-from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
-from cryptography.hazmat.backends import default_backend
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESCCM
+    from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
+    from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
+    from cryptography.hazmat.backends import default_backend
+    _HAS_CRYPTOGRAPHY = True
+except ImportError:
+    _HAS_CRYPTOGRAPHY = False
 
 CSE_PREFIX = "adyenjs_0_1_25"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -39,8 +43,23 @@ class AdyenCSE:
             raise ValueError(f"Bad pubkey format (expected exp|mod): {public_key_str[:30]}")
         self._exp = int(parts[0], 16)
         self._mod = int(parts[1], 16)
-        nums = RSAPublicNumbers(self._exp, self._mod)
-        self._pub = nums.public_key(default_backend())
+        if _HAS_CRYPTOGRAPHY:
+            nums = RSAPublicNumbers(self._exp, self._mod)
+            self._pub = nums.public_key(default_backend())
+        else:
+            self._pub = None
+
+    def _rsa_encrypt_fallback(self, message: bytes) -> bytes:
+        # PKCS#1 v1.5 padding: 0x00 || 0x02 || PS || 0x00 || M
+        key_len = (self._mod.bit_length() + 7) // 8
+        ps_len = key_len - len(message) - 3
+        if ps_len < 8:
+            raise ValueError("Message too long for RSA key")
+        ps = bytes([b for b in os.urandom(ps_len + 16) if b != 0][:ps_len])
+        em = b"\x00\x02" + ps + b"\x00" + message
+        m_int = int.from_bytes(em, "big")
+        c_int = pow(m_int, self._exp, self._mod)
+        return c_int.to_bytes(key_len, "big")
 
     def _encrypt_field(self, field_name: str, field_value: str) -> str:
         gen = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -49,10 +68,22 @@ class AdyenCSE:
 
         aes_key = os.urandom(32)        # 256-bit
         nonce   = os.urandom(12)         # 96-bit
-        ct_tag  = AESCCM(aes_key, tag_length=8).encrypt(nonce, plain_b, None)
 
-        enc_key = self._pub.encrypt(aes_key, PKCS1v15())
-        blob    = enc_key + nonce + ct_tag
+        if _HAS_CRYPTOGRAPHY:
+            ct_tag  = AESCCM(aes_key, tag_length=8).encrypt(nonce, plain_b, None)
+            enc_key = self._pub.encrypt(aes_key, PKCS1v15())
+        else:
+            # Import pure Python pycryptodome or fallback cryptography
+            try:
+                from Crypto.Cipher import AES
+                cipher = AES.new(aes_key, AES.MODE_CCM, nonce=nonce, mac_len=8)
+                ct, tag = cipher.encrypt_and_digest(plain_b)
+                ct_tag = ct + tag
+            except ImportError:
+                raise ImportError("Please install cryptography (`pip install cryptography`) to run Adyen CSE encryption.")
+            enc_key = self._rsa_encrypt_fallback(aes_key)
+
+        blob = enc_key + nonce + ct_tag
         return f"{CSE_PREFIX}${base64.b64encode(blob).decode()}"
 
     def encrypt_card(self, number: str, month: str, year: str, cvv: str) -> dict:

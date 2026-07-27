@@ -6,3 +6,4 @@ asyncpg==0.31.0
 numpy
 scipy
 curl_cffi
+cryptography
