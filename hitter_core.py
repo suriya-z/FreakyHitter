@@ -1897,8 +1897,15 @@ class ConcurrentHitter:
                     return
                 
                 self.completed += 1
-                if result['success']:
-                    self.successes += 1
+                reason_lower = str(result.get('error') or result.get('decline_code') or '').lower()
+                is_expired = any(k in reason_lower for k in ['exhausted', 'session_expired', 'link_expired', 'single-use', 'already_paid', 'session_complete', 'pay by link exhausted'])
+
+                if result['success'] or is_expired:
+                    if is_expired:
+                        result['session_expired'] = True
+                    self.successes += (1 if result['success'] else 0)
+                    if not result['success']:
+                        self.fails += 1
                     self.is_running = False
                     
                     # Cancel all other workers immediately to stop them

