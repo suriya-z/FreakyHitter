@@ -748,29 +748,35 @@ async def hitad_command(message: types.Message):
             merchant_name = res.get('merchant', 'Adyen Merchant')
             time_str = f"{res.get('response_time', 0):.2f}s"
             amount_line = f"\n💰 Amount: {res['amount']}" if res.get('amount') else ""
+            psp = res.get('psp')
+            psp_line = f"\n🔖 PSP: <code>{psp}</code>" if psp else ""
+
+            rec_url = res.get('receipt_url') or res.get('redirect_url') or res.get('3ds_url')
+            rec_escaped = html.escape(rec_url) if rec_url else ""
+            receipt_line = f"\n🧾 Receipt/3DS: <a href='{rec_escaped}'>{rec_escaped}</a>" if rec_escaped else ""
+            note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
             
             if res['success']:
-                psp = res.get('psp')
-                psp_line = f"\n🔖 PSP: <code>{psp}</code>" if psp else ""
-                note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
                 hit_text = (
                     f"✅ <b>PAYMENT SUCCESSFUL [ADYEN]</b>\n"
                     f"💳 <code>{card_str}</code>{amount_line}\n"
                     f"🛒 Merchant: {merchant_name}\n"
                     f"⏱ {time_str}"
-                    f"{psp_line}" + note_line
+                    f"{psp_line}"
+                    f"{receipt_line}" + note_line
                 )
             else:
                 reason = res.get('error') or res.get('decline_code') or 'refused'
                 is_live = res.get('is_live', False)
                 status_title = "🟢 <b>CARD LIVE [ADYEN]</b>" if is_live else "❌ <b>PAYMENT UNSUCCESSFUL [ADYEN]</b>"
-                note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
                 hit_text = (
                     f"{status_title}\n"
                     f"💳 <code>{card_str}</code>{amount_line}\n"
                     f"🛒 Merchant: {merchant_name}\n"
                     f"📉 Reason: {reason}\n"
-                    f"⏱ {time_str}" + note_line
+                    f"⏱ {time_str}"
+                    f"{psp_line}"
+                    f"{receipt_line}" + note_line
                 )
                 
             sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
