@@ -1371,15 +1371,13 @@ class StripeAPIHitter:
                             if proxies:
                                 session.proxies = proxies
 
-                            if res.get("status") in ["requires_action", "requires_source_action"] or confirm_json.get("object") == "checkout.session":
-                                next_action = res.get("next_action") or confirm_json.get("next_action") or {}
-                                if isinstance(res.get('payment_intent'), dict) and res['payment_intent'].get('next_action'):
-                                    next_action = res['payment_intent']['next_action']
-                                sdk = next_action.get("use_stripe_sdk", {}) or {}
+                            if res.get("status") in ["requires_action", "requires_source_action"]:
+                                next_action = res.get("next_action", {})
+                                sdk = next_action.get("use_stripe_sdk", {})
                                 captcha_triggered = False
                                 
                                 stripe_js = sdk.get('stripe_js') or {}
-                                if isinstance(stripe_js, dict) and ('rqdata' in stripe_js or 'captcha_site_key' in stripe_js):
+                                if isinstance(stripe_js, dict) and 'rqdata' in stripe_js:
                                     captcha_triggered = True
                                     rq_source = stripe_js.get('source') or stripe_js.get('three_d_secure_2_source')
                                     if rq_source:
@@ -1390,7 +1388,6 @@ class StripeAPIHitter:
                                     or sdk.get("source")
                                     or sdk.get("_rq_source_override")
                                     or next_action.get("source")
-                                    or (isinstance(confirm_json.get('payment_intent'), dict) and confirm_json['payment_intent'].get('next_action', {}).get('use_stripe_sdk', {}).get('three_d_secure_2_source'))
                                 )
 
                                 # If CAPTCHA triggered and no source found, re-confirm with fresh 3DS path

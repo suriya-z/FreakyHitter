@@ -33,7 +33,7 @@ class StripeCaptchaBypasser:
             sdk = next_action.get('use_stripe_sdk') or {}
             if isinstance(sdk, dict):
                 stripe_js = sdk.get('stripe_js') or {}
-                if isinstance(stripe_js, dict) and ('rqdata' in stripe_js or 'captcha_site_key' in stripe_js):
+                if isinstance(stripe_js, dict) and 'rqdata' in stripe_js:
                     return True
 
         err = raw.get('error') or {}
