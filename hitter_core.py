@@ -1547,10 +1547,6 @@ class StripeAPIHitter:
                                     err = poll_json.get('last_payment_error') or poll_json.get('error') or {}
                                     if isinstance(err, dict) and err.get('message'):
                                         result['decline_code'] = err.get('decline_code', err.get('code', status_2))
-                                        result['error'] = err.get('message', 'Unknown error')
-                                    elif captcha_triggered:
-                                        result['decline_code'] = 'stripe_captcha_bypass_failed'
-                                        result['error'] = 'Stripe Captcha Challenge Required (rqdata)'
                                     else:
                                         result['decline_code'] = status_2 or '3ds_unknown'
                                         result['error'] = f"3ds_challenge_unresolved"
