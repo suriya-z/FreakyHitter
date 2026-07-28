@@ -49,21 +49,26 @@ class StripeCaptchaBypasser:
         if not isinstance(raw, dict):
             return None
 
-        pi = raw.get('payment_intent') or raw.get('setup_intent') or raw
-        if not isinstance(pi, dict):
-            return None
+        candidates = [raw]
+        for key in ('payment_intent', 'setup_intent', 'session'):
+            if isinstance(raw.get(key), dict):
+                candidates.append(raw[key])
 
-        next_action = pi.get('next_action') or {}
-        if isinstance(next_action, dict):
-            sdk = next_action.get('use_stripe_sdk') or {}
-            if isinstance(sdk, dict):
-                stripe_js = sdk.get('stripe_js') or {}
-                if isinstance(stripe_js, dict):
-                    return {
-                        'rqdata': stripe_js.get('rqdata'),
-                        'sitekey': stripe_js.get('captcha_site_key') or STRIPE_HCAPTCHA_SITEKEY,
-                        'source': stripe_js.get('source') or stripe_js.get('three_d_secure_2_source')
-                    }
+        for target in candidates:
+            next_action = target.get('next_action') or {}
+            if isinstance(next_action, dict):
+                sdk = next_action.get('use_stripe_sdk') or {}
+                if isinstance(sdk, dict):
+                    stripe_js = sdk.get('stripe_js') or {}
+                    if isinstance(stripe_js, dict):
+                        rqdata = stripe_js.get('rqdata')
+                        source = stripe_js.get('source') or stripe_js.get('three_d_secure_2_source') or sdk.get('three_d_secure_2_source') or sdk.get('source')
+                        if rqdata or source:
+                            return {
+                                'rqdata': rqdata,
+                                'sitekey': stripe_js.get('captcha_site_key') or STRIPE_HCAPTCHA_SITEKEY,
+                                'source': source
+                            }
         return None
 
     @classmethod
