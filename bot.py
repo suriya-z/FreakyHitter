@@ -388,7 +388,17 @@ async def hit_command(message: types.Message):
                     live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin', 'withdrawal_count_limit_exceeded', 'card_velocity_exceeded', 'authentication_required', 'challenge_required', '3d_secure']
                     is_live = any(c in code_raw for c in live_codes)
                     status_title = "🟢 <b>CARD LIVE [STRIPE]</b>" if is_live else "❌ <b>PAYMENT UNSUCCESSFUL</b>"
-                    reason_msg = html.escape(str(res.get('error') or code_raw)[:250])
+                    
+                    err_str = str(res.get('error') or '').strip()
+                    decline_code = str(res.get('decline_code') or '').strip()
+                    if 'raw:' in err_str or '{"' in err_str or 'rqdata_captcha' in err_str:
+                        reason_msg = html.escape(decline_code.lower()) if decline_code and decline_code not in ('unknown', 'exception') else "stripe_captcha_bypass_failed"
+                    elif decline_code and decline_code not in ('unknown', 'exception', 'declined', 'failed'):
+                        reason_msg = html.escape(decline_code.lower())
+                    elif err_str:
+                        reason_msg = html.escape(err_str[:150])
+                    else:
+                        reason_msg = "card_declined"
 
                     hit_text = (
                         f"{status_title}\n"
