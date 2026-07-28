@@ -328,24 +328,6 @@ async def hit_command(message: types.Message):
             
         elif data["status"] == "progress":
             res = data["result"]
-            
-            # Attempt Stripe Captcha Bypass if hCaptcha / rqdata detected
-            from stripe_captcha_bypasser import StripeCaptchaBypasser
-            if not res.get('success') and StripeCaptchaBypasser.is_captcha_triggered(res):
-                try:
-                    px_data = await ProxyManager.get_random(user_id)
-                    res = await StripeCaptchaBypasser.bypass_captcha(res, proxy_data=px_data)
-                except Exception:
-                    pass
-
-            # Attempt Stripe 3DS Auto-Bypass if 3DS / authentication_required detected
-            if not res.get('success') and (res.get('decline_code') in ('authentication_required', '3d_secure', 'challenge_required') or res.get('status') == 'requires_action' or (isinstance(res.get('raw_response'), dict) and res.get('raw_response', {}).get('status') == 'requires_action')):
-                try:
-                    from stripe_3ds_bypasser import Stripe3DSBypasser
-                    px_data = await ProxyManager.get_random(user_id)
-                    res = await Stripe3DSBypasser.resolve_3ds(res, proxy_data=px_data)
-                except Exception:
-                    pass
 
             card_obj = res.get('card', {})
             card_str = f"{card_obj.get('card')}|{card_obj.get('month')}|{card_obj.get('year')}|{card_obj.get('cvv')}"

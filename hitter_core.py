@@ -1332,10 +1332,17 @@ class StripeAPIHitter:
                         client_secret = client_secret or fallback_secret
                     is_setup_intent = bool(si) or (isinstance(intent_id, str) and 'seti' in intent_id)
                     
-                    deep_code, deep_msg = extract_deep_decline(confirm_json)
-                    if deep_code or deep_msg:
-                        result['decline_code'] = deep_code or 'declined'
-                        result['error'] = deep_msg or 'Declined'
+                    if isinstance(pi, dict) and pi.get('last_payment_error'):
+                        err = pi.get('last_payment_error')
+                        result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
+                        result['error'] = err.get('message', 'Unknown error')
+                        result['raw_response'] = confirm_json
+                        return result
+                        
+                    if isinstance(si, dict) and si.get('last_setup_error'):
+                        err = si.get('last_setup_error')
+                        result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
+                        result['error'] = err.get('message', 'Unknown error')
                         result['raw_response'] = confirm_json
                         return result
     
