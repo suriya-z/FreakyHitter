@@ -907,15 +907,16 @@ class AdyenHitter:
                     return result
 
                 # ── 4. submit ───────────────────────────────────────────────
-                if cfg.get('pbl_status') and cfg['pbl_status'] != 'active':
-                    result['error'] = f"Pay by Link is {cfg['pbl_status']}"
-                    result['decline_code'] = 'link_' + cfg['pbl_status']
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-
                 sid   = cfg.get('sessionId')
                 sdata = cfg.get('sessionData')
+                result['pbl_reusable'] = cfg.get('pbl_reusable', True)
+
+                # Only block if sessionId and sessionData could not be generated AND link is explicitly inactive
+                if (not sid or not sdata) and cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
+                    result['error'] = f"Pay by Link is {cfg['pbl_status']}"
+                    result['decline_code'] = 'link_' + str(cfg['pbl_status']).lower()
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
 
                 if sid and sdata:
                     data = await self._pay_session(
