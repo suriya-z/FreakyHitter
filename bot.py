@@ -1038,6 +1038,124 @@ async def process_rm_weak(callback: types.CallbackQuery):
     await callback.answer("Proxies removed successfully!")
 
 
+@dp.message(Command("getproxy", "scrapeproxy"))
+async def getproxy_command(message: types.Message):
+    user_id = message.from_user.id
+    
+    # Parse target count limit e.g. /getproxy 10 (default 10, max 50)
+    command_parts = message.text.split(maxsplit=1)
+    target_limit = 10
+    if len(command_parts) > 1 and command_parts[1].strip().isdigit():
+        target_limit = min(max(int(command_parts[1].strip()), 1), 50)
+        
+    status_msg = await message.answer(
+        f"⚡ <b>ATOZ Proxy Scraper & Checker</b>\n"
+        f"<code>Querying 20+ public repositories for active live proxies...</code>"
+    )
+    
+    async def update_cb(text: str):
+        try:
+            await status_msg.edit_text(text)
+        except Exception:
+            pass
+            
+    try:
+        from proxy_scraper import fetch_and_test_live_proxies
+        live_proxies = await fetch_and_test_live_proxies(target_limit=target_limit, timeout=4.0, update_cb=update_cb)
+    except Exception as e:
+        await status_msg.edit_text(f"❌ <b>Proxy Scrape Error</b>\n<code>{str(e)}</code>")
+        return
+        
+    if not live_proxies:
+        await status_msg.edit_text(
+            "⚠️ <b>Proxy Scrape Complete</b>\n"
+            "<code>No responsive public proxies found. Try running again in a few moments.</code>"
+        )
+        return
+        
+    if not hasattr(bot, 'getproxy_cache'):
+        bot.getproxy_cache = {}
+        
+    bot.getproxy_cache[user_id] = live_proxies
+    
+    lines = [f"🌐 <b>LIVE PROXIES FOUND ({len(live_proxies)})</b>\n"]
+    for p in live_proxies:
+        lines.append(f"{p['flag']} <code>{p['raw']}</code> | {p['country']} | ⚡ <b>{p['ping_ms']}ms</b>")
+        
+    lines.append("\n👉 <i>Click below to save these active proxies to your pool:</i>")
+    msg_text = "\n".join(lines)
+    
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"➕ Add All Live ({len(live_proxies)}) to Pool", callback_data="add_scraped_all")],
+        [InlineKeyboardButton(text="⚡ Add Fast IPs Only (< 2s)", callback_data="add_scraped_fast")]
+    ])
+    
+    try:
+        await status_msg.edit_text(msg_text, reply_markup=markup)
+    except Exception:
+        await message.answer(msg_text, reply_markup=markup)
+
+
+@dp.callback_query(F.data == "add_scraped_all")
+async def process_add_scraped_all(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    cache = getattr(bot, 'getproxy_cache', {}).get(user_id, [])
+    if not cache:
+        await callback.answer("Scraped proxy session expired. Run /getproxy again.", show_alert=True)
+        return
+        
+    pool = await ProxyManager.get_user_proxies(user_id)
+    existing_raws = {p['raw'] for p in pool}
+    added = 0
+    for p in cache:
+        raw_p = p['raw']
+        if raw_p not in existing_raws:
+            parts = raw_p.split(':')
+            pool.append({"raw": raw_p, "server": f"http://{parts[0]}:{parts[1]}"})
+            added += 1
+            
+    if added > 0:
+        await ProxyManager.save_user_proxies(user_id, pool)
+        
+    bot.getproxy_cache[user_id] = []
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.reply(f"✅ <b>Added {added} live scraped proxies to your active pool!</b>")
+    await callback.answer(f"Added {added} proxies!")
+
+
+@dp.callback_query(F.data == "add_scraped_fast")
+async def process_add_scraped_fast(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    cache = getattr(bot, 'getproxy_cache', {}).get(user_id, [])
+    if not cache:
+        await callback.answer("Scraped proxy session expired. Run /getproxy again.", show_alert=True)
+        return
+        
+    fast_proxies = [p for p in cache if p['ping_ms'] <= 2000]
+    if not fast_proxies:
+        await callback.answer("No fast proxies (< 2s) in current batch.", show_alert=True)
+        return
+        
+    pool = await ProxyManager.get_user_proxies(user_id)
+    existing_raws = {p['raw'] for p in pool}
+    added = 0
+    for p in fast_proxies:
+        raw_p = p['raw']
+        if raw_p not in existing_raws:
+            parts = raw_p.split(':')
+            pool.append({"raw": raw_p, "server": f"http://{parts[0]}:{parts[1]}"})
+            added += 1
+            
+    if added > 0:
+        await ProxyManager.save_user_proxies(user_id, pool)
+        
+    bot.getproxy_cache[user_id] = []
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.reply(f"⚡ <b>Added {added} fast proxies (< 2s) to your active pool!</b>")
+    await callback.answer(f"Added {added} fast proxies!")
+
+
 @dp.callback_query(F.data == "show_commands")
 async def process_show_commands(callback: types.CallbackQuery):
     commands_text = (
@@ -1049,6 +1167,8 @@ async def process_show_commands(callback: types.CallbackQuery):
         "└ <i>Hits 1 to 10 cards against Adyen gateway checkout.</i>\n\n"
         "🎲 <b>/hit</b> <code>[url] [bin_pattern] [count]</code>\n"
         "└ <i>Generates BIN cards and hits concurrently.</i>\n\n"
+        "🚀 <b>/getproxy</b> <code>[count]</code>\n"
+        "└ <i>Scrapes 20+ sources & imports live fast proxies.</i>\n\n"
         "🌐 <b>/proxy</b> <code>[ip:port:user:pass]</code>\n"
         "└ <i>Imports and validates new proxy pool.</i>\n\n"
         "🧹 <b>/proxy</b>\n"

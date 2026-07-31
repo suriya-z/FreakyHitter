@@ -1,0 +1,224 @@
+import asyncio
+import re
+import time
+import random
+import httpx
+from bs4 import BeautifulSoup
+from typing import List, Dict, Optional, Callable
+
+# ==================== SCRAPER SOURCES ====================
+
+class Scraper:
+    def __init__(self, method: str, _url: str):
+        self.method = method
+        self._url = _url
+
+    def get_url(self, **kwargs) -> str:
+        return self._url.format(**kwargs, method=self.method)
+
+    async def get_response(self, client: httpx.AsyncClient):
+        return await client.get(self.get_url(), timeout=8.0)
+
+    async def handle(self, response) -> str:
+        return response.text
+
+    async def scrape(self, client: httpx.AsyncClient) -> List[str]:
+        try:
+            response = await self.get_response(client)
+            proxies_text = await self.handle(response)
+            pattern = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}:(?:\d{1,5})")
+            return re.findall(pattern, proxies_text)
+        except Exception:
+            return []
+
+class SpysMeScraper(Scraper):
+    def __init__(self, method: str):
+        super().__init__(method, "https://spys.me/{mode}.txt")
+
+    def get_url(self, **kwargs) -> str:
+        mode = "proxy" if self.method == "http" else "socks"
+        return super().get_url(mode=mode, **kwargs)
+
+class ProxyScrapeScraper(Scraper):
+    def __init__(self, method: str, timeout: int = 2000, country: str = "All"):
+        self.timeout = timeout
+        self.country = country
+        super().__init__(method,
+                         "https://api.proxyscrape.com/?request=getproxies"
+                         "&proxytype={method}"
+                         "&timeout={timeout}"
+                         "&country={country}")
+
+    def get_url(self, **kwargs) -> str:
+        return super().get_url(timeout=self.timeout, country=self.country, **kwargs)
+
+class GeoNodeScraper(Scraper):
+    def __init__(self, method: str, limit: str = "300", page: str = "1"):
+        self.limit = limit
+        self.page = page
+        super().__init__(method,
+                         "https://proxylist.geonode.com/api/proxy-list?"
+                         "limit={limit}&page={page}&sort_by=lastChecked&sort_type=desc")
+
+    def get_url(self, **kwargs) -> str:
+        return super().get_url(limit=self.limit, page=self.page, **kwargs)
+
+class ProxyListDownloadScraper(Scraper):
+    def __init__(self, method: str, anon: str = "elite"):
+        self.anon = anon
+        super().__init__(method, "https://www.proxy-list.download/api/v1/get?type={method}&anon={anon}")
+
+    def get_url(self, **kwargs) -> str:
+        return super().get_url(anon=self.anon, **kwargs)
+
+class GeneralTableScraper(Scraper):
+    async def handle(self, response) -> str:
+        soup = BeautifulSoup(response.text, "html.parser")
+        proxies = set()
+        table = soup.find("table", attrs={"class": "table table-striped table-bordered"})
+        if table:
+            for row in table.find_all("tr"):
+                count = 0
+                proxy = ""
+                for cell in row.find_all("td"):
+                    if count == 1:
+                        proxy += ":" + cell.text.replace("&nbsp;", "").strip()
+                        proxies.add(proxy)
+                        break
+                    proxy += cell.text.replace("&nbsp;", "").strip()
+                    count += 1
+        return "\n".join(proxies)
+
+class GitHubScraper(Scraper):
+    async def handle(self, response) -> str:
+        lines = response.text.split("\n")
+        proxies = set()
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            if "://" in line:
+                proxies.add(line.split("://")[-1])
+            else:
+                proxies.add(line)
+        return "\n".join(proxies)
+
+SCRAPERS = [
+    SpysMeScraper("http"),
+    SpysMeScraper("socks"),
+    ProxyScrapeScraper("http"),
+    ProxyScrapeScraper("socks4"),
+    ProxyScrapeScraper("socks5"),
+    GeoNodeScraper("socks"),
+    ProxyListDownloadScraper("https", "elite"),
+    ProxyListDownloadScraper("http", "elite"),
+    ProxyListDownloadScraper("http", "transparent"),
+    ProxyListDownloadScraper("http", "anonymous"),
+    GeneralTableScraper("https", "http://sslproxies.org"),
+    GeneralTableScraper("http", "http://free-proxy-list.net"),
+    GeneralTableScraper("http", "http://us-proxy.org"),
+    GeneralTableScraper("socks", "http://socks-proxy.net"),
+    GitHubScraper("http", "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt"),
+    GitHubScraper("socks4", "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt"),
+    GitHubScraper("socks5", "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt"),
+    GitHubScraper("http", "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"),
+    GitHubScraper("socks", "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"),
+    GitHubScraper("https", "https://raw.githubusercontent.com/zloi-user/hideip.me/main/https.txt"),
+    GitHubScraper("http", "https://raw.githubusercontent.com/zloi-user/hideip.me/main/http.txt"),
+    GitHubScraper("socks4", "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks4.txt"),
+    GitHubScraper("socks5", "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks5.txt"),
+]
+
+def get_country_flag(country_code: str) -> str:
+    if not country_code or len(country_code) != 2:
+        return "🌐"
+    country_code = country_code.upper()
+    return chr(127397 + ord(country_code[0])) + chr(127397 + ord(country_code[1]))
+
+# ==================== CHECKER & ENGINE ====================
+
+async def check_single_proxy(proxy_str: str, timeout: float = 4.0) -> Optional[Dict]:
+    """Tests a single IP:PORT proxy against ip-api.com to verify connectivity & latency."""
+    proxy_url = f"http://{proxy_str}"
+    ip_parts = proxy_str.split(':')
+    proxy_ip = ip_parts[0]
+    
+    start_time = time.time()
+    try:
+        async with httpx.AsyncClient(proxy=proxy_url, timeout=timeout, follow_redirects=True) as client:
+            resp = await client.get(f"http://ip-api.com/json/{proxy_ip}?fields=status,country,countryCode,org")
+            ping_ms = int((time.time() - start_time) * 1000)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                country = data.get('country', 'Unknown')
+                code = data.get('countryCode', '')
+                flag = get_country_flag(code)
+                return {
+                    'raw': proxy_str,
+                    'server': proxy_url,
+                    'ip': proxy_ip,
+                    'port': ip_parts[1] if len(ip_parts) > 1 else '80',
+                    'country': country,
+                    'country_code': code,
+                    'flag': flag,
+                    'ping_ms': ping_ms
+                }
+    except Exception:
+        pass
+    return None
+
+async def fetch_and_test_live_proxies(target_limit: int = 15, timeout: float = 4.0, update_cb: Optional[Callable] = None) -> List[Dict]:
+    """Scrapes 20+ sources and concurrently tests proxies until target_limit live working proxies are found."""
+    if update_cb:
+        await update_cb(f"🔍 <b>Scraping proxy sources...</b>\n<code>Querying 20+ public proxy repositories</code>")
+
+    all_scraped = set()
+    async with httpx.AsyncClient(follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as client:
+        async def run_scraper(s: Scraper):
+            try:
+                items = await s.scrape(client)
+                for item in items:
+                    if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}:\d{1,5}$", item):
+                        all_scraped.add(item)
+            except Exception:
+                pass
+
+        await asyncio.gather(*[run_scraper(s) for s in SCRAPERS])
+
+    scraped_list = list(all_scraped)
+    random.shuffle(scraped_list)
+    
+    if update_cb:
+        await update_cb(f"⚡ <b>Validating Proxies...</b>\n<code>Scraped {len(scraped_list)} unique IPs. Testing live connection...</code>")
+
+    live_proxies = []
+    stop_event = asyncio.Event()
+    semaphore = asyncio.Semaphore(50)
+
+    async def worker(p_str: str):
+        if stop_event.is_set():
+            return
+        async with semaphore:
+            if stop_event.is_set():
+                return
+            res = await check_single_proxy(p_str, timeout=timeout)
+            if res:
+                live_proxies.append(res)
+                if len(live_proxies) >= target_limit:
+                    stop_event.set()
+
+    tasks = [asyncio.create_task(worker(p)) for p in scraped_list[:600]]
+    
+    while tasks and not stop_event.is_set():
+        done, tasks = await asyncio.wait(tasks, timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
+        if len(live_proxies) >= target_limit:
+            stop_event.set()
+            break
+            
+    for t in tasks:
+        if not t.done():
+            t.cancel()
+
+    live_proxies.sort(key=lambda x: x['ping_ms'])
+    return live_proxies
