@@ -323,7 +323,7 @@ async def hit_command(message: types.Message):
             site_domain = extract_clean_site_domain(merchant_name, url)
             site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
             amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
-            msg_text = f"<b>Stripe Checkout Hitter</b>\n\n<i>cooking....</i>\n\n{site_line}{amt_line}"
+            msg_text = f"<b>Stripe Checkout Hitter</b>\n\n{site_line}{amt_line}"
             try: await status_msg.edit_text(msg_text, disable_web_page_preview=True)
             except Exception: pass
             
