@@ -1563,6 +1563,8 @@ class StripeAPIHitter:
                                         "origin": "https://js.stripe.com",
                                         "referer": "https://js.stripe.com/"
                                     }
+                                    if self.stripe_account:
+                                        poll_headers["Stripe-Account"] = self.stripe_account
                                     poll_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.get(
                                         poll_url, headers=poll_headers, proxies=proxies,
                                         timeout=30, impersonate="chrome120"))
