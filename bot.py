@@ -206,7 +206,11 @@ def is_session_expired_err(res: dict) -> bool:
     if res.get('pbl_reusable') is True:
         return False
     reason = str(res.get('error') or res.get('decline_code') or '').lower()
-    return any(k in reason for k in ['single-use link exhausted', 'checkout_session_expired', 'pay by link exhausted'])
+    raw_resp = str(res.get('raw_response') or '').lower()
+    return any(k in reason or k in raw_resp for k in [
+        'single-use link exhausted', 'checkout_session_expired', 'pay by link exhausted',
+        'resource_missing', 'no such payment_intent', 'no such checkout.session'
+    ])
 
 def parse_cards_input(payload_tokens: list, raw_payload: str):
     """
