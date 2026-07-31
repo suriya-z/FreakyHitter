@@ -324,9 +324,8 @@ async def hit_command(message: types.Message):
             site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
             amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
             msg_text = f"<b>Stripe Checkout Hitter</b>\n\n<i>cooking....</i>\n\n{site_line}{amt_line}"
-            if len(cards) > 1:
-                try: await status_msg.edit_text(msg_text, disable_web_page_preview=True)
-                except Exception: pass
+            try: await status_msg.edit_text(msg_text, disable_web_page_preview=True)
+            except Exception: pass
             
         elif data["status"] == "progress":
             res = data["result"]
@@ -438,8 +437,21 @@ async def hit_command(message: types.Message):
                     pass
                 
         elif data["status"] in ("completed", "error"):
+            if data["status"] == "error":
+                err_msg = data.get("error", "Failed to process session.")
+                site_domain = extract_clean_site_domain(merchant_name, url)
+                site_line = f"\n\nSite: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"\n\nSite: {html.escape(merchant_name)}"
+                amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
+                try:
+                    await status_msg.edit_text(
+                        f"❌ <b>Error processing check:</b>\n<code>{html.escape(str(err_msg))}</code>{site_line}{amt_line}",
+                        disable_web_page_preview=True
+                    )
+                except Exception:
+                    pass
+
             is_approved = user_id in approved_users_set
-            if not is_approved and status_msg and len(cards) > 1:
+            if not is_approved and status_msg and len(cards) > 1 and data["status"] != "error":
                 async def auto_del_stripe(m):
                     await asyncio.sleep(30)
                     try: await m.delete()
@@ -456,9 +468,10 @@ async def hit_command(message: types.Message):
             await hitter.run()
         except Exception as ex:
             if status_msg:
-                try: await status_msg.delete()
-                except: pass
-            await message.answer(f"❌ <b>Error processing session:</b>\n<code>{html.escape(str(ex))}</code>")
+                try:
+                    await status_msg.edit_text(f"❌ <b>Error processing session:</b>\n<code>{html.escape(str(ex))}</code>")
+                except Exception:
+                    pass
         finally:
             if user_id in active_sessions:
                 del active_sessions[user_id]
