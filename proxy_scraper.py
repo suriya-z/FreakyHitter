@@ -2,8 +2,7 @@ import asyncio
 import re
 import time
 import random
-import httpx
-from bs4 import BeautifulSoup
+import aiohttp
 from typing import List, Dict, Optional, Callable
 
 # ==================== SCRAPER SOURCES ====================
@@ -16,18 +15,21 @@ class Scraper:
     def get_url(self, **kwargs) -> str:
         return self._url.format(**kwargs, method=self.method)
 
-    async def get_response(self, client: httpx.AsyncClient):
-        return await client.get(self.get_url(), timeout=8.0)
+    async def get_response_text(self, session: aiohttp.ClientSession) -> str:
+        url = self.get_url()
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+            return await resp.text()
 
-    async def handle(self, response) -> str:
-        return response.text
+    async def handle(self, text: str) -> str:
+        return text
 
-    async def scrape(self, client: httpx.AsyncClient) -> List[str]:
+    async def scrape(self, session: aiohttp.ClientSession) -> List[str]:
         try:
-            response = await self.get_response(client)
-            proxies_text = await self.handle(response)
+            raw_text = await self.get_response_text(session)
+            parsed_text = await self.handle(raw_text)
             pattern = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}:(?:\d{1,5})")
-            return re.findall(pattern, proxies_text)
+            return re.findall(pattern, parsed_text)
         except Exception:
             return []
 
@@ -72,26 +74,22 @@ class ProxyListDownloadScraper(Scraper):
         return super().get_url(anon=self.anon, **kwargs)
 
 class GeneralTableScraper(Scraper):
-    async def handle(self, response) -> str:
-        soup = BeautifulSoup(response.text, "html.parser")
+    async def handle(self, text: str) -> str:
         proxies = set()
-        table = soup.find("table", attrs={"class": "table table-striped table-bordered"})
-        if table:
-            for row in table.find_all("tr"):
-                count = 0
-                proxy = ""
-                for cell in row.find_all("td"):
-                    if count == 1:
-                        proxy += ":" + cell.text.replace("&nbsp;", "").strip()
-                        proxies.add(proxy)
-                        break
-                    proxy += cell.text.replace("&nbsp;", "").strip()
-                    count += 1
+        # Parse table cells via regex
+        rows = re.findall(r'<tr>(.*?)</tr>', text, re.DOTALL)
+        for row in rows:
+            cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
+            if len(cells) >= 2:
+                ip = re.sub(r'<[^>]+>', '', cells[0]).strip()
+                port = re.sub(r'<[^>]+>', '', cells[1]).strip()
+                if re.match(r'^\d{1,3}(?:\.\d{1,3}){3}$', ip) and port.isdigit():
+                    proxies.add(f"{ip}:{port}")
         return "\n".join(proxies)
 
 class GitHubScraper(Scraper):
-    async def handle(self, response) -> str:
-        lines = response.text.split("\n")
+    async def handle(self, text: str) -> str:
+        lines = text.split("\n")
         proxies = set()
         for line in lines:
             line = line.strip()
@@ -137,20 +135,20 @@ def get_country_flag(country_code: str) -> str:
 
 # ==================== CHECKER & ENGINE ====================
 
-async def check_single_proxy(proxy_str: str, timeout: float = 4.0) -> Optional[Dict]:
-    """Tests a single IP:PORT proxy against ip-api.com to verify connectivity & latency."""
+async def check_single_proxy(session: aiohttp.ClientSession, proxy_str: str, timeout: float = 4.0) -> Optional[Dict]:
+    """Tests a single IP:PORT proxy against ip-api.com to verify connectivity & latency using aiohttp."""
     proxy_url = f"http://{proxy_str}"
     ip_parts = proxy_str.split(':')
     proxy_ip = ip_parts[0]
     
     start_time = time.time()
     try:
-        async with httpx.AsyncClient(proxy=proxy_url, timeout=timeout, follow_redirects=True) as client:
-            resp = await client.get(f"http://ip-api.com/json/{proxy_ip}?fields=status,country,countryCode,org")
+        async with session.get(f"http://ip-api.com/json/{proxy_ip}?fields=status,country,countryCode,org",
+                               proxy=proxy_url,
+                               timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
             ping_ms = int((time.time() - start_time) * 1000)
-            
-            if resp.status_code == 200:
-                data = resp.json()
+            if resp.status == 200:
+                data = await resp.json()
                 country = data.get('country', 'Unknown')
                 code = data.get('countryCode', '')
                 flag = get_country_flag(code)
@@ -174,10 +172,11 @@ async def fetch_and_test_live_proxies(target_limit: int = 15, timeout: float = 4
         await update_cb(f"🔍 <b>Scraping proxy sources...</b>\n<code>Querying 20+ public proxy repositories</code>")
 
     all_scraped = set()
-    async with httpx.AsyncClient(follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as client:
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session:
         async def run_scraper(s: Scraper):
             try:
-                items = await s.scrape(client)
+                items = await s.scrape(session)
                 for item in items:
                     if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}:\d{1,5}$", item):
                         all_scraped.add(item)
@@ -194,31 +193,32 @@ async def fetch_and_test_live_proxies(target_limit: int = 15, timeout: float = 4
 
     live_proxies = []
     stop_event = asyncio.Event()
-    semaphore = asyncio.Semaphore(50)
+    semaphore = asyncio.Semaphore(60)
 
-    async def worker(p_str: str):
-        if stop_event.is_set():
-            return
-        async with semaphore:
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as check_session:
+        async def worker(p_str: str):
             if stop_event.is_set():
                 return
-            res = await check_single_proxy(p_str, timeout=timeout)
-            if res:
-                live_proxies.append(res)
-                if len(live_proxies) >= target_limit:
-                    stop_event.set()
+            async with semaphore:
+                if stop_event.is_set():
+                    return
+                res = await check_single_proxy(check_session, p_str, timeout=timeout)
+                if res:
+                    live_proxies.append(res)
+                    if len(live_proxies) >= target_limit:
+                        stop_event.set()
 
-    tasks = [asyncio.create_task(worker(p)) for p in scraped_list[:600]]
-    
-    while tasks and not stop_event.is_set():
-        done, tasks = await asyncio.wait(tasks, timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
-        if len(live_proxies) >= target_limit:
-            stop_event.set()
-            break
-            
-    for t in tasks:
-        if not t.done():
-            t.cancel()
+        tasks = [asyncio.create_task(worker(p)) for p in scraped_list[:800]]
+        
+        while tasks and not stop_event.is_set():
+            done, tasks = await asyncio.wait(tasks, timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
+            if len(live_proxies) >= target_limit:
+                stop_event.set()
+                break
+                
+        for t in tasks:
+            if not t.done():
+                t.cancel()
 
     live_proxies.sort(key=lambda x: x['ping_ms'])
     return live_proxies
