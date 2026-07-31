@@ -1040,7 +1040,6 @@ class StripeAPIHitter:
                 }
                 if self.stripe_account:
                     headers["Stripe-Account"] = self.stripe_account
-                print(f"DEBUG hit headers Stripe-Account: {headers.get('Stripe-Account')}", flush=True)
                 if "sec-ch-ua" in profile: headers["sec-ch-ua"] = profile["sec-ch-ua"]
                 if "sec-ch-ua-mobile" in profile: headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
                 if "sec-ch-ua-platform" in profile: headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
@@ -1506,6 +1505,8 @@ class StripeAPIHitter:
                                         "referer": "https://js.stripe.com/",
                                         "user-agent": _auth_ua
                                     }
+                                    if self.stripe_account:
+                                        auth_headers["Stripe-Account"] = self.stripe_account
                                     browser = {
                                         "fingerprintAttempted": True,
                                         "fingerprintData": None,
