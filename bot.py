@@ -1823,15 +1823,9 @@ async def process_menu_tools(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="🔙 𝘽𝒂𝒄𝒌 𝒕𝒐 𝘾𝒂𝒕𝒆𝒈𝒐𝒓𝒊𝒆𝒔", callback_data="menu_main")]
     ])
     
-    getproxy_line = (
-        "🚀 <b>/getproxy</b> <code>[count]</code>\n"
-        "└ <i>Scrapes 20+ sources & imports live fast proxies.</i>\n\n"
-    ) if is_owner else ""
-    
     tools_text = (
         "🛠️ <b>TOOL COMMANDS</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{getproxy_line}"
         "🌐 <b>/proxy</b> <code>[ip:port / user:pass@ip:port]</code>\n"
         "└ <i>Auto-checks proxies & provides options to add to pool.</i>\n\n"
         "🧹 <b>/checkproxy</b>\n"
