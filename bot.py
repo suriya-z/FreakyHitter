@@ -1832,7 +1832,7 @@ async def process_menu_tools(callback: types.CallbackQuery):
         "🛠️ <b>TOOL COMMANDS</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{getproxy_line}"
-        "🌐 <b>/proxy</b> <code>[proxies]</code>\n"
+        "🌐 <b>/proxy</b> <code>[ip:port / user:pass@ip:port]</code>\n"
         "└ <i>Auto-checks proxies & provides options to add to pool.</i>\n\n"
         "🧹 <b>/checkproxy</b>\n"
         "└ <i>Runs self-check on all loaded proxies in your pool.</i>\n\n"
