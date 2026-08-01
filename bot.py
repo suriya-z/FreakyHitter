@@ -1051,6 +1051,35 @@ async def allproxies_command(message: types.Message):
     else:
         await message.answer(output_text)
 
+def parse_proxy_line(line: str) -> Optional[Dict]:
+    line = line.strip()
+    if not line: return None
+    raw_line = line
+    scheme = "http"
+    if "://" in line:
+        scheme_part, line = line.split("://", 1)
+        scheme = scheme_part.lower()
+
+    if "@" in line:
+        user_pass, host_port = line.split("@", 1)
+        if ":" in user_pass and ":" in host_port:
+            u_parts = user_pass.split(":")
+            h_parts = host_port.split(":")
+            if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", h_parts[0]):
+                return {"raw": raw_line, "server": f"{scheme}://{h_parts[0]}:{h_parts[1]}", "username": u_parts[0], "password": u_parts[1]}
+            elif re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", u_parts[0]):
+                return {"raw": raw_line, "server": f"{scheme}://{u_parts[0]}:{u_parts[1]}", "username": h_parts[0], "password": h_parts[1]}
+    parts = line.split(':')
+    if len(parts) == 4:
+        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", parts[0]):
+            return {"raw": raw_line, "server": f"{scheme}://{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]}
+        elif re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", parts[2]):
+            return {"raw": raw_line, "server": f"{scheme}://{parts[2]}:{parts[3]}", "username": parts[0], "password": parts[1]}
+    elif len(parts) == 2:
+        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", parts[0]):
+            return {"raw": raw_line, "server": f"{scheme}://{parts[0]}:{parts[1]}"}
+    return None
+
 @dp.message(Command("proxy", "setproxy", "chkproxy"))
 async def proxy_command(message: types.Message):
     user_id = message.from_user.id
@@ -1066,30 +1095,16 @@ async def proxy_command(message: types.Message):
         temp_pool = []
         lines = text.split('\n')
         for line in lines:
-            line = line.strip()
-            if not line: continue
-            
-            prefix = "http://"
-            raw_line = line
-            if line.lower().startswith("socks5://"):
-                prefix = "socks5://"
-                line = line[9:]
-            elif line.lower().startswith("http://"):
-                prefix = "http://"
-                line = line[7:]
-                
-            parts = line.split(':')
-            if len(parts) == 4:
-                temp_pool.append({"raw": raw_line, "server": f"{prefix}{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]})
-            elif len(parts) == 2:
-                temp_pool.append({"raw": raw_line, "server": f"{prefix}{parts[0]}:{parts[1]}"})
+            parsed = parse_proxy_line(line)
+            if parsed:
+                temp_pool.append(parsed)
         proxies_to_test = temp_pool
     else:
         proxies_to_test = list(await ProxyManager.get_user_proxies(user_id))
         
     if not proxies_to_test:
         if is_loading_new:
-            await message.answer("<b>Error</b>\n<code>Failed to parse proxies. Expected format: ip:port or ip:port:user:pass</code>")
+            await message.answer("<b>Error</b>\n<code>Failed to parse proxies. Supported formats:\nip:port | ip:port:user:pass | user:pass@ip:port | socks5://ip:port</code>")
         else:
             await message.answer("<b>Error</b>\n<code>Proxy pool is empty. Set proxies via command: /proxy ip:port:user:pass</code>")
         return
@@ -1297,7 +1312,10 @@ async def process_rm_weak(callback: types.CallbackQuery):
 @dp.message(Command("getproxy", "scrapeproxy"))
 async def getproxy_command(message: types.Message):
     user_id = message.from_user.id
-    
+    if not OWNER_ID or str(user_id) != str(OWNER_ID):
+        await message.reply("❌ <b>Unauthorized Command</b>\n<code>The /getproxy command is restricted to the bot owner.</code>")
+        return
+        
     # Parse target count limit e.g. /getproxy 10 (default 10, max 50)
     command_parts = message.text.split(maxsplit=1)
     target_limit = 10
@@ -1797,23 +1815,31 @@ async def process_menu_hitter(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "menu_tools")
 async def process_menu_tools(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    is_owner = OWNER_ID and str(user_id) == str(OWNER_ID)
+    
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Back to Categories", callback_data="menu_main")]
     ])
+    
+    getproxy_line = (
+        "🚀 <b>/getproxy</b> <code>[count]</code>\n"
+        "└ <i>Scrapes 20+ sources & imports live fast proxies.</i>\n\n"
+    ) if is_owner else ""
+    
     tools_text = (
         "🛠️ <b>TOOL COMMANDS</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🚀 <b>/getproxy</b> <code>[count]</code>\n"
-        "└ <i>Scrapes 20+ sources & imports live fast proxies.</i>\n\n"
-        "🌐 <b>/proxy</b> <code>[ip:port:user:pass]</code>\n"
-        "└ <i>Imports and validates new proxy pool.</i>\n\n"
+        f"{getproxy_line}"
+        "🌐 <b>/proxy</b> <code>[ip:port] / [user:pass@ip:port]</code>\n"
+        "└ <i>Imports and validates new proxy pool. Supports http, https, socks4, socks5, user:pass@ip:port, etc.</i>\n\n"
         "🧹 <b>/proxy</b>\n"
         "└ <i>Runs self-check and purges dead IPs.</i>\n\n"
         "📊 <b>/proxystatus</b>\n"
         "└ <i>Displays active working proxy count.</i>\n\n"
         "🔌 <b>/offproxy</b>\n"
-        "└ <i>Clears proxy pool & uses direct IP.</i>\n\n"
+        "└ <i>Clears proxy pool.</i>\n\n"
         "✂️ <b>/split</b> <code><N></code>\n"
         "└ <i>Split file into N equal parts.</i>\n\n"
         "🧹 <b>/clean</b>\n"
