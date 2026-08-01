@@ -1080,7 +1080,7 @@ def parse_proxy_line(line: str) -> Optional[Dict]:
             return {"raw": raw_line, "server": f"{scheme}://{parts[0]}:{parts[1]}"}
     return None
 
-@dp.message(Command("proxy", "setproxy", "chkproxy"))
+@dp.message(Command("proxy", "setproxy", "chkproxy", "checkproxy"))
 async def proxy_command(message: types.Message):
     user_id = message.from_user.id
     
@@ -1832,8 +1832,10 @@ async def process_menu_tools(callback: types.CallbackQuery):
         "🛠️ <b>TOOL COMMANDS</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{getproxy_line}"
-        "🌐 <b>/proxy</b> <code>[ip:port / user:pass@ip:port]</code>\n"
-        "└ <i>Imports & validates new proxies (or runs self-check if sent empty).</i>\n\n"
+        "🌐 <b>/proxy</b> <code>[proxies]</code>\n"
+        "└ <i>Auto-checks proxies & provides options to add to pool.</i>\n\n"
+        "🧹 <b>/checkproxy</b>\n"
+        "└ <i>Runs self-check on all loaded proxies in your pool.</i>\n\n"
         "📊 <b>/proxystatus</b>\n"
         "└ <i>Displays active working proxy count.</i>\n\n"
         "🔌 <b>/offproxy</b>\n"
