@@ -72,6 +72,7 @@ requests.request = wrapped_request
 # ---------------------------------------------------------------------------------
 
 from hitter_core import CardGenerator, ConcurrentHitter, STRIPE_DECLINE_CODES, ProxyManager
+from file_tools import clean_and_sort_cards_text, split_text_n_parts, filter_by_bin_prefix, group_text_by_country
 
 
 load_dotenv()
@@ -112,28 +113,19 @@ async def command_start_handler(message: types.Message) -> None:
 
 @dp.message(Command("cmds"))
 async def cmds_command(message: types.Message) -> None:
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="💳 Hitter", callback_data="menu_hitter"),
+            InlineKeyboardButton(text="🛠️ Tools", callback_data="menu_tools")
+        ]
+    ])
     commands_text = (
         "⚡ <b>FREAKY HITTER COMMANDS</b> ⚡\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "💳 <b>/hit</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
-        "└ <i>Hits 1 to 10 cards against Stripe checkout.</i>\n\n"
-        "💎 <b>/hitad</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
-        "└ <i>Hits 1 to 10 cards against Adyen gateway checkout.</i>\n\n"
-        "🎲 <b>/hit</b> <code>[url] [bin_pattern] [count]</code>\n"
-        "└ <i>Generates BIN cards and hits concurrently.</i>\n\n"
-        "🌐 <b>/proxy</b> <code>[ip:port:user:pass]</code>\n"
-        "└ <i>Imports and validates new proxy pool.</i>\n\n"
-        "🧹 <b>/proxy</b>\n"
-        "└ <i>Runs self-check and purges dead IPs.</i>\n\n"
-        "📊 <b>/proxystatus</b>\n"
-        "└ <i>Displays active working proxy count.</i>\n\n"
-        "🔌 <b>/offproxy</b>\n"
-        "└ <i>Clears proxy pool & uses direct IP.</i>\n\n"
-        "🛑 <b>/stop</b>\n"
-        "└ <i>Instantly aborts your active session.</i>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━"
+        "<i>Select a command category below to view details:</i>"
     )
-    await message.answer(commands_text)
+    await message.answer(commands_text, reply_markup=markup)
 
 @dp.message(Command("approve"))
 async def approve_command(message: types.Message):
@@ -1156,10 +1148,375 @@ async def process_add_scraped_fast(callback: types.CallbackQuery):
     await callback.answer(f"Added {added} fast proxies!")
 
 
-@dp.callback_query(F.data == "show_commands")
+# ==================== FILE TOOLS & CATEGORIZED MENUS ====================
+
+async def get_replied_txt_file(message: types.Message) -> Optional[Tuple[str, str]]:
+    """Helper to check if user replied to a .txt document. Returns (filename, text_content) or None."""
+    reply = message.reply_to_message
+    if not reply or not reply.document:
+        await message.reply(
+            "⚠️ <b>Reply Required</b>\n"
+            "<code>Reply to a .txt file before using this command.</code>"
+        )
+        return None
+        
+    doc = reply.document
+    filename = doc.file_name or "document.txt"
+    if not filename.lower().endswith(".txt"):
+        await message.reply(
+            "⚠️ <b>Invalid File Type</b>\n"
+            "<code>Only .txt documents are supported. Please reply to a valid .txt file.</code>"
+        )
+        return None
+        
+    try:
+        file_info = await bot.get_file(doc.file_id)
+        downloaded = await bot.download_file(file_info.file_path)
+        content = downloaded.read().decode('utf-8', errors='ignore')
+        return filename, content
+    except Exception as e:
+        await message.reply(f"❌ <b>File Download Error</b>\n<code>{str(e)}</code>")
+        return None
+
+# --- FILE COMMANDS ---
+
+@dp.message(Command("split"))
+async def split_command(message: types.Message):
+    res = await get_replied_txt_file(message)
+    if not res: return
+    filename, content = res
+    
+    args = message.text.split(maxsplit=1)
+    n_parts = 2
+    if len(args) > 1 and args[1].strip().isdigit():
+        n_parts = int(args[1].strip())
+        
+    parts = split_text_n_parts(content, n_parts)
+    if not parts:
+        await message.reply("⚠️ File is empty.")
+        return
+        
+    status_msg = await message.reply(f"✂️ <b>Splitting file into {len(parts)} parts...</b>")
+    
+    temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    base_name = os.path.splitext(filename)[0]
+    for idx, part_text in enumerate(parts, 1):
+        part_path = os.path.join(temp_dir, f"{base_name}_part{idx}.txt")
+        with open(part_path, 'w', encoding='utf-8') as f:
+            f.write(part_text)
+        line_cnt = len(part_text.splitlines())
+        await message.reply_document(
+            document=FSInputFile(part_path, filename=f"{base_name}_part{idx}.txt"),
+            caption=f"✂️ <b>Part {idx}/{len(parts)}</b> ({line_cnt} lines)"
+        )
+        try: os.remove(part_path)
+        except: pass
+        
+    try: await status_msg.delete()
+    except: pass
+
+@dp.message(Command("clean"))
+async def clean_command(message: types.Message):
+    res = await get_replied_txt_file(message)
+    if not res: return
+    filename, content = res
+    
+    status_msg = await message.reply("🧹 <b>Cleaning & sorting cards...</b>")
+    
+    clean_text, stats = clean_and_sort_cards_text(content)
+    if not clean_text:
+        await status_msg.edit_text("⚠️ <b>Clean Result</b>\n<code>No valid cards found in file.</code>")
+        return
+        
+    temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    clean_path = os.path.join(temp_dir, f"clean_{filename}")
+    
+    with open(clean_path, 'w', encoding='utf-8') as f:
+        f.write(clean_text)
+        
+    brand_summary = []
+    for brand, cnt in stats['brand_counts'].items():
+        if cnt > 0:
+            brand_summary.append(f"• <b>{brand}:</b> {cnt}")
+    brand_str = "\n".join(brand_summary) if brand_summary else "None"
+    
+    caption = (
+        f"🧹 <b>Card List Cleaned & Sorted</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📥 <b>Input Lines:</b> {stats['total_input']}\n"
+        f"✅ <b>Clean Valid:</b> {stats['valid_total']}\n"
+        f"🗑 <b>Removed Expired/Invalid:</b> {stats['invalid_count']}\n"
+        f"♻️ <b>Removed Duplicates:</b> {stats['duplicate_count']}\n\n"
+        f"📊 <b>Sorted Brand Breakdown:</b>\n{brand_str}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    
+    await message.reply_document(
+        document=FSInputFile(clean_path, filename=f"clean_{filename}"),
+        caption=caption
+    )
+    try: os.remove(clean_path)
+    except: pass
+    try: await status_msg.delete()
+    except: pass
+
+@dp.message(Command("find"))
+async def find_command(message: types.Message):
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.reply("⚠️ <b>Usage:</b> <code>/find <BIN_prefix></code> (e.g. <code>/find 401704</code>)")
+        return
+    bin_prefix = args[1].strip()
+    
+    res = await get_replied_txt_file(message)
+    if not res: return
+    filename, content = res
+    
+    found_text, count = filter_by_bin_prefix(content, bin_prefix)
+    if count == 0:
+        await message.reply(f"🔍 <b>No matches found</b> for BIN prefix <code>{bin_prefix}</code>.")
+        return
+        
+    temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    out_path = os.path.join(temp_dir, f"found_{bin_prefix}.txt")
+    
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write(found_text)
+        
+    await message.reply_document(
+        document=FSInputFile(out_path, filename=f"found_{bin_prefix}.txt"),
+        caption=f"🔍 <b>BIN Search Result:</b> <code>{bin_prefix}</code>\nTotal matches: <b>{count} lines</b>"
+    )
+    try: os.remove(out_path)
+    except: pass
+
+@dp.message(Command("country"))
+async def country_command(message: types.Message):
+    res = await get_replied_txt_file(message)
+    if not res: return
+    filename, content = res
+    
+    status_msg = await message.reply("🌍 <b>Grouping cards by country...</b>")
+    
+    country_groups, country_meta = await group_text_by_country(content)
+    if not country_groups:
+        await status_msg.edit_text("⚠️ No cards found to group by country.")
+        return
+        
+    if not hasattr(bot, 'country_cache'):
+        bot.country_cache = {}
+    bot.country_cache[message.from_user.id] = {
+        'groups': country_groups,
+        'meta': country_meta,
+        'index_map': {idx+1: c_name for idx, c_name in enumerate(country_groups.keys())}
+    }
+    
+    lines = ["🌍 <b>Country Breakdown</b>\n━━━━━━━━━━━━━━━━━━━━━━"]
+    for idx, (c_name, cards) in enumerate(country_groups.items(), 1):
+        meta = country_meta.get(c_name, {})
+        flag = meta.get('flag', '🌐')
+        code = meta.get('code', 'UNK')
+        lines.append(f"<b>{idx}.</b> {flag} <b>{c_name}</b> (<code>{code}</code>): <b>{len(cards)} cards</b>")
+        
+    lines.append("\n👉 <i>Use <code>/pick <number_or_code></code> (e.g. <code>/pick 1</code> or <code>/pick US</code>) to download cards.</i>")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+    
+    await status_msg.edit_text("\n".join(lines))
+
+@dp.message(Command("pick"))
+async def pick_command(message: types.Message):
+    user_id = message.from_user.id
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.reply("⚠️ <b>Usage:</b> <code>/pick <number_or_code></code> (e.g. <code>/pick 1</code> or <code>/pick US</code>)")
+        return
+    target = args[1].strip()
+    
+    cache = getattr(bot, 'country_cache', {}).get(user_id)
+    
+    if not cache and message.reply_to_message:
+        res = await get_replied_txt_file(message)
+        if res:
+            _, content = res
+            status_msg = await message.reply("🌍 <b>Grouping cards by country...</b>")
+            groups, meta = await group_text_by_country(content)
+            cache = {
+                'groups': groups,
+                'meta': meta,
+                'index_map': {idx+1: c_name for idx, c_name in enumerate(groups.keys())}
+            }
+            bot.country_cache[user_id] = cache
+            try: await status_msg.delete()
+            except: pass
+
+    if not cache:
+        await message.reply("⚠️ <b>No active country breakdown</b>. Run <code>/country</code> first or reply to a .txt file with <code>/pick 1</code>.")
+        return
+        
+    groups = cache['groups']
+    index_map = cache['index_map']
+    
+    chosen_country = None
+    if target.isdigit() and int(target) in index_map:
+        chosen_country = index_map[int(target)]
+    else:
+        target_upper = target.upper()
+        for c_name, meta in cache['meta'].items():
+            if meta.get('code') == target_upper or c_name.upper() == target_upper:
+                chosen_country = c_name
+                break
+                
+    if not chosen_country or chosen_country not in groups:
+        await message.reply(f"⚠️ Country index or code <code>{target}</code> not found.")
+        return
+        
+    card_lines = groups[chosen_country]
+    meta = cache['meta'].get(chosen_country, {})
+    flag = meta.get('flag', '🌐')
+    code = meta.get('code', 'UNK')
+    
+    temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    out_path = os.path.join(temp_dir, f"cards_{code}.txt")
+    
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write("\n".join(card_lines))
+        
+    await message.reply_document(
+        document=FSInputFile(out_path, filename=f"cards_{code}.txt"),
+        caption=f"📦 {flag} <b>Extracted Cards for {chosen_country}</b> (<code>{code}</code>)\nTotal: <b>{len(card_lines)} cards</b>"
+    )
+    try: os.remove(out_path)
+    except: pass
+
+@dp.message(Command("addfile"))
+async def addfile_command(message: types.Message):
+    user_id = message.from_user.id
+    res = await get_replied_txt_file(message)
+    if not res: return
+    filename, content = res
+    
+    if not hasattr(bot, 'merge_queues'):
+        bot.merge_queues = {}
+    if user_id not in bot.merge_queues:
+        bot.merge_queues[user_id] = []
+        
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    bot.merge_queues[user_id].append({'filename': filename, 'lines': lines})
+    
+    q = bot.merge_queues[user_id]
+    total_lines = sum(len(f['lines']) for f in q)
+    
+    await message.reply(
+        f"🔗 <b>Added file to Merge Queue!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📄 File: <code>{filename}</code> ({len(lines)} lines)\n"
+        f"📦 Queue Total: <b>{len(q)} files</b> ({total_lines} total lines)\n\n"
+        f"👉 Use <code>/merge</code> to join all queued files or <code>/clearqueue</code> to reset."
+    )
+
+@dp.message(Command("merge"))
+async def merge_command(message: types.Message):
+    user_id = message.from_user.id
+    queue = getattr(bot, 'merge_queues', {}).get(user_id, [])
+    
+    if message.reply_to_message and message.reply_to_message.document:
+        res = await get_replied_txt_file(message)
+        if res:
+            fn, cnt = res
+            lines = [line.strip() for line in cnt.splitlines() if line.strip()]
+            if user_id not in getattr(bot, 'merge_queues', {}):
+                bot.merge_queues[user_id] = []
+            bot.merge_queues[user_id].append({'filename': fn, 'lines': lines})
+            queue = bot.merge_queues[user_id]
+            
+    if not queue:
+        await message.reply(
+            "⚠️ <b>Merge Queue is Empty</b>\n"
+            "<code>Use /addfile by replying to .txt files first, then run /merge.</code>"
+        )
+        return
+        
+    all_lines = []
+    for f_item in queue:
+        all_lines.extend(f_item['lines'])
+        
+    seen = set()
+    clean_merged = []
+    for line in all_lines:
+        if line not in seen:
+            seen.add(line)
+            clean_merged.append(line)
+            
+    merged_text = "\n".join(clean_merged)
+    
+    temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    out_path = os.path.join(temp_dir, "merged_output.txt")
+    
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write(merged_text)
+        
+    file_names_str = ", ".join([f['filename'] for f in queue])
+    caption = (
+        f"🔗 <b>Files Merged Successfully!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📂 Merged Files ({len(queue)}): <code>{file_names_str[:100]}</code>\n"
+        f"📊 Total Raw Lines: {len(all_lines)}\n"
+        f"✅ Unique Clean Lines: <b>{len(clean_merged)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    
+    await message.reply_document(
+        document=FSInputFile(out_path, filename="merged_output.txt"),
+        caption=caption
+    )
+    bot.merge_queues[user_id] = []
+    try: os.remove(out_path)
+    except: pass
+
+@dp.message(Command("clearqueue"))
+async def clearqueue_command(message: types.Message):
+    user_id = message.from_user.id
+    if hasattr(bot, 'merge_queues'):
+        bot.merge_queues[user_id] = []
+    await message.reply("🗑 <b>Merge queue cleared.</b>")
+
+
+# --- CATEGORIZED MENU CALLBACKS ---
+
+@dp.callback_query(F.data.in_({"show_commands", "menu_main"}))
 async def process_show_commands(callback: types.CallbackQuery):
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="💳 Hitter", callback_data="menu_hitter"),
+            InlineKeyboardButton(text="🛠️ Tools", callback_data="menu_tools")
+        ]
+    ])
     commands_text = (
         "⚡ <b>FREAKY HITTER COMMANDS</b> ⚡\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Select a command category below to view details:</i>"
+    )
+    try:
+        await callback.message.edit_text(commands_text, reply_markup=markup)
+    except Exception:
+        await callback.message.answer(commands_text, reply_markup=markup)
+    await callback.answer()
+
+@dp.callback_query(F.data == "menu_hitter")
+async def process_menu_hitter(callback: types.CallbackQuery):
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Back to Categories", callback_data="menu_main")]
+    ])
+    hitter_text = (
+        "💳 <b>HITTER COMMANDS</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "💳 <b>/hit</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
         "└ <i>Hits 1 to 10 cards against Stripe checkout.</i>\n\n"
@@ -1167,6 +1524,22 @@ async def process_show_commands(callback: types.CallbackQuery):
         "└ <i>Hits 1 to 10 cards against Adyen gateway checkout.</i>\n\n"
         "🎲 <b>/hit</b> <code>[url] [bin_pattern] [count]</code>\n"
         "└ <i>Generates BIN cards and hits concurrently.</i>\n\n"
+        "🛑 <b>/stop</b>\n"
+        "└ <i>Instantly aborts your active hitting session.</i>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    await callback.message.edit_text(hitter_text, reply_markup=markup)
+    await callback.answer()
+
+@dp.callback_query(F.data == "menu_tools")
+async def process_menu_tools(callback: types.CallbackQuery):
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Back to Categories", callback_data="menu_main")]
+    ])
+    tools_text = (
+        "🛠️ <b>TOOL COMMANDS</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "🚀 <b>/getproxy</b> <code>[count]</code>\n"
         "└ <i>Scrapes 20+ sources & imports live fast proxies.</i>\n\n"
         "🌐 <b>/proxy</b> <code>[ip:port:user:pass]</code>\n"
@@ -1177,11 +1550,26 @@ async def process_show_commands(callback: types.CallbackQuery):
         "└ <i>Displays active working proxy count.</i>\n\n"
         "🔌 <b>/offproxy</b>\n"
         "└ <i>Clears proxy pool & uses direct IP.</i>\n\n"
-        "🛑 <b>/stop</b>\n"
-        "└ <i>Instantly aborts your active session.</i>\n"
+        "✂️ <b>/split</b> <code><N></code>\n"
+        "└ <i>Split file into N equal parts.</i>\n\n"
+        "🧹 <b>/clean</b>\n"
+        "└ <i>Remove invalid, expired, duplicates & sort by brand (Visa first).</i>\n\n"
+        "🔍 <b>/find</b> <code><BIN></code>\n"
+        "└ <i>Filter lines by BIN prefix.</i>\n\n"
+        "🌍 <b>/country</b>\n"
+        "└ <i>Group lines by country flag & code.</i>\n\n"
+        "📦 <b>/pick</b> <code><N></code>\n"
+        "└ <i>Download lines for country N/code.</i>\n\n"
+        "🔗 <b>/addfile</b>\n"
+        "└ <i>Add file to merge queue.</i>\n\n"
+        "🔗 <b>/merge</b>\n"
+        "└ <i>Merge all queued files.</i>\n\n"
+        "🗑 <b>/clearqueue</b>\n"
+        "└ <i>Clear merge queue.</i>\n\n"
+        "⚠️ <i>Reply to a .txt file before using file tools.</i>\n"
         "━━━━━━━━━━━━━━━━━━━━━━"
     )
-    await callback.message.answer(commands_text)
+    await callback.message.edit_text(tools_text, reply_markup=markup)
     await callback.answer()
 
 
