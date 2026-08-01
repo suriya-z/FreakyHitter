@@ -88,17 +88,94 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 
-# Global store for active sessions
+import time
+from datetime import datetime
+from aiogram import BaseMiddleware
+
+# Global store for active sessions & owner controls
 active_sessions = {}
 db_pool = None
 approved_users_set = set()
+registered_users_set = set()
+banned_users_set = set()
+maintenance_mode = False
+gate_stripe_enabled = True
+gate_adyen_enabled = True
+bot_start_time = time.time()
+
+async def check_access_and_register(event_user: types.User, message_or_cb) -> bool:
+    """Checks ban status & maintenance mode, auto-registers user and logs new registrations to LOG_GROUP_ID."""
+    user_id = event_user.id
+    
+    # 1. Ban Check
+    if user_id in banned_users_set and str(user_id) != str(OWNER_ID):
+        msg = "⛔ <b>Access Revoked</b>\n<code>Your user ID has been blacklisted from using this bot.</code>"
+        if isinstance(message_or_cb, types.Message):
+            await message_or_cb.answer(msg)
+        elif isinstance(message_or_cb, types.CallbackQuery):
+            await message_or_cb.answer("Access Revoked: You are banned.", show_alert=True)
+        return False
+        
+    # 2. Maintenance Check
+    if maintenance_mode and str(user_id) != str(OWNER_ID):
+        msg = "🚧 <b>Maintenance Mode Active</b>\n<code>The bot is currently undergoing maintenance. Please try again later.</code>"
+        if isinstance(message_or_cb, types.Message):
+            await message_or_cb.answer(msg)
+        elif isinstance(message_or_cb, types.CallbackQuery):
+            await message_or_cb.answer("Maintenance Mode Active", show_alert=True)
+        return False
+
+    # 3. Auto Register & Telemetry Log
+    if user_id not in registered_users_set:
+        registered_users_set.add(user_id)
+        if db_pool:
+            try:
+                async with db_pool.acquire() as conn:
+                    await conn.execute("""
+                        INSERT INTO registered_users (user_id, username, first_name)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (user_id) DO UPDATE SET username = EXCLUDED.username, first_name = EXCLUDED.first_name
+                    """, user_id, event_user.username or "", event_user.first_name or "")
+            except Exception as e:
+                print(f"Failed to register user in DB: {e}")
+
+        # Send Telegram notification to log group
+        if LOG_GROUP_ID:
+            try:
+                user_name = html.escape(event_user.first_name or "User")
+                user_tag = f"@{event_user.username}" if event_user.username else "N/A"
+                log_msg = (
+                    f"👤 <b>New User Registered</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👤 <b>Name:</b> {user_name} ({user_tag})\n"
+                    f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
+                    f"📅 <b>Date:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                await bot.send_message(LOG_GROUP_ID, log_msg)
+            except Exception as e:
+                print(f"Failed to log user registration: {e}")
+                
+    return True
+
+class AccessControlMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user = getattr(event, 'from_user', None)
+        if user:
+            allowed = await check_access_and_register(user, event)
+            if not allowed:
+                return
+        return await handler(event, data)
+
+dp.message.outer_middleware(AccessControlMiddleware())
+dp.callback_query.outer_middleware(AccessControlMiddleware())
+
 
 @dp.message(CommandStart())
 async def command_start_handler(message: types.Message) -> None:
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚡ Commands Menu ⚡", callback_data="show_commands")]
+        [InlineKeyboardButton(text="COMMANDS", callback_data="show_commands")]
     ])
     
     welcome_text = (
@@ -122,7 +199,7 @@ async def cmds_command(message: types.Message) -> None:
         ]
     ])
     commands_text = (
-        "⚡ <b>FREAKY HITTER COMMANDS</b> ⚡\n"
+        "<b>COMMANDS</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "<i>Select a command category below to view details:</i>"
     )
@@ -160,6 +237,172 @@ async def approve_command(message: types.Message):
             print(f"Failed to save approved status: {e}")
 
     await message.answer(f"✅ <b>Approved</b>\n<code>User ID {target_id} has been approved. Hitting output messages will not be auto-deleted.</code>")
+
+# ==================== LETHAL OWNER COMMANDS ====================
+
+@dp.message(Command("admin", "stats"))
+async def admin_command(message: types.Message):
+    if not OWNER_ID or str(message.from_user.id) != str(OWNER_ID):
+        await message.answer("❌ <b>Unauthorized</b>\n<code>Only the bot owner can access administrative stats.</code>")
+        return
+        
+    uptime_sec = int(time.time() - bot_start_time)
+    hours, remainder = divmod(uptime_sec, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    days, hours = divmod(hours, 24)
+    uptime_str = f"{days}d {hours}h {minutes}m {seconds}s"
+    
+    total_registered = len(registered_users_set)
+    total_banned = len(banned_users_set)
+    total_approved = len(approved_users_set)
+    active_tasks = len(active_sessions)
+    
+    maint_str = "🟢 OFF (Public Mode)" if not maintenance_mode else "🔴 ON (Owner Only)"
+    stripe_str = "🟢 ACTIVE" if gate_stripe_enabled else "🔴 DISABLED"
+    adyen_str = "🟢 ACTIVE" if gate_adyen_enabled else "🔴 DISABLED"
+    db_str = "🟢 Connected (Supabase)" if db_pool else "🔴 Disconnected"
+    
+    msg = (
+        "👑 <b>LETHAL OWNER DASHBOARD</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"⏱ <b>Uptime:</b> <code>{uptime_str}</code>\n"
+        f"🗄 <b>Database:</b> {db_str}\n\n"
+        f"👥 <b>Registered Users:</b> <code>{total_registered}</code>\n"
+        f"💎 <b>Approved Users:</b> <code>{total_approved}</code>\n"
+        f"🚫 <b>Banned Users:</b> <code>{total_banned}</code>\n"
+        f"⚡ <b>Active Sessions:</b> <code>{active_tasks}</code>\n\n"
+        f"🚧 <b>Maintenance Mode:</b> {maint_str}\n"
+        f"💳 <b>Stripe Gate:</b> {stripe_str}\n"
+        f"💎 <b>Adyen Gate:</b> {adyen_str}\n"
+        "━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    await message.answer(msg)
+
+@dp.message(Command("broadcast"))
+async def broadcast_command(message: types.Message):
+    if not OWNER_ID or str(message.from_user.id) != str(OWNER_ID):
+        await message.answer("❌ <b>Unauthorized</b>")
+        return
+        
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("⚠️ <b>Usage:</b> <code>/broadcast <your_message_here></code>")
+        return
+        
+    broadcast_text = parts[1].strip()
+    status_msg = await message.answer("📢 <b>Sending broadcast message...</b>")
+    
+    sent_count = 0
+    failed_count = 0
+    
+    for uid in list(registered_users_set):
+        try:
+            await bot.send_message(uid, f"📢 <b>ANNOUNCEMENT</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n{broadcast_text}")
+            sent_count += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            failed_count += 1
+            
+    await status_msg.edit_text(
+        f"📢 <b>Broadcast Completed</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"✅ <b>Successfully Sent:</b> {sent_count}\n"
+        f"❌ <b>Failed/Blocked:</b> {failed_count}"
+    )
+
+@dp.message(Command("ban"))
+async def ban_command(message: types.Message):
+    if not OWNER_ID or str(message.from_user.id) != str(OWNER_ID):
+        await message.answer("❌ <b>Unauthorized</b>")
+        return
+        
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await message.answer("⚠️ <b>Usage:</b> <code>/ban <user_id> [reason]</code>")
+        return
+        
+    target_id = int(parts[1].strip())
+    reason = parts[2].strip() if len(parts) > 2 else "No reason specified"
+    
+    banned_users_set.add(target_id)
+    if db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO banned_users (user_id, reason)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id) DO UPDATE SET reason = EXCLUDED.reason
+                """, target_id, reason)
+        except Exception as e:
+            print(f"Failed to save ban: {e}")
+            
+    await message.answer(f"🚫 <b>User Banned</b>\n<code>User ID {target_id} has been blacklisted.\nReason: {reason}</code>")
+
+@dp.message(Command("unban"))
+async def unban_command(message: types.Message):
+    if not OWNER_ID or str(message.from_user.id) != str(OWNER_ID):
+        await message.answer("❌ <b>Unauthorized</b>")
+        return
+        
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await message.answer("⚠️ <b>Usage:</b> <code>/unban <user_id></code>")
+        return
+        
+    target_id = int(parts[1].strip())
+    if target_id in banned_users_set:
+        banned_users_set.remove(target_id)
+        
+    if db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute("DELETE FROM banned_users WHERE user_id = $1", target_id)
+        except Exception as e:
+            print(f"Failed to remove ban from DB: {e}")
+            
+    await message.answer(f"✅ <b>User Unbanned</b>\n<code>User ID {target_id} has been unblacklisted.</code>")
+
+@dp.message(Command("maintenance"))
+async def maintenance_command(message: types.Message):
+    global maintenance_mode
+    if not OWNER_ID or str(message.from_user.id) != str(OWNER_ID):
+        await message.answer("❌ <b>Unauthorized</b>")
+        return
+        
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or parts[1].lower() not in ('on', 'off'):
+        await message.answer("⚠️ <b>Usage:</b> <code>/maintenance on</code> OR <code>/maintenance off</code>")
+        return
+        
+    setting = parts[1].lower()
+    maintenance_mode = (setting == 'on')
+    
+    state_str = "🔴 <b>ACTIVATED (Owner Only Mode)</b>" if maintenance_mode else "🟢 <b>DEACTIVATED (Public Access Restored)</b>"
+    await message.answer(f"🚧 <b>Maintenance Mode:</b> {state_str}")
+
+@dp.message(Command("gate"))
+async def gate_command(message: types.Message):
+    global gate_stripe_enabled, gate_adyen_enabled
+    if not OWNER_ID or str(message.from_user.id) != str(OWNER_ID):
+        await message.answer("❌ <b>Unauthorized</b>")
+        return
+        
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3 or parts[1].lower() not in ('stripe', 'adyen') or parts[2].lower() not in ('on', 'off'):
+        await message.answer("⚠️ <b>Usage:</b> <code>/gate <stripe|adyen> <on|off></code>")
+        return
+        
+    target_gate = parts[1].lower()
+    state = (parts[2].lower() == 'on')
+    
+    if target_gate == 'stripe':
+        gate_stripe_enabled = state
+        status = "🟢 ACTIVE" if state else "🔴 DISABLED"
+        await message.answer(f"💳 <b>Stripe Gateway Gate:</b> {status}")
+    elif target_gate == 'adyen':
+        gate_adyen_enabled = state
+        status = "🟢 ACTIVE" if state else "🔴 DISABLED"
+        await message.answer(f"💎 <b>Adyen Gateway Gate:</b> {status}")
     
     try:
         await bot.send_message(target_id, "🎉 <b>You've been approved by the owner!</b> Your transaction messages will no longer be auto-deleted. ⚡")
@@ -272,13 +515,21 @@ def parse_cards_input(payload_tokens: list, raw_payload: str):
 async def hit_command(message: types.Message):
     user_id = message.from_user.id
     
+    if not gate_stripe_enabled and str(user_id) != str(OWNER_ID):
+        await message.answer("🚧 <b>Gateway Offline</b>\n<code>Stripe checkout engine is currently disabled by admin.</code>")
+        return
+
     if user_id in active_sessions:
         await message.answer("<b>Alert</b>\n<code>Active session detected. Abort current task before launching new checks.</code>")
         return
 
-    # Naked IP Block
+    # Naked IP Block - Mandatory Proxy Requirement
     if not await ProxyManager.has_proxies(user_id):
-        await message.answer("<b>Error</b>\n<code>Proxy pool is empty. Please set a proxy first: /proxy ip:port:user:pass</code>")
+        await message.answer(
+            "⚠️ <b>Proxy Required</b>\n"
+            "<code>Proxy pool is empty. You must load active proxies before hitting.\n"
+            "Load proxies using /proxy or /getproxy.</code>"
+        )
         return
 
     raw_tokens = message.text.strip().split()
@@ -479,13 +730,21 @@ async def hit_command(message: types.Message):
 async def hitad_command(message: types.Message):
     user_id = message.from_user.id
     
+    if not gate_adyen_enabled and str(user_id) != str(OWNER_ID):
+        await message.answer("🚧 <b>Gateway Offline</b>\n<code>Adyen checkout engine is currently disabled by admin.</code>")
+        return
+
     if user_id in active_sessions:
         await message.answer("<b>Alert</b>\n<code>Active session detected. Abort current task before launching new checks.</code>")
         return
 
-    # Naked IP Block
+    # Naked IP Block - Mandatory Proxy Requirement
     if not await ProxyManager.has_proxies(user_id):
-        await message.answer("<b>Error</b>\n<code>Proxy pool is empty. Please set a proxy first: /proxy ip:port:user:pass</code>")
+        await message.answer(
+            "⚠️ <b>Proxy Required</b>\n"
+            "<code>Proxy pool is empty. You must load active proxies before hitting.\n"
+            "Load proxies using /proxy or /getproxy.</code>"
+        )
         return
 
     raw_tokens = message.text.strip().split()
@@ -664,7 +923,11 @@ async def proxystatus_command(message: types.Message):
 @dp.message(Command("offproxy"))
 async def offproxy_command(message: types.Message):
     await ProxyManager.clear(message.from_user.id)
-    await message.answer("<b>Proxy Status</b>\n<code>Pool cleared. Direct server routing active.</code>")
+    await message.answer(
+        "🔌 <b>Proxy Status</b>\n"
+        "<code>Proxy pool cleared.\n"
+        "⚠️ Note: Active proxies are required to run /hit or /hitad. Load proxies via /proxy or /getproxy.</code>"
+    )
 
 async def test_proxy_single(p, is_pool, user_id):
     proxy_url = p['server']
@@ -1633,11 +1896,35 @@ async def main() -> None:
                     user_id BIGINT PRIMARY KEY
                 );
             """)
-            rows = await conn.fetch("SELECT user_id FROM approved_users")
-            for r in rows:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS registered_users (
+                    user_id BIGINT PRIMARY KEY,
+                    username TEXT,
+                    first_name TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS banned_users (
+                    user_id BIGINT PRIMARY KEY,
+                    reason TEXT,
+                    banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            rows_app = await conn.fetch("SELECT user_id FROM approved_users")
+            for r in rows_app:
                 approved_users_set.add(r['user_id'])
+                
+            rows_banned = await conn.fetch("SELECT user_id FROM banned_users")
+            for r in rows_banned:
+                banned_users_set.add(r['user_id'])
+                
+            rows_reg = await conn.fetch("SELECT user_id FROM registered_users")
+            for r in rows_reg:
+                registered_users_set.add(r['user_id'])
+
         await ProxyManager.init_db(db_pool)
-        print("Supabase connected, user_proxies, and approved_users tables ready!")
+        print("Supabase connected! Tables (user_proxies, approved_users, registered_users, banned_users) ready!")
     else:
         print("WARNING: DATABASE_URL not set! Proxies will not be saved.")
         
