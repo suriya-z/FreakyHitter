@@ -2,6 +2,7 @@ import os
 import asyncio
 import re
 import asyncpg
+from typing import Optional, Tuple, List, Dict
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
