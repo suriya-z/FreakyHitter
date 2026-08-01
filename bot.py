@@ -175,7 +175,7 @@ async def command_start_handler(message: types.Message) -> None:
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="COMMANDS", callback_data="show_commands")]
+        [InlineKeyboardButton(text="𝘾𝙊𝙈𝙈𝘼𝙉𝘿𝙎", callback_data="show_commands")]
     ])
     
     welcome_text = (
@@ -194,8 +194,8 @@ async def cmds_command(message: types.Message) -> None:
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="💳 Hitter", callback_data="menu_hitter"),
-            InlineKeyboardButton(text="🛠️ Tools", callback_data="menu_tools")
+            InlineKeyboardButton(text="💳 𝙃𝙞𝙩𝙩𝙚𝙧", callback_data="menu_hitter"),
+            InlineKeyboardButton(text="🛠️ 𝙏𝙤𝙤𝙡𝙨", callback_data="menu_tools")
         ]
     ])
     commands_text = (
@@ -1776,12 +1776,12 @@ async def process_show_commands(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="💳 Hitter", callback_data="menu_hitter"),
-            InlineKeyboardButton(text="🛠️ Tools", callback_data="menu_tools")
+            InlineKeyboardButton(text="💳 𝙃𝙞𝙩𝒕𝒆𝒓", callback_data="menu_hitter"),
+            InlineKeyboardButton(text="🛠️ 𝙏𝒐𝒐𝒍𝒔", callback_data="menu_tools")
         ]
     ])
     commands_text = (
-        "⚡ <b>FREAKY HITTER COMMANDS</b> ⚡\n"
+        "<b>COMMANDS</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "<i>Select a command category below to view details:</i>"
     )
@@ -1795,7 +1795,7 @@ async def process_show_commands(callback: types.CallbackQuery):
 async def process_menu_hitter(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Back to Categories", callback_data="menu_main")]
+        [InlineKeyboardButton(text="🔙 𝘽𝒂𝒄𝒌 𝒕𝒐 𝘾𝒂𝒕𝒆𝒈𝒐𝒓𝒊𝒆𝒔", callback_data="menu_main")]
     ])
     hitter_text = (
         "💳 <b>HITTER COMMANDS</b>\n"
@@ -1820,7 +1820,7 @@ async def process_menu_tools(callback: types.CallbackQuery):
     
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Back to Categories", callback_data="menu_main")]
+        [InlineKeyboardButton(text="🔙 𝘽𝒂𝒄𝒌 𝒕𝒐 𝘾𝒂𝒕𝒆𝒈𝒐𝒓𝒊𝒆𝒔", callback_data="menu_main")]
     ])
     
     getproxy_line = (
@@ -1840,15 +1840,15 @@ async def process_menu_tools(callback: types.CallbackQuery):
         "└ <i>Displays active working proxy count.</i>\n\n"
         "🔌 <b>/offproxy</b>\n"
         "└ <i>Clears proxy pool.</i>\n\n"
-        "✂️ <b>/split</b> <code><N></code>\n"
+        "✂️ <b>/split</b> <code>[N]</code>\n"
         "└ <i>Split file into N equal parts.</i>\n\n"
         "🧹 <b>/clean</b>\n"
         "└ <i>Remove invalid, expired, duplicates & sort by brand (Visa first).</i>\n\n"
-        "🔍 <b>/find</b> <code><BIN></code>\n"
+        "🔍 <b>/find</b> <code>[BIN]</code>\n"
         "└ <i>Filter lines by BIN prefix.</i>\n\n"
         "🌍 <b>/country</b>\n"
         "└ <i>Group lines by country flag & code.</i>\n\n"
-        "📦 <b>/pick</b> <code><N></code>\n"
+        "📦 <b>/pick</b> <code>[N]</code>\n"
         "└ <i>Download lines for country N/code.</i>\n\n"
         "🔗 <b>/addfile</b>\n"
         "└ <i>Add file to merge queue.</i>\n\n"
