@@ -194,8 +194,8 @@ async def cmds_command(message: types.Message) -> None:
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="💳 𝙃𝙞𝙩𝙩𝙚𝙧", callback_data="menu_hitter"),
-            InlineKeyboardButton(text="🛠️ 𝙏𝙤𝙤𝙡𝙨", callback_data="menu_tools")
+            InlineKeyboardButton(text="💳 𝙃𝙄𝙏𝙏𝙀𝙍", callback_data="menu_hitter"),
+            InlineKeyboardButton(text="🛠️ 𝙏𝙊𝙊𝙇𝙎", callback_data="menu_tools")
         ]
     ])
     commands_text = (
@@ -1795,7 +1795,7 @@ async def process_show_commands(callback: types.CallbackQuery):
 async def process_menu_hitter(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 𝘽𝒂𝒄𝒌 𝒕𝒐 𝘾𝒂𝒕𝒆𝒈𝒐𝒓𝒊𝒆𝒔", callback_data="menu_main")]
+        [InlineKeyboardButton(text="🔙 𝘽𝘼𝘾𝙆", callback_data="menu_main")]
     ])
     hitter_text = (
         "💳 <b>HITTER COMMANDS</b>\n"
@@ -1820,7 +1820,7 @@ async def process_menu_tools(callback: types.CallbackQuery):
     
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 𝘽𝒂𝒄𝒌 𝒕𝒐 𝘾𝒂𝒕𝒆𝒈𝒐𝒓𝒊𝒆𝒔", callback_data="menu_main")]
+        [InlineKeyboardButton(text="🔙 𝘽𝘼𝘾𝙆", callback_data="menu_main")]
     ])
     
     tools_text = (
