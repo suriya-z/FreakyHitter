@@ -1684,20 +1684,16 @@ class StripeAPIHitter:
                             result['decline_code'] = f'3d_secure_exception_{str(ex)[:30]}'
                             result['raw_response'] = confirm_json
                             return result
-                    elif status == 'requires_payment_method':
-                        result['decline_code'] = 'generic_decline'
-                        result['error'] = 'requires_payment_method'
-                        result['raw_response'] = confirm_json
-                    elif status == 'open':
+                    elif status in ['requires_payment_method', 'open']:
                         err = confirm_json.get('error')
                         if isinstance(err, dict):
-                            result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', 'open')
-                            result['error'] = err.get('message', 'Unknown error')
+                            result['decline_code'] = err.get('decline_code') or err.get('code') or err.get('type', status)
+                            result['error'] = err.get('message', 'Payment method required / declined')
                             result['raw_response'] = confirm_json
                             return result
                         
-                        result['decline_code'] = 'open'
-                        result['error'] = str(confirm_json)[:500]  # Dump the JSON to telegram so we can see what's actually there
+                        result['decline_code'] = status
+                        result['error'] = str(confirm_json)[:500]
                         result['raw_response'] = confirm_json
                     else:
                         result['decline_code'] = status
