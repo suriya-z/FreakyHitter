@@ -487,10 +487,11 @@ def parse_cards_input(payload_tokens: list, raw_payload: str):
         if 'x' in clean_bin or (clean_bin.isdigit() and len(clean_bin) >= 6):
             if count > 10:
                 return None, "Maximum batch limit is 10 concurrent requests."
-            for _ in range(count):
-                card = CardGenerator.generate(potential_bin)
-                if card:
-                    cards.append(card)
+            from generators import generate_bin_cards
+            raw_gen_cards = generate_bin_cards(potential_bin, count)
+            for gc in raw_gen_cards:
+                gp = gc.split('|')
+                cards.append({'card': gp[0], 'month': gp[1], 'year': gp[2], 'cvv': gp[3]})
             if not cards:
                 return None, "BIN pattern generation failed."
             return cards, None
@@ -616,9 +617,15 @@ async def hit_command(message: types.Message):
                     )
                 else:
                     code_raw = str(res.get('decline_code') or res.get('error') or 'unknown').lower()
-                    live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin', 'withdrawal_count_limit_exceeded', 'card_velocity_exceeded', 'authentication_required', 'challenge_required', '3d_secure']
+                    live_codes = ['insufficient_funds', 'incorrect_cvv', 'invalid_cvc', 'invalid_pin', 'withdrawal_count_limit_exceeded', 'card_velocity_exceeded', 'authentication_required', 'challenge_required', '3d_secure', 'requires_action', 'requires_source_action', '3ds_challenge_unresolved']
                     is_live = any(c in code_raw for c in live_codes)
-                    status_title = "🟢 <b>CARD LIVE [STRIPE]</b>" if is_live else "❌ <b>PAYMENT UNSUCCESSFUL</b>"
+                    
+                    if is_live and any(c in code_raw for c in ['requires_action', 'requires_source_action', '3ds_challenge_unresolved', 'challenge_required', 'authentication_required']):
+                        status_title = "🟠 <b>3DS CHALLENGE PRESENTED [STRIPE]</b>"
+                    elif is_live:
+                        status_title = "🟢 <b>CARD LIVE [STRIPE]</b>"
+                    else:
+                        status_title = "❌ <b>PAYMENT UNSUCCESSFUL</b>"
                     
                     err_str = str(res.get('error') or '').strip()
                     decline_code = str(res.get('decline_code') or '').strip()
@@ -636,7 +643,7 @@ async def hit_command(message: types.Message):
                         f"💳 <code>{card_str}</code>\n"
                         f"💰 Amount: {amt_val}\n"
                         f"🛒 Merchant: {merchant_disp}\n"
-                        f"📉 Reason: {reason_msg}\n"
+                        f"📉 Response: {reason_msg}\n"
                         f"⏱ {res['response_time']:.2f}s" + note_line
                     )
 
