@@ -19,6 +19,10 @@ def generate_bin_cards(bin_pattern: str, count: int = 10) -> list:
     prefix = re.sub(r'[^0-9xX]', '', card_pat)
     cards = []
     
+    # AMEX starts with 34 or 37: 15 digits total (14 prefix + 1 check), 4-digit CVC
+    is_amex = prefix.startswith(('34', '37'))
+    target_prefix_len = 14 if is_amex else 15
+    
     for _ in range(count):
         full_prefix = ''
         for char in prefix:
@@ -27,10 +31,10 @@ def generate_bin_cards(bin_pattern: str, count: int = 10) -> list:
             else:
                 full_prefix += char
         
-        while len(full_prefix) < 15:
+        while len(full_prefix) < target_prefix_len:
             full_prefix += str(random.randint(0, 9))
             
-        full_prefix = full_prefix[:15]
+        full_prefix = full_prefix[:target_prefix_len]
         
         checksum = 0
         for idx, digit_char in enumerate(reversed(full_prefix)):
@@ -57,7 +61,7 @@ def generate_bin_cards(bin_pattern: str, count: int = 10) -> list:
         if cvc_pat and cvc_pat.isdigit():
             cvc = cvc_pat
         else:
-            cvc = f"{random.randint(100, 999):03d}"
+            cvc = f"{random.randint(1000, 9999):04d}" if is_amex else f"{random.randint(100, 999):03d}"
             
         cards.append(f"{card_number}|{month}|20{year}|{cvc}")
         

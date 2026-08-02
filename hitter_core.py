@@ -1132,10 +1132,10 @@ class StripeAPIHitter:
                 pm_url = "https://api.stripe.com/v1/payment_methods"
                 pm_data = {
                     "type": "card",
-                    "card[number]": card['card'],
-                    "card[cvc]": card['cvv'],
-                    "card[exp_month]": card['month'],
-                    "card[exp_year]": card['year'],
+                    "card[number]": card.get('card') or card.get('number', ''),
+                    "card[cvc]": card.get('cvc') or card.get('cvv', ''),
+                    "card[exp_month]": card.get('month') or card.get('exp_month', ''),
+                    "card[exp_year]": card.get('year') or card.get('exp_year', ''),
                     "billing_details[name]": RandomData.get_name(),
                     "billing_details[email]": self.locked_email if self.locked_email else RandomData.get_email(),
                     "billing_details[address][line1]": address["line1"],
