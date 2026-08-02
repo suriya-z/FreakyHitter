@@ -1769,6 +1769,86 @@ async def clearqueue_command(message: types.Message):
     await message.reply("🗑 <b>Merge queue cleared.</b>")
 
 
+# ==================== IDENTITY & IBAN GENERATORS ====================
+
+@dp.message(Command("fake", "gen"))
+async def fake_identity_command(message: types.Message):
+    parts = message.text.strip().split(maxsplit=1)
+    country_q = parts[1].strip() if len(parts) > 1 else "United States"
+    try:
+        from generators import generate_fake_identity
+        identity = generate_fake_identity(country_q)
+        
+        res = (
+            f"👤 <b>Generated Fake Identity</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Name:</b> {identity.get('name', 'N/A')}\n"
+            f"🚻 <b>Gender:</b> {identity.get('gender', 'N/A')}\n"
+            f"🎂 <b>DOB:</b> {identity.get('birthday', 'N/A')}\n"
+            f"📧 <b>Email:</b> <code>{identity.get('email', 'N/A')}</code>\n"
+            f"📞 <b>Phone:</b> <code>{identity.get('phone', 'N/A')}</code>\n"
+            f"🏠 <b>Address:</b> <code>{identity.get('street', 'N/A')}</code>\n"
+            f"🏙️ <b>City/State:</b> {identity.get('city', 'N/A')}, {identity.get('state', 'N/A')}\n"
+            f"📮 <b>ZIP:</b> <code>{identity.get('zip', 'N/A')}</code>\n"
+            f"{identity.get('flag', '🌐')} <b>Country:</b> {identity.get('country', country_q)}\n"
+            f"🆔 <b>{identity.get('id_name', 'ID')}:</b> <code>{identity.get('id_val', 'N/A')}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        await message.reply(res, parse_mode="html")
+    except Exception as e:
+        await message.reply(f"<b>Error:</b> <code>{e}</code>", parse_mode="html")
+
+
+@dp.message(Command("iban"))
+async def iban_command(message: types.Message):
+    parts = message.text.strip().split(maxsplit=1)
+    country_code = (parts[1].strip().upper() if len(parts) > 1 else "DE")[:2]
+    try:
+        from generators import generate_valid_iban
+        iban = generate_valid_iban(country_code)
+        
+        res = (
+            f"🏦 <b>Generated Valid IBAN</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{iban['flag']} <b>Country:</b> {iban['country']} ({country_code})\n"
+            f"💳 <b>IBAN:</b> <code>{iban['iban']}</code>\n"
+            f"🏦 <b>Bank Name:</b> {iban['bank_name']}\n"
+            f"🔢 <b>Bank Code (BLZ):</b> <code>{iban['bank_code']}</code>\n"
+            f"⚡ <b>BIC/SWIFT:</b> <code>{iban['bic']}</code>\n"
+            f"🆔 <b>Account No:</b> <code>{iban['account_no']}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        await message.reply(res, parse_mode="html")
+    except Exception as e:
+        await message.reply(f"<b>Error generating IBAN:</b> <code>{e}</code>", parse_mode="html")
+
+
+@dp.message(Command("ibancountry"))
+async def ibancountry_command(message: types.Message):
+    try:
+        from generators import IBAN_COUNTRIES
+        regions = {}
+        for code, info in IBAN_COUNTRIES.items():
+            r = info.get("region", "Europe")
+            if r not in regions:
+                regions[r] = []
+            regions[r].append(f"{info['flag']} <code>{code}</code> ({info['name']})")
+            
+        lines = [
+            "🌐 <b>SUPPORTED IBAN COUNTRIES (56)</b>",
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+        ]
+        for region, items in regions.items():
+            lines.append(f"📌 <b>{region}:</b>")
+            lines.append(", ".join(items) + "\n")
+            
+        lines.append("👉 <i>Usage: <code>/iban [CC]</code> (e.g. <code>/iban DE</code>, <code>/iban FR</code>, <code>/iban GB</code>)</i>")
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+        await message.reply("\n".join(lines), parse_mode="html")
+    except Exception as e:
+        await message.reply(f"<b>Error:</b> <code>{e}</code>", parse_mode="html")
+
+
 # --- CATEGORIZED MENU CALLBACKS ---
 
 @dp.callback_query(F.data.in_({"show_commands", "menu_main"}))
@@ -1834,6 +1914,12 @@ async def process_menu_tools(callback: types.CallbackQuery):
         "└ <i>Displays active working proxy count.</i>\n\n"
         "🔌 <b>/offproxy</b>\n"
         "└ <i>Clears proxy pool.</i>\n\n"
+        "👤 <b>/gen</b> / <b>/fake</b> <code>[country]</code>\n"
+        "└ <i>Generate realistic fake identity (Name, Address, Phone, ID/SSN).</i>\n\n"
+        "🏦 <b>/iban</b> <code>[country_code]</code>\n"
+        "└ <i>Generate valid MOD-97 IBAN with BIC/SWIFT & Bank Name.</i>\n\n"
+        "🌐 <b>/ibancountry</b>\n"
+        "└ <i>Display all 56 supported IBAN country codes.</i>\n\n"
         "✂️ <b>/split</b> <code>[N]</code>\n"
         "└ <i>Split file into N equal parts.</i>\n\n"
         "🧹 <b>/clean</b>\n"
