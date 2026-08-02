@@ -1,5 +1,69 @@
 import random, re
 
+# ==================== BIN CARD GENERATOR ====================
+def generate_bin_cards(bin_pattern: str, count: int = 10) -> list:
+    """
+    Generates Luhn-valid cards matching bin_pattern.
+    Supports formats:
+    - 453590
+    - 453590xxxxxxxxxx
+    - 453590xxxxxxxxxx|mm|yy|cvc
+    - 453590|05|28|xxx
+    """
+    parts = bin_pattern.split('|')
+    card_pat = parts[0].strip()
+    mm_pat = parts[1].strip() if len(parts) > 1 else None
+    yy_pat = parts[2].strip() if len(parts) > 2 else None
+    cvc_pat = parts[3].strip() if len(parts) > 3 else None
+
+    prefix = re.sub(r'[^0-9xX]', '', card_pat)
+    cards = []
+    
+    for _ in range(count):
+        full_prefix = ''
+        for char in prefix:
+            if char.lower() == 'x':
+                full_prefix += str(random.randint(0, 9))
+            else:
+                full_prefix += char
+        
+        while len(full_prefix) < 15:
+            full_prefix += str(random.randint(0, 9))
+            
+        full_prefix = full_prefix[:15]
+        
+        checksum = 0
+        for idx, digit_char in enumerate(reversed(full_prefix)):
+            d = int(digit_char)
+            if idx % 2 == 0:
+                d *= 2
+                if d > 9:
+                    d -= 9
+            checksum += d
+            
+        check_digit = (10 - (checksum % 10)) % 10
+        card_number = full_prefix + str(check_digit)
+        
+        if mm_pat and mm_pat.isdigit():
+            month = f"{int(mm_pat):02d}"
+        else:
+            month = f"{random.randint(1, 12):02d}"
+            
+        if yy_pat and yy_pat.isdigit():
+            year = yy_pat if len(yy_pat) == 2 else yy_pat[-2:]
+        else:
+            year = f"{random.randint(25, 30):02d}"
+            
+        if cvc_pat and cvc_pat.isdigit():
+            cvc = cvc_pat
+        else:
+            cvc = f"{random.randint(100, 999):03d}"
+            
+        cards.append(f"{card_number}|{month}|20{year}|{cvc}")
+        
+    return cards
+
+
 # ==================== MOD-97 IBAN ENGINE ====================
 IBAN_COUNTRIES = {
     # Europe (44)
@@ -163,7 +227,7 @@ FAKER_DATA = {
     }
 }
 
-def generate_fake_identity(country_query="India"):
+def generate_fake_identity(country_query="United States"):
     country_match = "United States"
     for name in FAKER_DATA.keys():
         if country_query.lower() in name.lower() or name.lower() in country_query.lower():

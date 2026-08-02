@@ -1769,9 +1769,47 @@ async def clearqueue_command(message: types.Message):
     await message.reply("🗑 <b>Merge queue cleared.</b>")
 
 
-# ==================== IDENTITY & IBAN GENERATORS ====================
+# ==================== CC, IDENTITY & IBAN GENERATORS ====================
 
-@dp.message(Command("fake", "gen"))
+@dp.message(Command("gen"))
+async def gen_cards_command(message: types.Message):
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.reply(
+            "<b>Usage Error</b>\n"
+            "<code>Provide BIN pattern. Example:\n"
+            "/gen 453590 [count=10]\n"
+            "OR\n"
+            "/gen 453590xxxxxxxxxx|05|28|xxx 10</code>",
+            parse_mode="html"
+        )
+        return
+        
+    bin_pat = parts[1].strip()
+    count = 10
+    if len(parts) >= 3 and parts[2].isdigit():
+        count = min(int(parts[2]), 50)
+        
+    try:
+        from generators import generate_bin_cards
+        cards = generate_bin_cards(bin_pat, count)
+        cards_str = "\n".join([f"<code>{c}</code>" for c in cards])
+        
+        res = (
+            f"💳 <b>BIN Cards Generated</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 <b>BIN Pattern:</b> <code>{bin_pat}</code>\n"
+            f"📊 <b>Amount:</b> {len(cards)} Cards\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"{cards_str}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        await message.reply(res, parse_mode="html")
+    except Exception as e:
+        await message.reply(f"<b>Error generating CCs:</b> <code>{e}</code>", parse_mode="html")
+
+
+@dp.message(Command("fake"))
 async def fake_identity_command(message: types.Message):
     parts = message.text.strip().split(maxsplit=1)
     country_q = parts[1].strip() if len(parts) > 1 else "United States"
@@ -1914,7 +1952,9 @@ async def process_menu_tools(callback: types.CallbackQuery):
         "└ <i>Displays active working proxy count.</i>\n\n"
         "🔌 <b>/offproxy</b>\n"
         "└ <i>Clears proxy pool.</i>\n\n"
-        "👤 <b>/gen</b> / <b>/fake</b> <code>[country]</code>\n"
+        "🎲 <b>/gen</b> <code>[BIN] [count=10]</code>\n"
+        "└ <i>Generate Luhn-valid cards for any BIN pattern.</i>\n\n"
+        "👤 <b>/fake</b> <code>[country]</code>\n"
         "└ <i>Generate realistic fake identity (Name, Address, Phone, ID/SSN).</i>\n\n"
         "🏦 <b>/iban</b> <code>[country_code]</code>\n"
         "└ <i>Generate valid MOD-97 IBAN with BIC/SWIFT & Bank Name.</i>\n\n"
