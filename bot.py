@@ -1780,7 +1780,7 @@ async def gen_cards_command(message: types.Message):
             "<code>Provide BIN pattern. Example:\n"
             "/gen 453590 [count=10]\n"
             "OR\n"
-            "/gen 453590xxxxxxxxxx|05|28|xxx 10</code>",
+            "/gen 453590xxxxxxxxxx|05|28|xxx 1000</code>",
             parse_mode="html"
         )
         return
@@ -1788,23 +1788,55 @@ async def gen_cards_command(message: types.Message):
     bin_pat = parts[1].strip()
     count = 10
     if len(parts) >= 3 and parts[2].isdigit():
-        count = min(int(parts[2]), 50)
+        count = min(int(parts[2]), 10000)
         
     try:
         from generators import generate_bin_cards
-        cards = generate_bin_cards(bin_pat, count)
-        cards_str = "\n".join([f"<code>{c}</code>" for c in cards])
+        from aiogram.types import FSInputFile
         
-        res = (
-            f"💳 <b>BIN Cards Generated</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 <b>BIN Pattern:</b> <code>{bin_pat}</code>\n"
-            f"📊 <b>Amount:</b> {len(cards)} Cards\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"{cards_str}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━"
-        )
-        await message.reply(res, parse_mode="html")
+        cards = generate_bin_cards(bin_pat, count)
+        
+        if count <= 20:
+            cards_str = "\n".join([f"<code>{c}</code>" for c in cards])
+            res = (
+                f"💳 <b>BIN Cards Generated</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🎯 <b>BIN Pattern:</b> <code>{bin_pat}</code>\n"
+                f"📊 <b>Amount:</b> {len(cards)} Cards\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{cards_str}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━"
+            )
+            await message.reply(res, parse_mode="html")
+        else:
+            # Save clean CC lines to txt file
+            temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
+            os.makedirs(temp_dir, exist_ok=True)
+            clean_bin_name = re.sub(r'[^0-9]', '', bin_pat)[:8] or "gen"
+            out_filename = f"generated_cards_{clean_bin_name}_{len(cards)}.txt"
+            out_path = os.path.join(temp_dir, out_filename)
+            
+            with open(out_path, 'w', encoding='utf-8') as f:
+                f.write("\n".join(cards) + "\n")
+                
+            caption = (
+                f"💳 <b>BIN Cards Generated!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🎯 <b>BIN Pattern:</b> <code>{bin_pat}</code>\n"
+                f"📊 <b>Total Cards:</b> <b>{len(cards)}</b>\n"
+                f"📂 <b>Format:</b> Clean <code>cc|mm|yy|cvc</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━"
+            )
+            
+            await message.reply_document(
+                document=FSInputFile(out_path, filename=out_filename),
+                caption=caption,
+                parse_mode="html"
+            )
+            try:
+                os.remove(out_path)
+            except Exception:
+                pass
     except Exception as e:
         await message.reply(f"<b>Error generating CCs:</b> <code>{e}</code>", parse_mode="html")
 
