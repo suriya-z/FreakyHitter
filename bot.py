@@ -890,8 +890,8 @@ def parse_ccn_input(payload_tokens: list, raw_payload: str):
     Parses card numbers for CCN mode (number only, no mm|yy|cvv).
     Auto-generates random valid expiry. CVV is set to '000' placeholder.
     Supports:
-    1. Raw card numbers: /hitadccn [url] 4111111111111111 5200000000000001
-    2. BIN generation:   /hitadccn [url] 453590 [count=10]
+    1. Raw card numbers: /hitad1 [url] 4111111111111111 5200000000000001
+    2. BIN generation:   /hitad1 [url] 453590 [count=10]
     """
     import random
     from datetime import datetime
@@ -955,11 +955,11 @@ def parse_ccn_input(payload_tokens: list, raw_payload: str):
             cards.append({'card': num, 'month': m, 'year': y, 'cvv': '000'})
         return cards, None
 
-    return None, "Invalid format. Usage:\n/hitadccn [url] [card_number1] [card_number2] ...\nOR\n/hitadccn [url] [bin_pattern] [count=10]"
+    return None, "Invalid format. Usage:\n/hitad1 [url] [card_number1] [card_number2] ...\nOR\n/hitad1 [url] [bin_pattern] [count=10]"
 
 
-@dp.message(Command("hitadccn"))
-async def hitadccn_command(message: types.Message):
+@dp.message(Command("hitad1"))
+async def hitad1_command(message: types.Message):
     user_id = message.from_user.id
 
     if not gate_adyen_enabled and str(user_id) != str(OWNER_ID):
@@ -980,7 +980,7 @@ async def hitadccn_command(message: types.Message):
 
     raw_tokens = message.text.strip().split()
     if len(raw_tokens) < 3:
-        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hitadccn [url] [card_number1] [card_number2]\nOR\n/hitadccn [url] [bin_pattern] [count=10]</code>")
+        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hitad1 [url] [card_number1] [card_number2]\nOR\n/hitad1 [url] [bin_pattern] [count=10]</code>")
         return
 
     url = raw_tokens[1]
@@ -2414,7 +2414,7 @@ async def process_menu_hitter(callback: types.CallbackQuery):
         "└ <i>Hits 1 to 10 cards against Stripe checkout.</i>\n\n"
         "💎 <b>/hitad</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
         "└ <i>Hits 1 to 10 cards against Adyen gateway checkout.</i>\n\n"
-        "🔥 <b>/hitadccn</b> <code>[url] [card_number] ...</code>\n"
+        "🔥 <b>/hitad1</b> <code>[url] [card_number] ...</code>\n"
         "└ <i>Adyen CCN check — card number only, auto expiry, no CVV.</i>\n\n"
         "🌐 <b>/hitck</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
         "└ <i>Hits against Checkout.com Pay By Link.</i>\n\n"
