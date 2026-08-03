@@ -1455,130 +1455,119 @@ async def allproxies_command(message: types.Message):
 def parse_proxy_line(line: str) -> Optional[Dict]:
     line = line.strip()
     if not line: return None
-    raw_line = line
-    scheme = "http"
-    if "://" in line:
-        scheme_part, line = line.split("://", 1)
-        scheme = scheme_part.lower()
+    extracted = extract_all_proxies_from_text(line)
+    return extracted[0] if extracted else None
 
-    if "@" in line:
-        user_pass, host_port = line.split("@", 1)
-        if ":" in user_pass and ":" in host_port:
-            u_parts = user_pass.split(":")
-            h_parts = host_port.split(":")
-            if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", h_parts[0]):
-                return {"raw": raw_line, "server": f"{scheme}://{h_parts[0]}:{h_parts[1]}", "username": u_parts[0], "password": u_parts[1]}
-            elif re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", u_parts[0]):
-                return {"raw": raw_line, "server": f"{scheme}://{u_parts[0]}:{u_parts[1]}", "username": h_parts[0], "password": h_parts[1]}
-    parts = line.split(':')
-    if len(parts) == 4:
-        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", parts[0]):
-            return {"raw": raw_line, "server": f"{scheme}://{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]}
-        elif re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", parts[2]):
-            return {"raw": raw_line, "server": f"{scheme}://{parts[2]}:{parts[3]}", "username": parts[0], "password": parts[1]}
-    elif len(parts) == 2:
-        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", parts[0]):
-            return {"raw": raw_line, "server": f"{scheme}://{parts[0]}:{parts[1]}"}
-    return None
-
-
-def extract_all_proxies_from_text(raw_text: str) -> List[Dict]:
+def extract_all_proxies_from_text(raw_text: str) -> list:
     """
     Extracts all valid proxies from raw text, removing emojis, unwanted text, bullet points, tags.
-    Supports formats:
-    - ip:port
-    - ip:port:user:pass
-    - user:pass@ip:port
+    Supports both IPv4 and Hostname proxies:
+    - ip_or_host:port
+    - ip_or_host:port:user:pass
+    - user:pass@ip_or_host:port
     - http(s)://...
     - socks4/5://...
     """
     proxies = []
     seen = set()
-    
+
     text = re.sub(r'<[^>]+>', ' ', raw_text)
-    
-    # 1. user:pass@ip:port
+
+    HOST_PATTERN = r'(?:[a-zA-Z0-9_\-\.]+|\d{1,3}(?:\.\d{1,3}){3})'
+
+    # 1. user:pass@host:port
     pattern_user_pass_host = re.compile(
         r'(?:(https?|socks[45])://)?([a-zA-Z0-9_\-\.]+):([a-zA-Z0-9_\-\.]+)'
-        r'@(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})', re.I
+        r'@(' + HOST_PATTERN + r'):(\d{1,5})', re.I
     )
     for m in pattern_user_pass_host.finditer(text):
         scheme = (m.group(1) or 'http').lower()
-        user, pwd, ip, port = m.group(2), m.group(3), m.group(4), m.group(5)
-        raw_p = f"{ip}:{port}:{user}:{pwd}"
+        user, pwd, host, port = m.group(2), m.group(3), m.group(4), m.group(5)
+        raw_p = f"{host}:{port}:{user}:{pwd}"
         if raw_p not in seen:
             seen.add(raw_p)
             proxies.append({
                 "raw": raw_p,
-                "server": f"{scheme}://{ip}:{port}",
+                "server": f"{scheme}://{host}:{port}",
                 "username": user,
                 "password": pwd
             })
 
-    # 2. ip:port:user:pass
+    # 2. host:port:user:pass
     pattern_host_port_user_pass = re.compile(
-        r'(?:(https?|socks[45])://)?(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})'
+        r'(?:(https?|socks[45])://)?(' + HOST_PATTERN + r'):(\d{1,5})'
         r':([a-zA-Z0-9_\-\.]+):([a-zA-Z0-9_\-\.]+)', re.I
     )
     for m in pattern_host_port_user_pass.finditer(text):
         scheme = (m.group(1) or 'http').lower()
-        ip, port, user, pwd = m.group(2), m.group(3), m.group(4), m.group(5)
-        raw_p = f"{ip}:{port}:{user}:{pwd}"
+        host, port, user, pwd = m.group(2), m.group(3), m.group(4), m.group(5)
+        raw_p = f"{host}:{port}:{user}:{pwd}"
         if raw_p not in seen:
             seen.add(raw_p)
             proxies.append({
                 "raw": raw_p,
-                "server": f"{scheme}://{ip}:{port}",
+                "server": f"{scheme}://{host}:{port}",
                 "username": user,
                 "password": pwd
             })
 
-    # 3. ip:port
-    pattern_ip_port = re.compile(
-        r'(?:(https?|socks[45])://)?(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})', re.I
+    # 3. host:port (standalone without user:pass)
+    pattern_host_port = re.compile(
+        r'(?:(https?|socks[45])://)?(' + HOST_PATTERN + r'):(\d{1,5})', re.I
     )
-    for m in pattern_ip_port.finditer(text):
+    for m in pattern_host_port.finditer(text):
         scheme = (m.group(1) or 'http').lower()
-        ip, port = m.group(2), m.group(3)
-        raw_p = f"{ip}:{port}"
-        if not any(ip in p['server'] and port in p['server'] for p in proxies):
+        host, port = m.group(2), m.group(3)
+        raw_p = f"{host}:{port}"
+        if not any(host in p['server'] and port in p['server'] for p in proxies):
             if raw_p not in seen:
                 seen.add(raw_p)
                 proxies.append({
                     "raw": raw_p,
-                    "server": f"{scheme}://{ip}:{port}"
+                    "server": f"{scheme}://{host}:{port}"
                 })
-                
-    return proxies
 
+    return proxies
 
 @dp.message(Command("proxy", "setproxy", "chkproxy", "checkproxy"))
 async def proxy_command(message: types.Message):
     user_id = message.from_user.id
-    
-    # Parse command arguments
-    command_parts = message.text.split(maxsplit=1)
-    text = command_parts[1].strip() if len(command_parts) > 1 else ""
-    
-    is_loading_new = bool(text)
+
+    raw_input_text = ""
+
+    # Check attached file or reply file
+    if message.document or (message.reply_to_message and message.reply_to_message.document):
+        doc = message.document or message.reply_to_message.document
+        if doc and (doc.file_name or "").lower().endswith(".txt"):
+            try:
+                file_info = await bot.get_file(doc.file_id)
+                downloaded = await bot.download_file(file_info.file_path)
+                raw_input_text = downloaded.read().decode('utf-8', errors='ignore')
+            except Exception as e:
+                await message.reply(f"❌ <b>File Download Error</b>\n<code>{str(e)}</code>")
+                return
+
+    if not raw_input_text and message.reply_to_message:
+        raw_input_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+
+    if not raw_input_text:
+        command_parts = message.text.split(maxsplit=1)
+        if len(command_parts) > 1:
+            raw_input_text = command_parts[1].strip()
+
+    is_loading_new = bool(raw_input_text)
     proxies_to_test = []
-    
+
     if is_loading_new:
-        temp_pool = []
-        lines = text.split('\n')
-        for line in lines:
-            parsed = parse_proxy_line(line)
-            if parsed:
-                temp_pool.append(parsed)
-        proxies_to_test = temp_pool
+        proxies_to_test = extract_all_proxies_from_text(raw_input_text)
     else:
         proxies_to_test = list(await ProxyManager.get_user_proxies(user_id))
-        
+
     if not proxies_to_test:
         if is_loading_new:
-            await message.answer("<b>Error</b>\n<code>Failed to parse proxies. Supported formats:\nip:port | ip:port:user:pass | user:pass@ip:port | socks5://ip:port</code>")
+            await message.answer("<b>Error</b>\n<code>Failed to parse proxies. Supported formats:\nip:port | host:port:user:pass | user:pass@host:port | socks5://host:port</code>")
         else:
-            await message.answer("<b>Error</b>\n<code>Proxy pool is empty. Set proxies via command: /proxy ip:port:user:pass</code>")
+            await message.answer("<b>Error</b>\n<code>Proxy pool is empty. Set proxies via command: /proxy host:port:user:pass or reply /proxy to a .txt file.</code>")
         return
 
     loading_status = "verifying_channels" if is_loading_new else "running_self_check"
@@ -1586,86 +1575,61 @@ async def proxy_command(message: types.Message):
         f"⏳ <b>Checking proxies...</b>\n"
         f"<code>Testing {len(proxies_to_test)} proxy channels in background</code>"
     )
-    
+
     # Test proxies
     live_proxies, dead_proxies, weak_proxies = await test_proxy_list(proxies_to_test, not is_loading_new, user_id)
-    
+
     live_count = len(live_proxies)
     dead_count = len(dead_proxies)
     weak_count = len(weak_proxies)
-    premium_count = live_count - weak_count
     total_tested = len(proxies_to_test)
-    
-    # Calculate health score percentage
+
     health_pct = int((live_count / total_tested) * 100) if total_tested > 0 else 0
-    
+
     final_msg = (
         f"🟢 <b>ACTIVE PROXIES ({health_pct}%)</b>\n\n"
         f"<code>LIVE   :: {live_count} / {total_tested}</code>\n"
         f"<code>DEAD   :: {dead_count}</code>"
     )
-    
+
     if is_loading_new:
         if live_count == 0:
-            final_msg += "<code>⚠️ ERROR :: All imported proxies failed connection tests</code>"
+            final_msg += "\n<code>⚠️ ERROR :: All imported proxies failed connection tests</code>"
             await status_msg.edit_text(final_msg)
             return
-            
-        # Cache results in memory
+
         if not hasattr(bot, 'pasted_proxies_cache'):
             bot.pasted_proxies_cache = {}
-        
+
         premium_raws = [p for p in live_proxies if p not in weak_proxies]
         bot.pasted_proxies_cache[user_id] = {
             'premium': premium_raws,
             'live': live_proxies
         }
-        
+
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         buttons = []
         if len(premium_raws) > 0:
             buttons.append([InlineKeyboardButton(text=f"➕ ADD PREMIUM ONLY ({len(premium_raws)})", callback_data="add_strong_only")])
         buttons.append([InlineKeyboardButton(text=f"➕ ADD ALL LIVE ({live_count})", callback_data="add_live_all")])
-        
+
         markup = InlineKeyboardMarkup(inline_keyboard=buttons)
         await status_msg.edit_text(final_msg, reply_markup=markup)
-        
-        if LOG_GROUP_ID:
-            try:
-                live_str = "\n".join([f"<code>• {p}</code>" for p in live_proxies[:30]]) if live_proxies else "None"
-                if len(live_proxies) > 30:
-                    live_str += f"\n...and {len(live_proxies) - 30} more active channels"
-                dead_str = "\n".join([f"<code>• {p}</code>" for p in dead_proxies[:10]]) if dead_proxies else "None"
-                if len(dead_proxies) > 10:
-                    dead_str += f"\n...and {len(dead_proxies) - 10} more offline channels"
-                
-                msg_text = (
-                    f"📡 <b>Proxy Telemetry</b>\n\n"
-                    f"👤 User: {message.from_user.first_name}\n"
-                    f"🟢 Active: {live_count}\n"
-                    f"🔴 Dead: {dead_count}\n\n"
-                    f"<b>[ ACTIVE IPS ]</b>\n{live_str}\n\n"
-                    f"<b>[ DEAD IPS ]</b>\n{dead_str}"
-                )
-                await bot.send_message(LOG_GROUP_ID, msg_text)
-            except:
-                pass
     else:
-        # Standard check report
         if dead_count > 0:
             final_msg += f"\n<code>[ INFO   ] removed {dead_count} inactive proxy channels from storage</code>"
-        
+
         markup = None
         if weak_count > 0:
             if not hasattr(bot, 'weak_proxies_cache'):
                 bot.weak_proxies_cache = {}
             bot.weak_proxies_cache[user_id] = weak_proxies
-            
+
             from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
             markup = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=f"❌ PURGE WEAK IPS ({weak_count})", callback_data="rm_weak_proxies")]
             ])
-            
+
         try:
             if markup:
                 await status_msg.edit_text(final_msg, reply_markup=markup)
