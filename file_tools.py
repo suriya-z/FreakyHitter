@@ -101,20 +101,22 @@ def clean_and_sort_cards_text(raw_text: str) -> Tuple[str, Dict]:
     }
     return output_text, stats
 
-# 2. Split
-def split_text_n_parts(text: str, n_parts: int) -> List[str]:
+# 2. Split (Lines per file)
+def split_text_lines_per_file(text: str, lines_per_file: int) -> List[str]:
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     if not lines:
         return []
-    n_parts = max(1, min(n_parts, 50))
-    chunk_size = (len(lines) + n_parts - 1) // n_parts
+    lines_per_file = max(1, lines_per_file)
     
     parts = []
-    for i in range(0, len(lines), chunk_size):
-        chunk = lines[i:i + chunk_size]
+    for i in range(0, len(lines), lines_per_file):
+        chunk = lines[i:i + lines_per_file]
         if chunk:
             parts.append("\n".join(chunk))
     return parts
+
+def split_text_n_parts(text: str, n_parts: int) -> List[str]:
+    return split_text_lines_per_file(text, n_parts)
 
 # 3. Find BIN
 def filter_by_bin_prefix(text: str, bin_prefix: str) -> Tuple[str, int]:

