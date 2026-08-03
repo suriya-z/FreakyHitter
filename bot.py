@@ -887,11 +887,12 @@ async def hitck_command(message: types.Message):
 
 def parse_ccn_input(payload_tokens: list, raw_payload: str):
     """
-    Parses card numbers for CCN mode (number only, no mm|yy|cvv).
-    Auto-generates random valid expiry. CVV is set to '000' placeholder.
-    Supports:
-    1. Raw card numbers: /hitad1 [url] 4111111111111111 5200000000000001
-    2. BIN generation:   /hitad1 [url] 453590 [count=10]
+    Parses cards for CCN mode (no CVV required from user).
+    Supported formats:
+    1. card|mm|yy or card/mm/yy (3 parts)
+    2. card|mm|yy|cvv (4 parts - CVV ignored)
+    3. Raw card numbers: /hitad1 [url] 4111111111111111 (auto expiry)
+    4. BIN generation: /hitad1 [url] 453590 [count=10]
     """
     import random
     from datetime import datetime
@@ -906,8 +907,7 @@ def parse_ccn_input(payload_tokens: list, raw_payload: str):
 
     cards = []
 
-    # Check for full CC format first (already has mm|yy|cvv) - still allow it
-    import re
+    # 1. Check for card|mm|yy|cvv (4 parts)
     full_matches = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})[|/](\d{3,4})', raw_payload)
     if full_matches:
         for m in full_matches:
@@ -915,13 +915,27 @@ def parse_ccn_input(payload_tokens: list, raw_payload: str):
                 'card': m[0],
                 'month': m[1].zfill(2),
                 'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
-                'cvv': m[3]
+                'cvv': '000'
             })
         if len(cards) > 10:
-            return None, f"Max concurrent limit is 10."
+            return None, "Max concurrent limit is 10."
         return cards, None
 
-    # Check for BIN pattern
+    # 2. Check for card|mm|yy (3 parts - CCN format without CVV)
+    ccn_matches = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})', raw_payload)
+    if ccn_matches:
+        for m in ccn_matches:
+            cards.append({
+                'card': m[0],
+                'month': m[1].zfill(2),
+                'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
+                'cvv': '000'
+            })
+        if len(cards) > 10:
+            return None, "Max concurrent limit is 10."
+        return cards, None
+
+    # 3. Check for BIN pattern
     if payload_tokens:
         count_val = payload_tokens[-1]
         count = 10
@@ -941,13 +955,12 @@ def parse_ccn_input(payload_tokens: list, raw_payload: str):
             raw_gen_cards = generate_bin_cards(potential_bin, count)
             for gc in raw_gen_cards:
                 gp = gc.split('|')
-                # Use generated expiry but mark as CCN (we won't send CVV)
-                cards.append({'card': gp[0], 'month': gp[1], 'year': gp[2], 'cvv': gp[3]})
+                cards.append({'card': gp[0], 'month': gp[1], 'year': gp[2], 'cvv': '000'})
             if not cards:
                 return None, "BIN pattern generation failed."
             return cards, None
 
-    # Raw card numbers (just digits, space or newline separated)
+    # 4. Raw card numbers (just digits) - fallback with random expiry
     raw_numbers = re.findall(r'\b(\d{13,19})\b', raw_payload)
     if raw_numbers:
         for num in raw_numbers[:10]:
@@ -955,8 +968,7 @@ def parse_ccn_input(payload_tokens: list, raw_payload: str):
             cards.append({'card': num, 'month': m, 'year': y, 'cvv': '000'})
         return cards, None
 
-    return None, "Invalid format. Usage:\n/hitad1 [url] [card_number1] [card_number2] ...\nOR\n/hitad1 [url] [bin_pattern] [count=10]"
-
+    return None, "Invalid format. Usage:\n/hitad1 [url] cc|mm|yy ...\nOR\n/hitad1 [url] [bin_pattern] [count=10]"
 
 @dp.message(Command("hitad1"))
 async def hitad1_command(message: types.Message):
