@@ -213,10 +213,12 @@ class CheckoutHitter:
                             result['decline_code'] = pay_data.get('response_code') or status
                             result['error'] = pay_data.get('response_summary') or pay_data.get('status') or f"Status: {status}"
                     else:
-                        err_desc = pay_data.get('response_summary') or pay_data.get('error_type') or f"HTTP {r.status_code}"
-                        if isinstance(pay_data.get('error_codes'), list):
+                        err_desc = pay_data.get('response_summary')
+                        if not err_desc or err_desc == "validation_error":
+                            err_desc = "The payment was unsuccessful, please check the details or try another payment method."
+                        elif isinstance(pay_data.get('error_codes'), list):
                             err_desc += f" ({', '.join(pay_data['error_codes'])})"
-                        result['decline_code'] = str(r.status_code)
+                        result['decline_code'] = pay_data.get('response_summary') or str(r.status_code)
                         result['error'] = err_desc
                         
         except Exception as e:
