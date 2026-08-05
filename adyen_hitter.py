@@ -119,9 +119,9 @@ _SI = [
     r'sessionId["\'\s:=]+["\']?([A-Za-z0-9_-]{15,})',
 ]
 _SD = [
-    r'"sessionData"\s*:\s*"([A-Za-z0-9+/=_-]{40,})"',
-    r"'sessionData'\s*:\s*'([A-Za-z0-9+/=_-]{40,})'",
-    r'sessionData["\'\s:=]+["\']?([A-Za-z0-9+/=_-]{40,})',
+    r'"sessionData"\s*:\s*"([^"]{40,})"',
+    r"'sessionData'\s*:\s*'([^']{40,})'",
+    r'sessionData["\'\s:=]+["\']?([^"\'\s,}{]+)',
 ]
 _PK = [
     r'"publicKey"\s*:\s*"([0-9a-fA-F]+\|[0-9a-fA-F]+)"',
@@ -161,7 +161,9 @@ def _extract_config(html: str) -> dict:
             break
     cfg['clientKey']      = _first_match(_CK, html)
     cfg['sessionId']      = _first_match(_SI, html)
-    cfg['sessionData']    = _first_match(_SD, html)
+    sd_raw                 = _first_match(_SD, html)
+    if sd_raw:
+        cfg['sessionData'] = sd_raw.replace(r'\/', '/').replace('\\/', '/')
     cfg['publicKey']      = _first_match(_PK, html)
     cfg['linkId']         = _first_match(_LI, html)
     cfg['loadingContext'] = _first_match(_LC, html)
