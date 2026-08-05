@@ -1276,6 +1276,43 @@ class StripeAPIHitter:
                 err_code = confirm_json.get('error', {}).get('code')
                 err_msg = confirm_json.get('error', {}).get('message', '') or ''
                 
+                # Payment method missing error bypass (individual_name_required)
+                if err_code == 'individual_name_required' or 'individual_name_required' in err_msg:
+                    # Stripe /confirm with cs_live expects expected_amount if we switch to payment_method_data.
+                    # Since we don't always have expected_amount scraped accurately, we can try injecting the name 
+                    # into `payment_method_options[card][billing_details][name]` or similar fallback structures.
+                    # As a last resort, just passing `expected_amount=0` sometimes hits amount_mismatch instead of missing amount.
+                    
+                    confirm_data["payment_method_data[type]"] = "card"
+                    confirm_data["payment_method_data[card][number]"] = pm_data.get("card[number]")
+                    confirm_data["payment_method_data[card][cvc]"] = pm_data.get("card[cvc]")
+                    confirm_data["payment_method_data[card][exp_month]"] = pm_data.get("card[exp_month]")
+                    confirm_data["payment_method_data[card][exp_year]"] = pm_data.get("card[exp_year]")
+                    confirm_data["payment_method_data[billing_details][name]"] = pm_data.get("billing_details[name]", "Test User")
+                    if "billing_details[email]" in pm_data:
+                        confirm_data["payment_method_data[billing_details][email]"] = pm_data.get("billing_details[email]")
+                    
+                    if "payment_method" in confirm_data:
+                        del confirm_data["payment_method"]
+                    if "payment_method_options[card][mit_exemption][reason]" in confirm_data:
+                        del confirm_data["payment_method_options[card][mit_exemption][reason]"]
+                        
+                    # Inject expected amount if known to bypass the required amount error when providing PM Data
+                    if self.raw_amount is not None and self.raw_amount > 0:
+                        confirm_data["expected_amount"] = self.raw_amount
+                    elif self._init_json and "total_summary" in self._init_json and "total" in self._init_json["total_summary"]:
+                        # Pull amount directly from init json if scraped
+                        confirm_data["expected_amount"] = self._init_json["total_summary"]["total"]
+                    else:
+                        # Dummy fallback
+                        confirm_data["expected_amount"] = 0
+                        
+                    confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
+                    confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
+                    confirm_json = confirm_res.json()
+                    err_code = confirm_json.get('error', {}).get('code')
+                    err_msg = confirm_json.get('error', {}).get('message', '') or ''
+                
                 # Parameter Unknown Bypass — iteratively strip any rejected parameter and retry
                 # Stripe will name the offending param in the error message, so we parse and remove it.
                 _param_retry_limit = 4
