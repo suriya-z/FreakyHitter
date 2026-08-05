@@ -1414,6 +1414,23 @@ class StripeAPIHitter:
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
                     confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
                     confirm_json = confirm_res.json()
+                    
+                    if confirm_res.status_code != 200 and confirm_json.get('error', {}).get('code') == 'checkout_amount_mismatch':
+                        print("[DEBUG] Still getting checkout_amount_mismatch. Forcing payment_method_data injection.")
+                        if 'payment_method' in confirm_data:
+                            del confirm_data['payment_method']
+                        # Do NOT delete expected_amount here, we want to send it with payment_method_data
+                        for k, v in pm_data.items():
+                            confirm_data[f"payment_method_data[{k}]"] = v
+                            
+                        # Ensure no invalid keys leaked in
+                        if "payment_method_data[key]" in confirm_data:
+                            del confirm_data["payment_method_data[key]"]
+                            
+                        confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
+                        confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
+                        confirm_json = confirm_res.json()
+                        print(f"[DEBUG] PM Data retry response: {confirm_res.status_code} {confirm_json}")
                 
                 result['response_time'] = time.time() - start
                 
