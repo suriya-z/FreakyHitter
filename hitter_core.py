@@ -1313,6 +1313,19 @@ class StripeAPIHitter:
                     err_code = confirm_json.get('error', {}).get('code')
                     err_msg = confirm_json.get('error', {}).get('message', '') or ''
                 
+                # Amount Mismatch Bypass
+                # If we injected expected_amount above but it was wrong (due to taxes/shipping updating dynamically), 
+                # Stripe throws amount_mismatch. We can retry by either stripping it or setting it to the value Stripe expected,
+                # but Stripe doesn't always tell us the expected value. Let's try stripping it.
+                if err_code == 'amount_mismatch':
+                    if "expected_amount" in confirm_data:
+                        del confirm_data["expected_amount"]
+                        confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
+                        confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
+                        confirm_json = confirm_res.json()
+                        err_code = confirm_json.get('error', {}).get('code')
+                        err_msg = confirm_json.get('error', {}).get('message', '') or ''
+                
                 # Parameter Unknown Bypass — iteratively strip any rejected parameter and retry
                 # Stripe will name the offending param in the error message, so we parse and remove it.
                 _param_retry_limit = 4
