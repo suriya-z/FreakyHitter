@@ -175,7 +175,7 @@ async def command_start_handler(message: types.Message) -> None:
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="COMMANDS", callback_data="show_commands")]
+        [InlineKeyboardButton(text="<b><i>COMMANDS</i></b>", callback_data="show_commands")]
     ])
     
     welcome_text = (
@@ -194,8 +194,8 @@ async def cmds_command(message: types.Message) -> None:
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="💳 HITTER", callback_data="menu_hitter"),
-            InlineKeyboardButton(text="🛠 TOOLS", callback_data="menu_tools")
+            InlineKeyboardButton(text="<b><i>HITTER</i></b>", callback_data="menu_hitter"),
+            InlineKeyboardButton(text="<b><i>TOOLS</i></b>", callback_data="menu_tools")
         ]
     ])
     commands_text = (
@@ -2207,7 +2207,7 @@ async def clearqueue_command(message: types.Message):
 
 # ==================== CC, IDENTITY & IBAN GENERATORS ====================
 
-@dp.message(Command("gen"))
+@dp.message(Command("gen", "bin"))
 async def gen_cards_command(message: types.Message):
     parts = message.text.strip().split()
     if len(parts) < 2:
@@ -2362,8 +2362,8 @@ async def process_show_commands(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="💳 HITTER", callback_data="menu_hitter"),
-            InlineKeyboardButton(text="🛠 TOOLS", callback_data="menu_tools")
+            InlineKeyboardButton(text="HITTER", callback_data="menu_hitter"),
+            InlineKeyboardButton(text="TOOLS", callback_data="menu_tools")
         ]
     ])
     commands_text = (
@@ -2381,77 +2381,118 @@ async def process_show_commands(callback: types.CallbackQuery):
 async def process_menu_hitter(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 BACK", callback_data="menu_main")]
+        [InlineKeyboardButton(text="<b><i>BACK</i></b>", callback_data="menu_main")]
     ])
     hitter_text = (
-        "💳 <b>HITTER COMMANDS</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "💳 <b>/hit</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
-        "└ <i>Hits 1 to 10 cards against Stripe checkout.</i>\n\n"
-        "💎 <b>/hitad</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
-        "└ <i>Hits 1 to 10 cards against Adyen gateway checkout.</i>\n\n"
-        "🔥 <b>/hitad1</b> <code>[url] [card_number] ...</code>\n"
-        "└ <i>Adyen CCN check — card number only, auto expiry, no CVV.</i>\n\n"
-        "🌐 <b>/hitck</b> <code>[url] [cc|mm|yy|cvc] ...</code>\n"
-        "└ <i>Hits against Checkout.com Pay By Link.</i>\n\n"
-        "🎲 <b>/hit</b> <code>[url] [bin_pattern] [count]</code>\n"
-        "└ <i>Generates BIN cards and hits concurrently.</i>\n\n"
-        "🛑 <b>/stop</b>\n"
-        "└ <i>Instantly aborts your active hitting session.</i>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━"
+        "<b><i>Stripe Checkout Hitter</i></b>\n"
+        "<code>/hit [url] [cc|mm|yy|cvv]</code>\n\n"
+        "<b><i>Adyen Checkout Hitter</i></b>\n"
+        "<code>/hitad [url] [cc|mm|yy|cvv]</code>\n\n"
+        "<b><i>Adyen Checkout CCN Hitter</i></b>\n"
+        "<code>/hitad1 [url] [card_number]</code>\n\n"
+        "<b><i>Checkout.com Hitter</i></b>\n"
+        "<code>/hitck [url] [cc|mm|yy|cvv]</code>"
     )
     await callback.message.edit_text(hitter_text, reply_markup=markup)
     await callback.answer()
 
-@dp.callback_query(F.data == "menu_tools")
-async def process_menu_tools(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    is_owner = OWNER_ID and str(user_id) == str(OWNER_ID)
-    
+@dp.callback_query(F.data.in_({"menu_tools", "tools_p1"}))
+async def process_menu_tools_p1(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 BACK", callback_data="menu_main")]
+        [
+            InlineKeyboardButton(text="<b><i>NEXT</i></b>", callback_data="tools_p2"),
+            InlineKeyboardButton(text="<b><i>BACK</i></b>", callback_data="menu_main"),
+            InlineKeyboardButton(text="<b><i>CLOSE</i></b>", callback_data="menu_close")
+        ]
     ])
-    
-    tools_text = (
-        "🛠️ <b>TOOL COMMANDS</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🌐 <b>/proxy</b> <code>[ip:port / user:pass@ip:port]</code>\n"
-        "└ <i>Auto-checks proxies & provides options to add to pool.</i>\n\n"
-        "🧹 <b>/checkproxy</b>\n"
-        "└ <i>Runs self-check on all loaded proxies in your pool.</i>\n\n"
-        "📊 <b>/proxystatus</b>\n"
-        "└ <i>Displays active working proxy count.</i>\n\n"
-        "🔌 <b>/offproxy</b>\n"
-        "└ <i>Clears proxy pool.</i>\n\n"
-        "🎲 <b>/gen</b> <code>[BIN] [count=10]</code>\n"
-        "└ <i>Generate Luhn-valid cards for any BIN pattern.</i>\n\n"
-        "👤 <b>/fake</b> <code>[country]</code>\n"
-        "└ <i>Generate realistic fake identity (Name, Address, Phone, ID/SSN).</i>\n\n"
-        "🏦 <b>/iban</b> <code>[country_code]</code>\n"
-        "└ <i>Generate valid MOD-97 IBAN with BIC/SWIFT & Bank Name.</i>\n\n"
-        "🌐 <b>/ibancountry</b>\n"
-        "└ <i>Display all 56 supported IBAN country codes.</i>\n\n"
-        "✂️ <b>/split</b> <code>[N]</code>\n"
-        "└ <i>Split file into N equal parts.</i>\n\n"
-        "🧹 <b>/clean</b>\n"
-        "└ <i>Remove invalid, expired, duplicates & sort by brand (Visa first).</i>\n\n"
-        "🔍 <b>/find</b> <code>[BIN]</code>\n"
-        "└ <i>Filter lines by BIN prefix.</i>\n\n"
-        "🌍 <b>/country</b>\n"
-        "└ <i>Group lines by country flag & code.</i>\n\n"
-        "📦 <b>/pick</b> <code>[N]</code>\n"
-        "└ <i>Download lines for country N/code.</i>\n\n"
-        "🔗 <b>/addfile</b>\n"
-        "└ <i>Add file to merge queue.</i>\n\n"
-        "🔗 <b>/merge</b>\n"
-        "└ <i>Merge all queued files.</i>\n\n"
-        "🗑 <b>/clearqueue</b>\n"
-        "└ <i>Clear merge queue.</i>\n\n"
-        "⚠️ <i>Reply to a .txt file before using file tools.</i>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━"
+    text = (
+        "<b><i>BIN Generator</i></b>\n"
+        "<code>/bin [bin_pattern] [count]</code>\n\n"
+        "<b><i>Fake Identity Generator</i></b>\n"
+        "<code>/fake [country]</code>\n\n"
+        "<b><i>IBAN Generator</i></b>\n"
+        "<code>/iban [country_code]</code>\n\n"
+        "<b><i>IBAN Country Codes</i></b>\n"
+        "<code>/ibancountry</code>"
     )
-    await callback.message.edit_text(tools_text, reply_markup=markup)
+    await callback.message.edit_text(text, reply_markup=markup)
+    await callback.answer()
+
+@dp.callback_query(F.data == "tools_p2")
+async def process_menu_tools_p2(callback: types.CallbackQuery):
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="<b><i>NEXT</i></b>", callback_data="tools_p3"),
+            InlineKeyboardButton(text="<b><i>BACK</i></b>", callback_data="tools_p1"),
+            InlineKeyboardButton(text="<b><i>CLOSE</i></b>", callback_data="menu_close")
+        ]
+    ])
+    text = (
+        "<b><i>Add Proxy</i></b>\n"
+        "<code>/proxy [ip:port / user:pass@ip:port]</code>\n\n"
+        "<b><i>Check Proxies</i></b>\n"
+        "<code>/checkproxy</code>\n\n"
+        "<b><i>Proxy Status</i></b>\n"
+        "<code>/proxystatus</code>\n\n"
+        "<b><i>Clear Proxies</i></b>\n"
+        "<code>/offproxy</code>"
+    )
+    await callback.message.edit_text(text, reply_markup=markup)
+    await callback.answer()
+
+@dp.callback_query(F.data == "tools_p3")
+async def process_menu_tools_p3(callback: types.CallbackQuery):
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="<b><i>NEXT</i></b>", callback_data="tools_p4"),
+            InlineKeyboardButton(text="<b><i>BACK</i></b>", callback_data="tools_p2"),
+            InlineKeyboardButton(text="<b><i>CLOSE</i></b>", callback_data="menu_close")
+        ]
+    ])
+    text = (
+        "<b><i>Split File</i></b>\n"
+        "<code>/split [N]</code>\n\n"
+        "<b><i>Clean Combo File</i></b>\n"
+        "<code>/clean</code>\n\n"
+        "<b><i>Find BIN Lines</i></b>\n"
+        "<code>/find [BIN]</code>\n\n"
+        "<b><i>Group By Country</i></b>\n"
+        "<code>/country</code>"
+    )
+    await callback.message.edit_text(text, reply_markup=markup)
+    await callback.answer()
+
+@dp.callback_query(F.data == "tools_p4")
+async def process_menu_tools_p4(callback: types.CallbackQuery):
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="<b><i>BACK</i></b>", callback_data="tools_p3"),
+            InlineKeyboardButton(text="<b><i>CLOSE</i></b>", callback_data="menu_close")
+        ]
+    ])
+    text = (
+        "<b><i>Pick Country Lines</i></b>\n"
+        "<code>/pick [N]</code>\n\n"
+        "<b><i>Add File To Queue</i></b>\n"
+        "<code>/addfile</code>\n\n"
+        "<b><i>Merge Queued Files</i></b>\n"
+        "<code>/merge</code>\n\n"
+        "<b><i>Clear Merge Queue</i></b>\n"
+        "<code>/clearqueue</code>"
+    )
+    await callback.message.edit_text(text, reply_markup=markup)
+    await callback.answer()
+
+@dp.callback_query(F.data == "menu_close")
+async def process_menu_close(callback: types.CallbackQuery):
+    try:
+        await callback.message.delete()
+    except Exception:
+        await callback.message.edit_text("<i>Menu closed.</i>")
     await callback.answer()
 
 

