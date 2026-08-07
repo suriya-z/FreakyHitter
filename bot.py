@@ -175,7 +175,7 @@ async def command_start_handler(message: types.Message) -> None:
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="<b><i>COMMANDS</i></b>", callback_data="show_commands")]
+        [InlineKeyboardButton(text="𝘾𝙊𝙈𝙈𝘼𝙉𝘿𝙎", callback_data="show_commands")]
     ])
     
     welcome_text = (
@@ -194,8 +194,8 @@ async def cmds_command(message: types.Message) -> None:
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="<b><i>HITTER</i></b>", callback_data="menu_hitter"),
-            InlineKeyboardButton(text="<b><i>TOOLS</i></b>", callback_data="menu_tools")
+            InlineKeyboardButton(text="𝙃𝙄𝙏𝙏𝙀𝙍", callback_data="menu_hitter"),
+            InlineKeyboardButton(text="𝙏𝙊𝙊𝙇𝙎", callback_data="menu_tools")
         ]
     ])
     commands_text = (
@@ -2362,8 +2362,8 @@ async def process_show_commands(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="HITTER", callback_data="menu_hitter"),
-            InlineKeyboardButton(text="TOOLS", callback_data="menu_tools")
+            InlineKeyboardButton(text="𝙃𝙄𝙏𝙏𝙀𝙍", callback_data="menu_hitter"),
+            InlineKeyboardButton(text="𝙏𝙊𝙊𝙇𝙎", callback_data="menu_tools")
         ]
     ])
     commands_text = (
@@ -2381,7 +2381,7 @@ async def process_show_commands(callback: types.CallbackQuery):
 async def process_menu_hitter(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="<b><i>BACK</i></b>", callback_data="menu_main")]
+        [InlineKeyboardButton(text="𝘽𝘼𝘾𝙆", callback_data="menu_main")]
     ])
     hitter_text = (
         "<b><i>Stripe Checkout Hitter</i></b>\n"
@@ -2401,9 +2401,9 @@ async def process_menu_tools_p1(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="<b><i>NEXT</i></b>", callback_data="tools_p2"),
-            InlineKeyboardButton(text="<b><i>BACK</i></b>", callback_data="menu_main"),
-            InlineKeyboardButton(text="<b><i>CLOSE</i></b>", callback_data="menu_close")
+            InlineKeyboardButton(text="𝙉𝙀𝙓𝙏", callback_data="tools_p2"),
+            InlineKeyboardButton(text="𝘽𝘼𝘾𝙆", callback_data="menu_main"),
+            InlineKeyboardButton(text="𝘾𝙇𝙊𝙎𝙀", callback_data="menu_close")
         ]
     ])
     text = (
@@ -2424,9 +2424,9 @@ async def process_menu_tools_p2(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="<b><i>NEXT</i></b>", callback_data="tools_p3"),
-            InlineKeyboardButton(text="<b><i>BACK</i></b>", callback_data="tools_p1"),
-            InlineKeyboardButton(text="<b><i>CLOSE</i></b>", callback_data="menu_close")
+            InlineKeyboardButton(text="𝙉𝙀𝙓𝙏", callback_data="tools_p3"),
+            InlineKeyboardButton(text="𝘽𝘼𝘾𝙆", callback_data="tools_p1"),
+            InlineKeyboardButton(text="𝘾𝙇𝙊𝙎𝙀", callback_data="menu_close")
         ]
     ])
     text = (
@@ -2447,9 +2447,9 @@ async def process_menu_tools_p3(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="<b><i>NEXT</i></b>", callback_data="tools_p4"),
-            InlineKeyboardButton(text="<b><i>BACK</i></b>", callback_data="tools_p2"),
-            InlineKeyboardButton(text="<b><i>CLOSE</i></b>", callback_data="menu_close")
+            InlineKeyboardButton(text="𝙉𝙀𝙓𝙏", callback_data="tools_p4"),
+            InlineKeyboardButton(text="𝘽𝘼𝘾𝙆", callback_data="tools_p2"),
+            InlineKeyboardButton(text="𝘾𝙇𝙊𝙎𝙀", callback_data="menu_close")
         ]
     ])
     text = (
@@ -2470,8 +2470,8 @@ async def process_menu_tools_p4(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="<b><i>BACK</i></b>", callback_data="tools_p3"),
-            InlineKeyboardButton(text="<b><i>CLOSE</i></b>", callback_data="menu_close")
+            InlineKeyboardButton(text="𝘽𝘼𝘾𝙆", callback_data="tools_p3"),
+            InlineKeyboardButton(text="𝘾𝙇𝙊𝙎𝙀", callback_data="menu_close")
         ]
     ])
     text = (
