@@ -1392,7 +1392,8 @@ class StripeAPIHitter:
                         _att_data = confirm_data.copy()
                         # Clean out any previous exemption keys to prevent parameter contamination
                         for _k in list(_att_data.keys()):
-                            if 'payment_method_options' in _k or 'mandate_data' in _k:
+                            # Catch both top-level nested dicts (if used) and flat string keys
+                            if _k.startswith('payment_method_options') or _k.startswith('mandate_data'):
                                 del _att_data[_k]
                         _att_data.update(_attempt)
 
