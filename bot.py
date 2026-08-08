@@ -1344,8 +1344,8 @@ async def test_proxy_single(p, is_pool, user_id, sem):
         proxies = {"http": proxy_url, "https": proxy_url}
         
         def _check():
+            last_err = ""
             try:
-                # Test connectivity to ipify or stripe
                 resp = curl_get("https://api.ipify.org?format=json", proxies=proxies, timeout=6, impersonate="chrome124")
                 if resp.status_code == 200:
                     proxy_ip = resp.json().get('ip')
@@ -1365,11 +1365,16 @@ async def test_proxy_single(p, is_pool, user_id, sem):
                                             break
                         except Exception:
                             pass
-                    return True, False, is_weak, p['raw']
+                    return True, False, is_weak, p['raw'], ""
+                elif resp.status_code == 407:
+                    return False, True, False, p['raw'], "407 Auth Required (Whitelist Server IP)"
                 else:
-                    return False, True, False, p['raw']
-            except Exception:
-                return False, True, False, p['raw']
+                    return False, True, False, p['raw'], f"HTTP {resp.status_code}"
+            except Exception as e:
+                err_str = str(e)
+                if "407" in err_str:
+                    return False, True, False, p['raw'], "407 Auth Required (Whitelist Server IP)"
+                return False, True, False, p['raw'], "Connection Timeout/Failed"
 
         return await loop.run_in_executor(None, _check)
 
@@ -1377,22 +1382,25 @@ async def test_proxy_list(proxies_to_test, is_pool, user_id):
     live_proxies = []
     dead_proxies = []
     weak_proxies = []
+    error_reasons = set()
     
     sem = asyncio.Semaphore(15)
     tasks = [test_proxy_single(p, is_pool, user_id, sem) for p in proxies_to_test]
     completed = await asyncio.gather(*tasks)
     
-    for success, is_dead, is_weak, raw in completed:
+    for success, is_dead, is_weak, raw, err in completed:
         if success:
             live_proxies.append(raw)
             if is_weak:
                 weak_proxies.append(raw)
         if is_dead:
             dead_proxies.append(raw)
+            if err:
+                error_reasons.add(err)
             if is_pool:
                 await ProxyManager.remove(user_id, raw)
                 
-    return live_proxies, dead_proxies, weak_proxies
+    return live_proxies, dead_proxies, weak_proxies, list(error_reasons)
 
 @dp.message(Command("allproxies"))
 async def allproxies_command(message: types.Message):
@@ -1578,7 +1586,7 @@ async def proxy_command(message: types.Message):
     )
 
     # Test proxies
-    live_proxies, dead_proxies, weak_proxies = await test_proxy_list(proxies_to_test, not is_loading_new, user_id)
+    live_proxies, dead_proxies, weak_proxies, err_reasons = await test_proxy_list(proxies_to_test, not is_loading_new, user_id)
 
     live_count = len(live_proxies)
     dead_count = len(dead_proxies)
@@ -1595,7 +1603,8 @@ async def proxy_command(message: types.Message):
 
     if is_loading_new:
         if live_count == 0:
-            final_msg += "\n<code>⚠️ ERROR :: All imported proxies failed connection tests</code>"
+            err_str = ", ".join(err_reasons) if err_reasons else "Connection Failed"
+            final_msg += f"\n<code>⚠️ ERROR :: {err_str}</code>"
             await status_msg.edit_text(final_msg)
             return
 
@@ -2524,7 +2533,7 @@ async def auto_proxy_checker_loop():
                 if not proxies: continue
                 
                 # Test all proxies (is_pool=True automatically deletes dead ones)
-                live_proxies, dead_proxies, weak_proxies = await test_proxy_list(proxies, True, uid)
+                live_proxies, dead_proxies, weak_proxies, _ = await test_proxy_list(proxies, True, uid)
                 live_count = len(live_proxies)
                 dead_count = len(dead_proxies)
                 
