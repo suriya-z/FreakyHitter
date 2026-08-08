@@ -1330,55 +1330,56 @@ async def offproxy_command(message: types.Message):
         "⚠️ Note: Active proxies are required to run /hit or /hitad. Load proxies via /proxy or /getproxy.</code>"
     )
 
-async def test_proxy_single(p, is_pool, user_id):
-    proxy_url = p['server']
-    if 'username' in p:
-        server = p['server'].replace('http://', '')
-        proxy_url = f"http://{p['username']}:{p['password']}@{server}"
+async def test_proxy_single(p, is_pool, user_id, sem):
+    async with sem:
+        loop = asyncio.get_event_loop()
+        server = p['server']
+        auth = f"{p['username']}:{p['password']}@" if p.get('username') else ""
+        proxy_url = f"http://{auth}{server.replace('http://', '').replace('socks5://', '').replace('socks4://', '')}"
+        if server.startswith('socks5://'):
+            proxy_url = f"socks5://{auth}{server.replace('socks5://', '')}"
+        elif server.startswith('socks4://'):
+            proxy_url = f"socks4://{auth}{server.replace('socks4://', '')}"
+            
+        proxies = {"http": proxy_url, "https": proxy_url}
         
-    try:
-        async with aiohttp.ClientSession() as session:
-            # First, test connection
-            async with session.get("https://checkout.stripe.com/", proxy=proxy_url, timeout=10) as resp:
-                if resp.status in [200, 404]:
-                    # Next, check IP quality and Fraud Score using proxycheck.io
+        def _check():
+            try:
+                # Test connectivity to ipify or stripe
+                resp = curl_get("https://api.ipify.org?format=json", proxies=proxies, timeout=6, impersonate="chrome124")
+                if resp.status_code == 200:
+                    proxy_ip = resp.json().get('ip')
                     is_weak = False
-                    try:
-                        # We need to get the proxy's public IP first since proxycheck.io sometimes requires the IP in the URL
-                        proxy_ip = None
-                        async with session.get("https://api.ipify.org?format=json", proxy=proxy_url, timeout=5) as ipify_resp:
-                            if ipify_resp.status == 200:
-                                ipify_data = await ipify_resp.json()
-                                proxy_ip = ipify_data.get("ip")
-                                
-                        if proxy_ip:
-                            async with session.get(f"http://proxycheck.io/v2/{proxy_ip}?vpn=1&asn=1&risk=1", proxy=proxy_url, timeout=5) as ip_resp:
-                                if ip_resp.status == 200:
-                                    ip_data = await ip_resp.json()
-                                    if ip_data.get("status") == "ok":
-                                        for key, val in ip_data.items():
-                                            if key not in ["status", "node", "query_time", "message"]:
-                                                ip_type = str(val.get("type", "Unknown"))
-                                                risk = val.get("risk", 0)
-                                                
-                                                if "Datacenter" in ip_type or "VPN" in ip_type or "Business" in ip_type or risk > 33:
-                                                    is_weak = True
-                                                break
-                    except Exception:
-                        pass
-                        
+                    if proxy_ip:
+                        try:
+                            check_resp = curl_get(f"http://proxycheck.io/v2/{proxy_ip}?vpn=1&asn=1&risk=1", proxies=proxies, timeout=5, impersonate="chrome124")
+                            if check_resp.status_code == 200:
+                                ip_data = check_resp.json()
+                                if ip_data.get("status") == "ok":
+                                    for key, val in ip_data.items():
+                                        if key not in ["status", "node", "query_time", "message"]:
+                                            ip_type = str(val.get("type", "Unknown"))
+                                            risk = val.get("risk", 0)
+                                            if "Datacenter" in ip_type or "VPN" in ip_type or "Business" in ip_type or risk > 33:
+                                                is_weak = True
+                                            break
+                        except Exception:
+                            pass
                     return True, False, is_weak, p['raw']
                 else:
                     return False, True, False, p['raw']
-    except:
-        return False, True, False, p['raw']
+            except Exception:
+                return False, True, False, p['raw']
+
+        return await loop.run_in_executor(None, _check)
 
 async def test_proxy_list(proxies_to_test, is_pool, user_id):
     live_proxies = []
     dead_proxies = []
     weak_proxies = []
     
-    tasks = [test_proxy_single(p, is_pool, user_id) for p in proxies_to_test]
+    sem = asyncio.Semaphore(15)
+    tasks = [test_proxy_single(p, is_pool, user_id, sem) for p in proxies_to_test]
     completed = await asyncio.gather(*tasks)
     
     for success, is_dead, is_weak, raw in completed:
