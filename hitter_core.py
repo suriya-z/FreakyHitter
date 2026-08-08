@@ -306,13 +306,26 @@ class ProxyManager:
             if line.lower().startswith("socks5://"):
                 prefix = "socks5://"
                 line = line[9:]
+            elif line.lower().startswith("socks4://"):
+                prefix = "socks4://"
+                line = line[9:]
             elif line.lower().startswith("http://"):
                 prefix = "http://"
                 line = line[7:]
+            elif line.lower().startswith("https://"):
+                prefix = "http://"
+                line = line[8:]
                 
             parts = line.split(':')
             if len(parts) == 4:
-                p = {"raw": raw_line, "server": f"{prefix}{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]}
+                # Check if format is user:pass:ip:port or ip:port:user:pass
+                if parts[1].isdigit():  # ip:port:user:pass
+                    p = {"raw": raw_line, "server": f"{prefix}{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]}
+                elif parts[3].isdigit():  # user:pass:ip:port
+                    p = {"raw": raw_line, "server": f"{prefix}{parts[2]}:{parts[3]}", "username": parts[0], "password": parts[1]}
+                else:
+                    # Fallback to standard ip:port:user:pass
+                    p = {"raw": raw_line, "server": f"{prefix}{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]}
                 pool.append(p)
                 added += 1
             elif len(parts) == 2:
