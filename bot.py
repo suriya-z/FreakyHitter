@@ -670,9 +670,6 @@ async def hit_command(message: types.Message):
                 succ_url_line = extract_success_url_line(res)
                 if succ_url_line:
                     block += succ_url_line
-                if is_session_expired_err(res):
-                    block += "\n⚠️ <i>[Session Expired — Batch Halted]</i>"
-
                 card_blocks.append(block)
 
                 site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
@@ -1334,8 +1331,12 @@ async def test_proxy_single(p, is_pool, user_id, sem):
     async with sem:
         loop = asyncio.get_event_loop()
         server = p['server']
-        auth = f"{p['username']}:{p['password']}@" if p.get('username') else ""
-        proxy_url = f"http://{auth}{server.replace('http://', '').replace('socks5://', '').replace('socks4://', '')}"
+        auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
+        server = proxy_data['server']
+        scheme = server.split('://')[0] if '://' in server else 'http'
+        server_host = server.split('://')[-1]
+        proxy_url = f"{scheme}://{auth}{server_host}"
+
         if server.startswith('socks5://'):
             proxy_url = f"socks5://{auth}{server.replace('socks5://', '')}"
         elif server.startswith('socks4://'):
