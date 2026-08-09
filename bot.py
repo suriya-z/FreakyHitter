@@ -438,14 +438,17 @@ def extract_success_url_line(res: dict) -> str:
     return ""
 
 def is_session_expired_err(res: dict) -> bool:
-    """Check if response indicates a non-reusable single-use pay link exhaustion."""
+    """Check if response indicates a non-reusable single-use pay link exhaustion or expired session."""
+    if res.get('session_expired'):
+        return True
     if res.get('pbl_reusable') is True:
         return False
     reason = str(res.get('error') or res.get('decline_code') or '').lower()
     raw_resp = str(res.get('raw_response') or '').lower()
     return any(k in reason or k in raw_resp for k in [
         'single-use link exhausted', 'checkout_session_expired', 'pay by link exhausted',
-        'resource_missing', 'no such payment_intent', 'no such checkout.session'
+        'resource_missing', 'no such payment_intent', 'no such checkout.session',
+        'session_invalid', 'canceled', 'inactive', 'expired'
     ])
 
 def parse_cards_input(payload_tokens: list, raw_payload: str):
@@ -629,7 +632,9 @@ async def hit_command(message: types.Message):
                     
                     err_str = str(res.get('error') or '').strip()
                     decline_code = str(res.get('decline_code') or '').strip()
-                    if 'raw:' in err_str or '{"' in err_str or 'rqdata_captcha' in err_str:
+                    if is_session_expired_err(res):
+                        reason_msg = "Link Expired"
+                    elif 'raw:' in err_str or '{"' in err_str or 'rqdata_captcha' in err_str:
                         reason_msg = html.escape(decline_code.lower()) if decline_code and decline_code not in ('unknown', 'exception') else "stripe_captcha_bypass_failed"
                     elif decline_code and decline_code not in ('unknown', 'exception', 'declined', 'failed'):
                         reason_msg = html.escape(decline_code.lower())
@@ -663,6 +668,8 @@ async def hit_command(message: types.Message):
                         resp_str += " (3DS Bypassed)"
                     elif res.get('captcha_bypassed'):
                         resp_str += " (Captcha Bypassed)"
+                elif is_session_expired_err(res):
+                    resp_str = "Link Expired"
                 else:
                     resp_str = res.get('error') or res.get('decline_code') or "Card declined"
 
