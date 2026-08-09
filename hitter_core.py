@@ -2227,7 +2227,12 @@ class ConcurrentHitter:
                 
                 self.completed += 1
                 reason_lower = str(result.get('error') or result.get('decline_code') or '').lower()
-                is_expired = any(k in reason_lower for k in ['exhausted', 'session_expired', 'link_expired', 'single-use', 'already_paid', 'session_complete', 'pay by link exhausted'])
+                is_expired = any(k in reason_lower for k in [
+                    'exhausted', 'session_expired', 'link_expired', 'single-use', 
+                    'already_paid', 'session_complete', 'pay by link exhausted',
+                    'resource_missing', 'no such checkout.session', 'session_invalid',
+                    'canceled', 'inactive', 'expired'
+                ])
 
                 if result['success'] or is_expired:
                     if is_expired:
