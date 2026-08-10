@@ -439,16 +439,20 @@ def extract_success_url_line(res: dict) -> str:
 
 def is_session_expired_err(res: dict) -> bool:
     """Check if response indicates a non-reusable single-use pay link exhaustion or expired session."""
+    reason = str(res.get('error') or res.get('decline_code') or '').lower()
+    raw_resp = str(res.get('raw_response') or '').lower()
+
+    if any(card_err in reason or card_err in raw_resp for card_err in ['card_expired', 'expired_card', 'card expired', 'invalid_expiry']):
+        return False
+
     if res.get('session_expired'):
         return True
     if res.get('pbl_reusable') is True:
         return False
-    reason = str(res.get('error') or res.get('decline_code') or '').lower()
-    raw_resp = str(res.get('raw_response') or '').lower()
+
     return any(k in reason or k in raw_resp for k in [
         'single-use link exhausted', 'checkout_session_expired', 'pay by link exhausted',
-        'resource_missing', 'no such payment_intent', 'no such checkout.session',
-        'session_invalid', 'canceled', 'inactive', 'expired'
+        'no such payment_intent', 'no such checkout.session'
     ])
 
 def parse_cards_input(payload_tokens: list, raw_payload: str):

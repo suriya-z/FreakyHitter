@@ -2227,12 +2227,15 @@ class ConcurrentHitter:
                 
                 self.completed += 1
                 reason_lower = str(result.get('error') or result.get('decline_code') or '').lower()
-                is_expired = any(k in reason_lower for k in [
-                    'exhausted', 'session_expired', 'link_expired', 'single-use', 
-                    'already_paid', 'session_complete', 'pay by link exhausted',
-                    'resource_missing', 'no such checkout.session', 'session_invalid',
-                    'canceled', 'inactive', 'expired'
-                ])
+                
+                # Check for link/session expiration specifically while excluding card expiration decline codes
+                is_expired = False
+                if not any(card_err in reason_lower for card_err in ['card_expired', 'expired_card', 'card expired', 'invalid_expiry']):
+                    is_expired = any(k in reason_lower for k in [
+                        'checkout_session_expired', 'session_expired', 'link_expired',
+                        'single-use link exhausted', 'pay by link exhausted', 'already_paid',
+                        'session_complete', 'no such checkout.session', 'no such payment_intent'
+                    ])
 
                 if result['success'] or is_expired:
                     if is_expired:
