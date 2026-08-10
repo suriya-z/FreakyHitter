@@ -636,9 +636,7 @@ async def hit_command(message: types.Message):
                     
                     err_str = str(res.get('error') or '').strip()
                     decline_code = str(res.get('decline_code') or '').strip()
-                    if is_session_expired_err(res):
-                        reason_msg = "Link Expired"
-                    elif 'raw:' in err_str or '{"' in err_str or 'rqdata_captcha' in err_str:
+                    if 'raw:' in err_str or '{"' in err_str or 'rqdata_captcha' in err_str:
                         reason_msg = html.escape(decline_code.lower()) if decline_code and decline_code not in ('unknown', 'exception') else "stripe_captcha_bypass_failed"
                     elif decline_code and decline_code not in ('unknown', 'exception', 'declined', 'failed'):
                         reason_msg = html.escape(decline_code.lower())
@@ -672,8 +670,6 @@ async def hit_command(message: types.Message):
                         resp_str += " (3DS Bypassed)"
                     elif res.get('captcha_bypassed'):
                         resp_str += " (Captcha Bypassed)"
-                elif is_session_expired_err(res):
-                    resp_str = "Link Expired"
                 else:
                     resp_str = res.get('error') or res.get('decline_code') or "Card declined"
 
