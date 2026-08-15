@@ -403,11 +403,6 @@ async def gate_command(message: types.Message):
         gate_adyen_enabled = state
         status = "🟢 ACTIVE" if state else "🔴 DISABLED"
         await message.answer(f"💎 <b>Adyen Gateway Gate:</b> {status}")
-    
-    try:
-        await bot.send_message(target_id, "🎉 <b>You've been approved by the owner!</b> Your transaction messages will no longer be auto-deleted. ⚡")
-    except Exception as e:
-        print(f"Failed to send peer notification to approved user: {e}")
 
 def extract_clean_site_domain(merchant: str, url_str: str) -> str:
     """Extracts clean site domain e.g. www.openart.ai or manus.ai."""
@@ -701,13 +696,19 @@ async def hit_command(message: types.Message):
                 site_domain = extract_clean_site_domain(merchant_name, url)
                 site_line = f"\n\nSite: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"\n\nSite: {html.escape(merchant_name)}"
                 amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
-                try:
-                    await status_msg.edit_text(
+                if status_msg and len(cards) > 1:
+                    try:
+                        await status_msg.edit_text(
+                            f"❌ <b>Error processing check:</b>\n<code>{html.escape(str(err_msg))}</code>{site_line}{amt_line}",
+                            disable_web_page_preview=True
+                        )
+                    except Exception:
+                        pass
+                elif len(cards) == 1:
+                    await message.reply(
                         f"❌ <b>Error processing check:</b>\n<code>{html.escape(str(err_msg))}</code>{site_line}{amt_line}",
                         disable_web_page_preview=True
                     )
-                except Exception:
-                    pass
 
             is_approved = user_id in approved_users_set
             if not is_approved and status_msg and len(cards) > 1 and data["status"] != "error":
@@ -913,28 +914,30 @@ def parse_ccn_input(payload_tokens: list, raw_payload: str):
 
     # 1. Check for card|mm|yy|cvv (4 parts)
     full_matches = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})[|/](\d{3,4})', raw_payload)
-    if full_matches:
-        for m in full_matches:
-            cards.append({
-                'card': m[0],
-                'month': m[1].zfill(2),
-                'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
-                'cvv': '000'
-            })
-        if len(cards) > 10:
-            return None, "Max concurrent limit is 10."
-        return cards, None
+    matched_cards = set()
+    for m in full_matches:
+        card_num = m[0]
+        matched_cards.add(card_num)
+        cards.append({
+            'card': card_num,
+            'month': m[1].zfill(2),
+            'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
+            'cvv': m[3]
+        })
 
     # 2. Check for card|mm|yy (3 parts - CCN format without CVV)
     ccn_matches = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})', raw_payload)
-    if ccn_matches:
-        for m in ccn_matches:
+    for m in ccn_matches:
+        if m[0] not in matched_cards:
+            matched_cards.add(m[0])
             cards.append({
                 'card': m[0],
                 'month': m[1].zfill(2),
                 'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
                 'cvv': '000'
             })
+
+    if cards:
         if len(cards) > 10:
             return None, "Max concurrent limit is 10."
         return cards, None
@@ -1296,7 +1299,8 @@ async def stop_command(message: types.Message):
     user_id = message.from_user.id
     if user_id in active_sessions:
         hitter = active_sessions[user_id]
-        hitter.is_running = False
+        if hasattr(hitter, 'is_running'):
+            hitter.is_running = False
         del active_sessions[user_id]
         await message.answer("<b>Status</b>\n<code>Session termination requested. Pending final queue execution.</code>")
     else:
@@ -1336,10 +1340,9 @@ async def offproxy_command(message: types.Message):
 
 async def test_proxy_single(p, is_pool, user_id, sem):
     async with sem:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         server = p['server']
-        auth = f"{proxy_data['username']}:{proxy_data['password']}@" if proxy_data.get('username') else ""
-        server = proxy_data['server']
+        auth = f"{p['username']}:{p['password']}@" if p.get('username') else ""
         scheme = server.split('://')[0] if '://' in server else 'http'
         server_host = server.split('://')[-1]
         proxy_url = f"{scheme}://{auth}{server_host}"
@@ -1353,8 +1356,11 @@ async def test_proxy_single(p, is_pool, user_id, sem):
         
         def _check():
             last_err = ""
+            import time
+            start_t = time.time()
             try:
-                resp = curl_get("https://api.ipify.org?format=json", proxies=proxies, timeout=6, impersonate="chrome124")
+                resp = curl_get("https://api.ipify.org?format=json", proxies=proxies, timeout=10, impersonate="chrome124")
+                latency_ms = int((time.time() - start_t) * 1000)
                 if resp.status_code == 200:
                     proxy_ip = resp.json().get('ip')
                     is_weak = False
@@ -1373,30 +1379,38 @@ async def test_proxy_single(p, is_pool, user_id, sem):
                                             break
                         except Exception:
                             pass
-                    return True, False, is_weak, p['raw'], ""
+                    return True, False, is_weak, p['raw'], "", latency_ms
                 elif resp.status_code == 407:
-                    return False, True, False, p['raw'], "407 Auth Required (Whitelist Server IP)"
+                    return False, True, False, p['raw'], "407 Auth Required (Whitelist Server IP)", 0
                 else:
-                    return False, True, False, p['raw'], f"HTTP {resp.status_code}"
+                    return False, True, False, p['raw'], f"HTTP {resp.status_code}", 0
             except Exception as e:
                 err_str = str(e)
                 if "407" in err_str:
-                    return False, True, False, p['raw'], "407 Auth Required (Whitelist Server IP)"
-                return False, True, False, p['raw'], "Connection Timeout/Failed"
+                    return False, True, False, p['raw'], "407 Auth Required (Whitelist Server IP)", 0
+                return False, True, False, p['raw'], "Timeout/Failed", 0
 
         return await loop.run_in_executor(None, _check)
 
-async def test_proxy_list(proxies_to_test, is_pool, user_id):
+async def test_proxy_list(proxies_to_test, is_pool, user_id, status_msg=None):
     live_proxies = []
     dead_proxies = []
     weak_proxies = []
     error_reasons = set()
-    
-    sem = asyncio.Semaphore(15)
-    tasks = [test_proxy_single(p, is_pool, user_id, sem) for p in proxies_to_test]
-    completed = await asyncio.gather(*tasks)
-    
-    for success, is_dead, is_weak, raw, err in completed:
+
+    total = len(proxies_to_test)
+    completed_count = 0
+    sem = asyncio.Semaphore(20)
+    import time
+    last_edit_time = 0
+    spinners = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    async def _worker(p):
+        nonlocal completed_count, last_edit_time
+        res = await test_proxy_single(p, is_pool, user_id, sem)
+        completed_count += 1
+
+        success, is_dead, is_weak, raw, err, latency = res
         if success:
             live_proxies.append(raw)
             if is_weak:
@@ -1407,7 +1421,27 @@ async def test_proxy_list(proxies_to_test, is_pool, user_id):
                 error_reasons.add(err)
             if is_pool:
                 await ProxyManager.remove(user_id, raw)
-                
+
+        now = time.time()
+        if status_msg and (now - last_edit_time >= 0.8 or completed_count == total):
+            last_edit_time = now
+            pct = int((completed_count / total) * 100)
+            filled = int((completed_count / total) * 10)
+            bar = "■" * filled + "□" * (10 - filled)
+            spin = spinners[completed_count % len(spinners)]
+            try:
+                await status_msg.edit_text(
+                    f"⚡ <b>[{spin}] Checking Proxies... {pct}%</b>\n\n"
+                    f"<code>[{bar}] {completed_count}/{total}</code>\n"
+                    f"<code>🟢 Live : {len(live_proxies)}  |  🔴 Dead : {len(dead_proxies)}</code>"
+                )
+            except Exception:
+                pass
+        return res
+
+    tasks = [_worker(p) for p in proxies_to_test]
+    await asyncio.gather(*tasks)
+
     return live_proxies, dead_proxies, weak_proxies, list(error_reasons)
 
 @dp.message(Command("allproxies"))
@@ -1478,71 +1512,70 @@ def parse_proxy_line(line: str) -> Optional[Dict]:
 def extract_all_proxies_from_text(raw_text: str) -> list:
     """
     Extracts all valid proxies from raw text, removing emojis, unwanted text, bullet points, tags.
-    Supports both IPv4 and Hostname proxies:
-    - ip_or_host:port
-    - ip_or_host:port:user:pass
+    Supports line-by-line parsing for:
     - user:pass@ip_or_host:port
+    - ip_or_host:port:user:pass
+    - ip_or_host:port
     - http(s)://...
     - socks4/5://...
     """
     proxies = []
     seen = set()
-
-    text = re.sub(r'<[^>]+>', ' ', raw_text)
+    lines = raw_text.splitlines()
 
     HOST_PATTERN = r'(?:[a-zA-Z0-9_\-\.]+|\d{1,3}(?:\.\d{1,3}){3})'
 
-    # 1. user:pass@host:port
-    pattern_user_pass_host = re.compile(
-        r'(?:(https?|socks[45])://)?([a-zA-Z0-9_\-\.]+):([a-zA-Z0-9_\-\.]+)'
-        r'@(' + HOST_PATTERN + r'):(\d{1,5})', re.I
-    )
-    for m in pattern_user_pass_host.finditer(text):
-        scheme = (m.group(1) or 'http').lower()
-        user, pwd, host, port = m.group(2), m.group(3), m.group(4), m.group(5)
-        raw_p = f"{host}:{port}:{user}:{pwd}"
-        if raw_p not in seen:
-            seen.add(raw_p)
-            proxies.append({
-                "raw": raw_p,
-                "server": f"{scheme}://{host}:{port}",
-                "username": user,
-                "password": pwd
-            })
+    p1 = re.compile(r'(?:(https?|socks[45])://)?([a-zA-Z0-9_\-\.]+):([a-zA-Z0-9_\-\.]+)@(' + HOST_PATTERN + r'):(\d{1,5})', re.I)
+    p2 = re.compile(r'(?:(https?|socks[45])://)?(' + HOST_PATTERN + r'):(\d{1,5}):([a-zA-Z0-9_\-\.]+):([a-zA-Z0-9_\-\.]+)', re.I)
+    p3 = re.compile(r'(?:(https?|socks[45])://)?(' + HOST_PATTERN + r'):(\d{1,5})', re.I)
 
-    # 2. host:port:user:pass
-    pattern_host_port_user_pass = re.compile(
-        r'(?:(https?|socks[45])://)?(' + HOST_PATTERN + r'):(\d{1,5})'
-        r':([a-zA-Z0-9_\-\.]+):([a-zA-Z0-9_\-\.]+)', re.I
-    )
-    for m in pattern_host_port_user_pass.finditer(text):
-        scheme = (m.group(1) or 'http').lower()
-        host, port, user, pwd = m.group(2), m.group(3), m.group(4), m.group(5)
-        raw_p = f"{host}:{port}:{user}:{pwd}"
-        if raw_p not in seen:
-            seen.add(raw_p)
-            proxies.append({
-                "raw": raw_p,
-                "server": f"{scheme}://{host}:{port}",
-                "username": user,
-                "password": pwd
-            })
+    for line in lines:
+        line = re.sub(r'<[^>]+>', ' ', line).strip()
+        if not line:
+            continue
 
-    # 3. host:port (standalone without user:pass)
-    pattern_host_port = re.compile(
-        r'(?:(https?|socks[45])://)?(' + HOST_PATTERN + r'):(\d{1,5})', re.I
-    )
-    for m in pattern_host_port.finditer(text):
-        scheme = (m.group(1) or 'http').lower()
-        host, port = m.group(2), m.group(3)
-        raw_p = f"{host}:{port}"
-        if not any(host in p['server'] and port in p['server'] for p in proxies):
+        m1 = p1.search(line)
+        if m1:
+            scheme = (m1.group(1) or 'http').lower()
+            user, pwd, host, port = m1.group(2), m1.group(3), m1.group(4), m1.group(5)
+            raw_p = f"{host}:{port}:{user}:{pwd}"
             if raw_p not in seen:
                 seen.add(raw_p)
                 proxies.append({
                     "raw": raw_p,
-                    "server": f"{scheme}://{host}:{port}"
+                    "server": f"{scheme}://{host}:{port}",
+                    "username": user,
+                    "password": pwd
                 })
+            continue
+
+        m2 = p2.search(line)
+        if m2:
+            scheme = (m2.group(1) or 'http').lower()
+            host, port, user, pwd = m2.group(2), m2.group(3), m2.group(4), m2.group(5)
+            raw_p = f"{host}:{port}:{user}:{pwd}"
+            if raw_p not in seen:
+                seen.add(raw_p)
+                proxies.append({
+                    "raw": raw_p,
+                    "server": f"{scheme}://{host}:{port}",
+                    "username": user,
+                    "password": pwd
+                })
+            continue
+
+        m3 = p3.search(line)
+        if m3:
+            scheme = (m3.group(1) or 'http').lower()
+            host, port = m3.group(2), m3.group(3)
+            if '.' in host and not '@' in line:
+                raw_p = f"{host}:{port}"
+                if raw_p not in seen:
+                    seen.add(raw_p)
+                    proxies.append({
+                        "raw": raw_p,
+                        "server": f"{scheme}://{host}:{port}"
+                    })
 
     return proxies
 
@@ -1582,37 +1615,42 @@ async def proxy_command(message: types.Message):
 
     if not proxies_to_test:
         if is_loading_new:
-            await message.answer("<b>Error</b>\n<code>Failed to parse proxies. Supported formats:\nip:port | host:port:user:pass | user:pass@host:port | socks5://host:port</code>")
+            await message.answer("<b>Error</b>\n<code>Failed to parse proxies. Format: host:port:user:pass or user:pass@host:port</code>")
         else:
-            await message.answer("<b>Error</b>\n<code>Proxy pool is empty. Set proxies via command: /proxy host:port:user:pass or reply /proxy to a .txt file.</code>")
+            await message.answer("<b>Error</b>\n<code>Proxy pool empty. Use /proxy host:port:user:pass or attach .txt file</code>")
         return
 
-    loading_status = "verifying_channels" if is_loading_new else "running_self_check"
     status_msg = await message.answer(
-        f"⏳ <b>Checking proxies...</b>\n"
-        f"<code>Testing {len(proxies_to_test)} proxy channels in background</code>"
+        f"⚡ <b>[⠋] Checking Proxies... 0%</b>\n\n"
+        f"<code>[□□□□□□□□□□] 0/{len(proxies_to_test)}</code>\n"
+        f"<code>🟢 Live : 0  |  🔴 Dead : 0</code>"
     )
 
-    # Test proxies
-    live_proxies, dead_proxies, weak_proxies, err_reasons = await test_proxy_list(proxies_to_test, not is_loading_new, user_id)
+    # Test proxies with live updates
+    live_proxies, dead_proxies, weak_proxies, err_reasons = await test_proxy_list(proxies_to_test, not is_loading_new, user_id, status_msg)
 
     live_count = len(live_proxies)
     dead_count = len(dead_proxies)
     weak_count = len(weak_proxies)
     total_tested = len(proxies_to_test)
 
-    health_pct = int((live_count / total_tested) * 100) if total_tested > 0 else 0
-
-    final_msg = (
-        f"🟢 <b>ACTIVE PROXIES ({health_pct}%)</b>\n\n"
-        f"<code>LIVE   :: {live_count} / {total_tested}</code>\n"
-        f"<code>DEAD   :: {dead_count}</code>"
-    )
+    if is_loading_new:
+        final_msg = (
+            f"⚡ <b>Proxies Checked!</b>\n\n"
+            f"<code>🟢 Live : {live_count} / {total_tested}</code>\n"
+            f"<code>🔴 Dead : {dead_count}</code>"
+        )
+    else:
+        final_msg = (
+            f"⚡ <b>Proxy Pool Status</b>\n\n"
+            f"<code>🟢 Live : {live_count} / {total_tested}</code>\n"
+            f"<code>🔴 Dead : {dead_count}</code>"
+        )
 
     if is_loading_new:
         if live_count == 0:
-            err_str = ", ".join(err_reasons) if err_reasons else "Connection Failed"
-            final_msg += f"\n<code>⚠️ ERROR :: {err_str}</code>"
+            err_str = ", ".join(err_reasons) if err_reasons else "All proxies failed"
+            final_msg += f"\n<code>⚠️ Error: {err_str}</code>"
             await status_msg.edit_text(final_msg)
             return
 
@@ -1629,13 +1667,13 @@ async def proxy_command(message: types.Message):
         buttons = []
         if len(premium_raws) > 0:
             buttons.append([InlineKeyboardButton(text=f"➕ ADD PREMIUM ONLY ({len(premium_raws)})", callback_data="add_strong_only")])
-        buttons.append([InlineKeyboardButton(text=f"➕ ADD ALL LIVE ({live_count})", callback_data="add_live_all")])
+        buttons.append([InlineKeyboardButton(text=f"➕ ADD ALL {live_count} PROXIES", callback_data="add_live_all")])
 
         markup = InlineKeyboardMarkup(inline_keyboard=buttons)
         await status_msg.edit_text(final_msg, reply_markup=markup)
     else:
         if dead_count > 0:
-            final_msg += f"\n<code>[ INFO   ] removed {dead_count} inactive proxy channels from storage</code>"
+            final_msg += f"\n<code>Removed {dead_count} dead proxies from pool</code>"
 
         markup = None
         if weak_count > 0:
@@ -1645,7 +1683,7 @@ async def proxy_command(message: types.Message):
 
             from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
             markup = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=f"❌ PURGE WEAK IPS ({weak_count})", callback_data="rm_weak_proxies")]
+                [InlineKeyboardButton(text=f"❌ PURGE WEAK PROXIES ({weak_count})", callback_data="rm_weak_proxies")]
             ])
 
         try:
@@ -1966,9 +2004,10 @@ async def clean_command(message: types.Message):
         await status_msg.edit_text("⚠️ <b>Clean Result</b>\n<code>No valid cards found in file.</code>")
         return
         
+    import uuid
     temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
     os.makedirs(temp_dir, exist_ok=True)
-    clean_path = os.path.join(temp_dir, f"clean_{filename}")
+    clean_path = os.path.join(temp_dir, f"clean_{message.from_user.id}_{uuid.uuid4().hex[:6]}_{filename}")
     
     with open(clean_path, 'w', encoding='utf-8') as f:
         f.write(clean_text)
@@ -2016,9 +2055,10 @@ async def find_command(message: types.Message):
         await message.reply(f"🔍 <b>No matches found</b> for BIN prefix <code>{bin_prefix}</code>.")
         return
         
+    import uuid
     temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
     os.makedirs(temp_dir, exist_ok=True)
-    out_path = os.path.join(temp_dir, f"found_{bin_prefix}.txt")
+    out_path = os.path.join(temp_dir, f"found_{message.from_user.id}_{uuid.uuid4().hex[:6]}_{bin_prefix}.txt")
     
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(found_text)
@@ -2115,9 +2155,10 @@ async def pick_command(message: types.Message):
     flag = meta.get('flag', '🌐')
     code = meta.get('code', 'UNK')
     
+    import uuid
     temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
     os.makedirs(temp_dir, exist_ok=True)
-    out_path = os.path.join(temp_dir, f"cards_{code}.txt")
+    out_path = os.path.join(temp_dir, f"cards_{user_id}_{uuid.uuid4().hex[:6]}_{code}.txt")
     
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write("\n".join(card_lines))
@@ -2190,9 +2231,10 @@ async def merge_command(message: types.Message):
             
     merged_text = "\n".join(clean_merged)
     
+    import uuid
     temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
     os.makedirs(temp_dir, exist_ok=True)
-    out_path = os.path.join(temp_dir, "merged_output.txt")
+    out_path = os.path.join(temp_dir, f"merged_output_{user_id}_{uuid.uuid4().hex[:6]}.txt")
     
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(merged_text)
