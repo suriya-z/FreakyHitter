@@ -1697,6 +1697,14 @@ async def proxy_command(message: types.Message):
             else:
                 await message.answer(final_msg)
 
+def raw_to_proxy_obj(p_raw: str) -> dict:
+    parts = p_raw.split(':')
+    if len(parts) == 4:
+        return {"raw": p_raw, "server": f"http://{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]}
+    elif len(parts) == 2:
+        return {"raw": p_raw, "server": f"http://{parts[0]}:{parts[1]}"}
+    return {"raw": p_raw, "server": f"http://{p_raw}"}
+
 @dp.callback_query(F.data == "add_strong_only")
 async def process_add_strong_only(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -1706,37 +1714,33 @@ async def process_add_strong_only(callback: types.CallbackQuery):
     if not premium_raws:
         await callback.answer("No strong proxies found in cache or session expired.", show_alert=True)
         return
-        
-    pool = await ProxyManager.get_user_proxies(user_id)
-    existing_raws = {p['raw'] for p in pool}
-    added = 0
+
+    pool = []
+    seen = set()
     for p_raw in premium_raws:
-        if p_raw not in existing_raws:
-            parts = p_raw.split(':')
-            if len(parts) == 4:
-                pool.append({"raw": p_raw, "server": f"http://{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]})
-            elif len(parts) == 2:
-                pool.append({"raw": p_raw, "server": f"http://{parts[0]}:{parts[1]}"})
-            added += 1
-            
-    if added > 0:
-        await ProxyManager.save_user_proxies(user_id, pool)
-        if LOG_GROUP_ID:
-            try:
-                proxies_str = "\n".join([f"<code>• {p}</code>" for p in premium_raws[:30]])
-                if len(premium_raws) > 30:
-                    proxies_str += f"\n...and {len(premium_raws) - 30} more premium channels"
-                msg = f"💎 <b>Saved {added} Premium/Strong proxies to pool!</b>\n👤 User: {callback.from_user.first_name}\n\n{proxies_str}"
-                if len(msg) > 4000:
-                    msg = f"💎 <b>Saved {added} Premium/Strong proxies to pool!</b>\n👤 User: {callback.from_user.first_name}"
-                await bot.send_message(LOG_GROUP_ID, msg)
-            except:
-                pass
-        
+        if p_raw not in seen:
+            seen.add(p_raw)
+            pool.append(raw_to_proxy_obj(p_raw))
+
+    await ProxyManager.save_user_proxies(user_id, pool)
+    added = len(pool)
+
+    if LOG_GROUP_ID:
+        try:
+            proxies_str = "\n".join([f"<code>• {p}</code>" for p in premium_raws[:30]])
+            if len(premium_raws) > 30:
+                proxies_str += f"\n...and {len(premium_raws) - 30} more premium proxies"
+            msg = f"💎 <b>Saved {added} Premium/Strong proxies to pool!</b>\n👤 User: {callback.from_user.first_name}\n\n{proxies_str}"
+            if len(msg) > 4000:
+                msg = f"💎 <b>Saved {added} Premium/Strong proxies to pool!</b>\n👤 User: {callback.from_user.first_name}"
+            await bot.send_message(LOG_GROUP_ID, msg)
+        except Exception:
+            pass
+
     bot.pasted_proxies_cache[user_id] = {}
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.reply(f"<b>Proxy Update</b>\n<code>Added {added} premium proxies. Standard/Weak/Dead IPs ignored.</code>")
-    await callback.answer("Premium proxies added successfully!")
+    await callback.message.reply(f"⚡ <b>Proxy Pool Updated</b>\n<code>Loaded {added} premium proxies into active pool.</code>")
+    await callback.answer("Premium proxies added!")
 
 @dp.callback_query(F.data == "add_live_all")
 async def process_add_live_all(callback: types.CallbackQuery):
@@ -1747,37 +1751,33 @@ async def process_add_live_all(callback: types.CallbackQuery):
     if not live_raws:
         await callback.answer("No live proxies found in cache or session expired.", show_alert=True)
         return
-        
-    pool = await ProxyManager.get_user_proxies(user_id)
-    existing_raws = {p['raw'] for p in pool}
-    added = 0
+
+    pool = []
+    seen = set()
     for p_raw in live_raws:
-        if p_raw not in existing_raws:
-            parts = p_raw.split(':')
-            if len(parts) == 4:
-                pool.append({"raw": p_raw, "server": f"http://{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]})
-            elif len(parts) == 2:
-                pool.append({"raw": p_raw, "server": f"http://{parts[0]}:{parts[1]}"})
-            added += 1
-            
-    if added > 0:
-        await ProxyManager.save_user_proxies(user_id, pool)
-        if LOG_GROUP_ID:
-            try:
-                proxies_str = "\n".join([f"<code>• {p}</code>" for p in live_raws[:30]])
-                if len(live_raws) > 30:
-                    proxies_str += f"\n...and {len(live_raws) - 30} more channels"
-                msg = f"📥 <b>Saved all {added} live proxies to pool!</b>\n👤 User: {callback.from_user.first_name}\n\n{proxies_str}"
-                if len(msg) > 4000:
-                    msg = f"📥 <b>Saved {added} live proxies to pool!</b>\n👤 User: {callback.from_user.first_name}"
-                await bot.send_message(LOG_GROUP_ID, msg)
-            except:
-                pass
-        
+        if p_raw not in seen:
+            seen.add(p_raw)
+            pool.append(raw_to_proxy_obj(p_raw))
+
+    await ProxyManager.save_user_proxies(user_id, pool)
+    added = len(pool)
+
+    if LOG_GROUP_ID:
+        try:
+            proxies_str = "\n".join([f"<code>• {p}</code>" for p in live_raws[:30]])
+            if len(live_raws) > 30:
+                proxies_str += f"\n...and {len(live_raws) - 30} more proxies"
+            msg = f"📥 <b>Saved all {added} live proxies to pool!</b>\n👤 User: {callback.from_user.first_name}\n\n{proxies_str}"
+            if len(msg) > 4000:
+                msg = f"📥 <b>Saved {added} live proxies to pool!</b>\n👤 User: {callback.from_user.first_name}"
+            await bot.send_message(LOG_GROUP_ID, msg)
+        except Exception:
+            pass
+
     bot.pasted_proxies_cache[user_id] = {}
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.reply(f"<b>Proxy Update</b>\n<code>Added {added} live proxies to active pool.</code>")
-    await callback.answer("All live proxies added successfully!")
+    await callback.message.reply(f"⚡ <b>Proxy Pool Updated</b>\n<code>Loaded {added} live proxies into active pool.</code>")
+    await callback.answer("All live proxies added!")
 
 @dp.callback_query(F.data == "rm_weak_proxies")
 async def process_rm_weak(callback: types.CallbackQuery):
