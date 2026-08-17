@@ -1444,7 +1444,7 @@ async def test_proxy_list(proxies_to_test, is_pool, user_id, status_msg=None):
 
     return live_proxies, dead_proxies, weak_proxies, list(error_reasons)
 
-@dp.message(Command("allproxies"))
+@dp.message(Command("allproxies", "allproxy"))
 async def allproxies_command(message: types.Message):
     if not message.from_user:
         return
@@ -1459,49 +1459,45 @@ async def allproxies_command(message: types.Message):
         
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT user_id, proxies FROM user_proxies")
-        proxies_map = {}
-        for row in rows:
-            if row['proxies']:
-                import json
-                proxies_map[row['user_id']] = json.loads(row['proxies'])
         
-    lines = []
-    lines.append("📁 <b>All Loaded Proxies:</b>\n")
-    for u_id, proxies in proxies_map.items():
-        lines.append(f"👤 <b>User ID:</b> <code>{u_id}</code> (Total: {len(proxies)})")
-        for p in proxies:
-            raw_p = p.get('raw') or p.get('server')
-            lines.append(f"  • <code>{raw_p}</code>")
-        lines.append("")
-        
-    output_text = "\n".join(lines)
+    unique_proxies = []
+    seen = set()
+    total_loaded = 0
     
-    if len(output_text) > 3500:
-        temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
-        os.makedirs(temp_dir, exist_ok=True)
-        temp_file_path = os.path.join(temp_dir, 'all_proxies.txt')
+    for row in rows:
+        if row['proxies']:
+            import json
+            try:
+                user_proxies = json.loads(row['proxies'])
+                for p in user_proxies:
+                    raw_p = (p.get('raw') or p.get('server') or '').strip()
+                    if raw_p:
+                        total_loaded += 1
+                        if raw_p not in seen:
+                            seen.add(raw_p)
+                            unique_proxies.append(raw_p)
+            except Exception:
+                pass
+
+    if not unique_proxies:
+        await message.answer("📁 <b>No proxies loaded in database across any users.</b>")
+        return
+
+    temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_file_path = os.path.join(temp_dir, 'all_proxies.txt')
+    
+    with open(temp_file_path, 'w', encoding='utf-8') as f:
+        f.write("\n".join(unique_proxies) + "\n")
         
-        clean_lines = []
-        for u_id, proxies in proxies_map.items():
-            clean_lines.append(f"User ID: {u_id} (Total: {len(proxies)})")
-            for p in proxies:
-                raw_p = p.get('raw') or p.get('server')
-                clean_lines.append(f"  - {raw_p}")
-            clean_lines.append("")
-            
-        with open(temp_file_path, 'w', encoding='utf-8') as f:
-            f.write("\n".join(clean_lines))
-            
-        await message.reply_document(
-            document=FSInputFile(temp_file_path, filename="all_proxies.txt"),
-            caption=f"📁 All proxies list (Total users: {len(proxies_map)})"
-        )
-        try:
-            os.remove(temp_file_path)
-        except Exception:
-            pass
-    else:
-        await message.answer(output_text)
+    await message.reply_document(
+        document=FSInputFile(temp_file_path, filename="all_proxies.txt"),
+        caption=f"📁 <b>All Active Proxies Exported</b>\n<code>Total Unique: {len(unique_proxies)} (Total Loaded: {total_loaded})</code>"
+    )
+    try:
+        os.remove(temp_file_path)
+    except Exception:
+        pass
 
 def parse_proxy_line(line: str) -> Optional[Dict]:
     line = line.strip()
