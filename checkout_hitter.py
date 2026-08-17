@@ -28,8 +28,16 @@ class CheckoutHitter:
             self.proxies = {"http": purl, "https": purl}
             
     def _extract_session_id(self, url: str) -> Optional[str]:
+        # Direct URL path match (e.g. /page/ps_123 or /page/pay_123 or /page/123456)
         m = re.search(r'page/([A-Za-z0-9_-]+)', url)
         if m: return m.group(1)
+        # Query parameters (e.g. ?payment_session_id=ps_... or ?ps=ps_...)
+        m = re.search(r'[?&](?:payment_session_id|payment_session|ps|session_id)=([A-Za-z0-9_-]+)', url)
+        if m: return m.group(1)
+        # Standard checkout session ID patterns
+        m = re.search(r'(ps_[A-Za-z0-9_-]+)', url)
+        if m: return m.group(1)
+        # Fallback to long alphanumeric token if present in path
         m = re.search(r'([A-Za-z0-9_-]{20,})', url)
         return m.group(1) if m else None
 
@@ -40,14 +48,14 @@ class CheckoutHitter:
         try:
             headers = {
                 "User-Agent": UA,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
                 "Referer": self.url
             }
             async with session.get(self.url, headers=headers, timeout=12) as r:
                 if r.status_code == 200:
                     html = r.text() if callable(r.text) else r.text
                     
-                    # 1. Parse __NEXT_DATA__ script tag
+                    # 1. Parse __NEXT_DATA__ script tag (Next.js Pay By Link)
                     m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
                     if m:
                         try:
@@ -75,6 +83,20 @@ class CheckoutHitter:
                         except Exception as e:
                             print(f"Error parsing NEXT_DATA: {e}")
                             
+                    # 2. Deep scan across all script tags for embedded Checkout.com configurations
+                    if not self.pk or not self.ps_id:
+                        for script_content in re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL):
+                            if 'checkout.com' in script_content.lower() or 'pk_' in script_content or 'ps_' in script_content:
+                                if not self.pk:
+                                    pk_m = re.search(r'["\']?(?:publicKey|pk|key)["\']?\s*[:=]\s*["\'](pk_[A-Za-z0-9_-]+)["\']', script_content)
+                                    if pk_m:
+                                        self.pk = pk_m.group(1)
+                                if not self.ps_id:
+                                    ps_m = re.search(r'["\']?(?:paymentSessionId|payment_session_id|sessionId|ps_id|payment_session)["\']?\s*[:=]\s*["\'](ps_[A-Za-z0-9_-]+)["\']', script_content)
+                                    if ps_m:
+                                        self.ps_id = ps_m.group(1)
+                                        
+                    # 3. Global Regex fallback on raw HTML
                     if not self.pk:
                         pks = re.findall(r'pk_[A-Za-z0-9_-]+', html)
                         if pks:
