@@ -485,8 +485,8 @@ def parse_cards_input(payload_tokens: list, raw_payload: str):
         else:
             potential_bin = "".join(payload_tokens).strip()
 
-        clean_bin = potential_bin.lower().replace(' ', '')
-        if 'x' in clean_bin or (clean_bin.isdigit() and len(clean_bin) >= 6):
+        clean_bin_prefix = potential_bin.split('|')[0].lower().replace(' ', '')
+        if 'x' in clean_bin_prefix or (clean_bin_prefix.isdigit() and len(clean_bin_prefix) >= 6 and len(clean_bin_prefix) < 16):
             if count > 10:
                 return None, "Maximum batch limit is 10 concurrent requests."
             from generators import generate_bin_cards
@@ -954,8 +954,8 @@ def parse_ccn_input(payload_tokens: list, raw_payload: str):
         else:
             potential_bin = "".join(payload_tokens).strip()
 
-        clean_bin = potential_bin.lower().replace(' ', '')
-        if 'x' in clean_bin or (clean_bin.isdigit() and len(clean_bin) >= 6 and len(clean_bin) <= 8):
+        clean_bin_prefix = potential_bin.split('|')[0].lower().replace(' ', '')
+        if 'x' in clean_bin_prefix or (clean_bin_prefix.isdigit() and len(clean_bin_prefix) >= 6 and len(clean_bin_prefix) < 16):
             if count > 10:
                 return None, "Maximum batch limit is 10 concurrent requests."
             from generators import generate_bin_cards

