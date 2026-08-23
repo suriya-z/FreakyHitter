@@ -651,12 +651,14 @@ async def hit_command(message: types.Message):
                         reason_msg = "card_declined"
 
                     hit_text = (
-                        f"{status_title}\n"
-                        f"💳 <code>{card_str}</code>\n"
-                        f"💰 Amount: {amt_val}\n"
-                        f"🛒 Merchant: {merchant_disp}\n"
-                        f"📉 Response: {reason_msg}\n"
-                        f"⏱ {res['response_time']:.2f}s" + note_line
+                        f"❌ <b><i>{status_title.replace('<b>', '').replace('</b>', '')}</i></b>\n"
+                        f"──────────────────────\n"
+                        f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
+                        f"<b><i>Amount</i></b> ➔ {amt_val}\n"
+                        f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
+                        f"<b><i>Response</i></b> ➔ {reason_msg}\n"
+                        f"<b><i>Time</i></b> ➔ {res['response_time']:.2f}s\n"
+                        f"──────────────────────" + note_line
                     )
 
                 sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
@@ -877,12 +879,15 @@ async def hitck_command(message: types.Message):
                 time_str = f"{res.get('response_time', 0):.2f}s"
                 
                 msg = (
-                    f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n"
-                    f"💳 <code>{card_str}</code>\n"
-                    f"💰 Amount: {html.escape(amount_val)}\n"
-                    f"🛒 Merchant: {merchant_disp}\n"
-                    f"📉 Response: <code>{html.escape(resp_str)}</code>\n"
-                    f"⏱ {time_str}{note_line}"
+                    f"❌ <b><i>PAYMENT UNSUCCESSFUL</i></b>\n"
+                    f"──────────────────────\n"
+                    f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
+                    f"<b><i>Amount</i></b> ➔ {html.escape(amount_val)}\n"
+                    f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
+                    f"<b><i>Response</i></b> ➔ <code>{html.escape(resp_str)}</code>\n"
+                    f"<b><i>Time</i></b> ➔ {time_str}\n"
+                    f"──────────────────────"
+                    f"{note_line}"
                 )
                 
             try:
@@ -1136,12 +1141,14 @@ async def hitad1_command(message: types.Message):
                 else:
                     reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
                     hit_text = (
-                        f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n"
-                        f"💳 <code>{card_str}</code>\n"
-                        f"💰 Amount: {amount_val}\n"
-                        f"🛒 Merchant: {merchant_disp}\n"
-                        f"📉 Reason: {reason_msg}\n"
-                        f"⏱ {res.get('response_time', 0):.2f}s" + note_line
+                        f"❌ <b><i>PAYMENT UNSUCCESSFUL</i></b>\n"
+                        f"──────────────────────\n"
+                        f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
+                        f"<b><i>Amount</i></b> ➔ {amount_val}\n"
+                        f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
+                        f"<b><i>Response</i></b> ➔ {reason_msg}\n"
+                        f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s\n"
+                        f"──────────────────────" + note_line
                     )
 
                 sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
@@ -1312,12 +1319,14 @@ async def hitad_command(message: types.Message):
             else:
                 reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
                 hit_text = (
-                    f"❌ <b>PAYMENT UNSUCCESSFUL</b>\n"
-                    f"💳 <code>{card_str}</code>\n"
-                    f"💰 Amount: {amount_val}\n"
-                    f"🛒 Merchant: {merchant_disp}\n"
-                    f"📉 Reason: {reason_msg}\n"
-                    f"⏱ {res.get('response_time', 0):.2f}s" + note_line
+                    f"❌ <b><i>PAYMENT UNSUCCESSFUL</i></b>\n"
+                    f"──────────────────────\n"
+                    f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
+                    f"<b><i>Amount</i></b> ➔ {amount_val}\n"
+                    f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
+                    f"<b><i>Response</i></b> ➔ {reason_msg}\n"
+                    f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s\n"
+                    f"──────────────────────" + note_line
                 )
 
             sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
