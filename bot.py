@@ -438,6 +438,9 @@ def is_session_expired_err(res: dict) -> bool:
     raw_resp = str(res.get('raw_response') or '').lower()
     dec_code = str(res.get('decline_code') or '').lower()
 
+    if '903' in reason or '903' in dec_code or 'internal error' in reason:
+        return False
+
     if any(card_err in reason or card_err in raw_resp for card_err in ['card_expired', 'expired_card', 'card expired', 'invalid_expiry']):
         return False
 
