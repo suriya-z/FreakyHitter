@@ -610,18 +610,22 @@ async def hit_command(message: types.Message):
                 amt_val = amount_str or "USD 0.00"
 
                 if res['success']:
-                    tds_line = "\n🔓 3DS: <b>BYPASSED [STRIPE]</b> (3DS2 → Succeeded)" if res.get('3ds_bypassed') else ""
-                    cpt_line = "\n🤖 Captcha: <b>BYPASSED [STRIPE]</b>" if res.get('captcha_bypassed') else ""
-                    succ_url_line = extract_success_url_line(res)
+                    tds_line = "\n<b><i>3DS</i></b> ➔ <b>BYPASSED [STRIPE]</b> (3DS2 → Succeeded)" if res.get('3ds_bypassed') else ""
+                    cpt_line = "\n<b><i>Captcha</i></b> ➔ <b>BYPASSED [STRIPE]</b>" if res.get('captcha_bypassed') else ""
+                    succ_url = res.get('receipt_url') or res.get('final_url') or res.get('redirect_url') or res.get('success_url') or res.get('3ds_url')
+                    succ_url_line = f"\n<b><i>Success URL</i></b> ➔ {html.escape(str(succ_url))}" if succ_url else ""
                     hit_text = (
-                        f"✅ <b>PAYMENT SUCCESSFUL [STRIPE]</b>\n"
-                        f"💳 <code>{card_str}</code>\n"
-                        f"💰 Amount: {amt_val}\n"
-                        f"🛒 Merchant: {merchant_disp}\n"
-                        f"⏱ {res['response_time']:.2f}s"
+                        f"✅ <b><i>PAYMENT SUCCESSFUL [STRIPE]</i></b>\n"
+                        f"──────────────────────\n"
+                        f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
+                        f"<b><i>Amount</i></b> ➔ {amt_val}\n"
+                        f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
+                        f"<b><i>Time</i></b> ➔ {res['response_time']:.2f}s"
                         f"{tds_line}"
                         f"{cpt_line}"
-                        f"{succ_url_line}" + note_line
+                        f"{succ_url_line}\n"
+                        f"──────────────────────"
+                        f"{note_line}"
                     )
                 else:
                     code_raw = str(res.get('decline_code') or res.get('error') or 'unknown').lower()
@@ -852,16 +856,21 @@ async def hitck_command(message: types.Message):
                     resp_str += " (3DS Bypassed)"
                 
                 receipt_str = ""
+                succ_url = res.get('receipt_url') or res.get('final_url') or res.get('redirect_url') or res.get('success_url') or res.get('3ds_url')
+                succ_url_line = f"\n<b><i>Success URL</i></b> ➔ {html.escape(str(succ_url))}" if succ_url else ""
                 
                 time_str = f"{res.get('response_time', 0):.2f}s"
                 msg = (
-                    f"✅ <b>PAYMENT SUCCESSFUL</b>\n"
-                    f"💳 <code>{card_str}</code>\n"
-                    f"💰 Amount: {html.escape(amount_val)}\n"
-                    f"🛒 Merchant: {merchant_disp}\n"
-                    f"📉 Response: <code>{html.escape(resp_str)}</code>\n"
-                    f"⏱ {time_str}"
-                    f"{receipt_str}{note_line}"
+                    f"✅ <b><i>PAYMENT SUCCESSFUL [CHECKOUT.COM]</i></b>\n"
+                    f"──────────────────────\n"
+                    f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
+                    f"<b><i>Amount</i></b> ➔ {html.escape(amount_val)}\n"
+                    f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
+                    f"<b><i>Response</i></b> ➔ <code>{html.escape(resp_str)}</code>\n"
+                    f"<b><i>Time</i></b> ➔ {time_str}"
+                    f"{succ_url_line}\n"
+                    f"──────────────────────"
+                    f"{note_line}"
                 )
             else:
                 resp_str = res.get('error') or res.get('decline_code') or "Refused"
@@ -1111,14 +1120,18 @@ async def hitad1_command(message: types.Message):
                 note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
 
                 if res.get('success'):
-                    succ_url_line = extract_success_url_line(res)
+                    succ_url = res.get('receipt_url') or res.get('final_url') or res.get('redirect_url') or res.get('success_url') or res.get('3ds_url')
+                    succ_url_line = f"\n<b><i>Success URL</i></b> ➔ {html.escape(str(succ_url))}" if succ_url else ""
                     hit_text = (
-                        f"✅ <b>PAYMENT SUCCESSFUL [ADYEN CCN]</b>\n"
-                        f"💳 <code>{card_str}</code>\n"
-                        f"💰 Amount: {amount_val}\n"
-                        f"🛒 Merchant: {merchant_disp}\n"
-                        f"⏱ {res.get('response_time', 0):.2f}s"
-                        f"{succ_url_line}" + note_line
+                        f"✅ <b><i>PAYMENT SUCCESSFUL [ADYEN CCN]</i></b>\n"
+                        f"──────────────────────\n"
+                        f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
+                        f"<b><i>Amount</i></b> ➔ {amount_val}\n"
+                        f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
+                        f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s"
+                        f"{succ_url_line}\n"
+                        f"──────────────────────"
+                        f"{note_line}"
                     )
                 else:
                     reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
@@ -1283,14 +1296,18 @@ async def hitad_command(message: types.Message):
             note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
 
             if res.get('success'):
-                succ_url_line = extract_success_url_line(res)
+                succ_url = res.get('receipt_url') or res.get('final_url') or res.get('redirect_url') or res.get('success_url') or res.get('3ds_url')
+                succ_url_line = f"\n<b><i>Success URL</i></b> ➔ {html.escape(str(succ_url))}" if succ_url else ""
                 hit_text = (
-                    f"✅ <b>PAYMENT SUCCESSFUL [ADYEN]</b>\n"
-                    f"💳 <code>{card_str}</code>\n"
-                    f"💰 Amount: {amount_val}\n"
-                    f"🛒 Merchant: {merchant_disp}\n"
-                    f"⏱ {res.get('response_time', 0):.2f}s"
-                    f"{succ_url_line}" + note_line
+                    f"✅ <b><i>PAYMENT SUCCESSFUL [ADYEN]</i></b>\n"
+                    f"──────────────────────\n"
+                    f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
+                    f"<b><i>Amount</i></b> ➔ {amount_val}\n"
+                    f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
+                    f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s"
+                    f"{succ_url_line}\n"
+                    f"──────────────────────"
+                    f"{note_line}"
                 )
             else:
                 reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
