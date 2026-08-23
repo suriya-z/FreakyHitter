@@ -20,8 +20,9 @@ from curl_compat import ChromeSession
 
 # ── crypto backend ──────────────────────────────────────────────────────────
 try:
-    from cryptography.hazmat.primitives.ciphers.aead import AESCCM
-    from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
+    from cryptography.hazmat.primitives.ciphers.aead import AESCCM, AESGCM
+    from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15, OAEP, MGF1
+    from cryptography.hazmat.primitives.hashes import SHA256
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
     from cryptography.hazmat.backends import default_backend
     _HAS_CRYPTOGRAPHY = True
@@ -33,10 +34,10 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Adyen Client-Side Encryption
+#  Adyen Client-Side Encryption (Dual-Mode: JWE v6 & AES-CCM Legacy)
 # ═══════════════════════════════════════════════════════════════════════════
 class AdyenCSE:
-    """RSA + AES-256-CCM card-field encryption matching adyen-web SDK output."""
+    """RSA + AES card-field encryption matching adyen-web SDK v5 (CSE) & v6 (JWE) standards."""
 
     def __init__(self, public_key_str: str):
         parts = public_key_str.split("|")
@@ -65,7 +66,28 @@ class AdyenCSE:
         c_int = pow(m_int, self._exp, self._mod)
         return c_int.to_bytes(key_len, "big")
 
+    @staticmethod
+    def _b64url(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+    def _encrypt_field_jwe(self, field_name: str, field_value: str) -> str:
+        """Modern Adyen v6 JWE format: RSA-OAEP-256 + A256GCM compact token."""
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        payload = json.dumps({field_name: field_value, "generationtime": ts}).encode()
+        header_b64 = self._b64url(b'{"alg":"RSA-OAEP-256","enc":"A256GCM","version":"1"}')
+        
+        cek = os.urandom(32)
+        enc_cek = self._pub.encrypt(
+            cek,
+            OAEP(mgf=MGF1(algorithm=SHA256()), algorithm=SHA256(), label=None)
+        )
+        iv = os.urandom(12)
+        ct_tag = AESGCM(cek).encrypt(iv, payload, header_b64.encode())
+        ct, tag = ct_tag[:-16], ct_tag[-16:]
+        return ".".join([header_b64, self._b64url(enc_cek), self._b64url(iv), self._b64url(ct), self._b64url(tag)])
+
     def _encrypt_field(self, field_name: str, field_value: str) -> str:
+        """Adyen CSE format: RSA PKCS#1 v1.5 + AES-256-CCM (8-byte MAC)."""
         gen = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         plain = f"{field_name}:{field_value}\ngenerationtime:{gen}"
         plain_b = plain.encode()
@@ -77,7 +99,6 @@ class AdyenCSE:
             ct_tag  = AESCCM(aes_key, tag_length=8).encrypt(nonce, plain_b, None)
             enc_key = self._pub.encrypt(aes_key, PKCS1v15())
         else:
-            # Import pure Python pycryptodome or fallback cryptography
             try:
                 from Crypto.Cipher import AES
                 cipher = AES.new(aes_key, AES.MODE_CCM, nonce=nonce, mac_len=8)
@@ -90,20 +111,25 @@ class AdyenCSE:
         blob = enc_key + nonce + ct_tag
         return f"{CSE_PREFIX}${base64.b64encode(blob).decode()}"
 
-    def encrypt_card(self, number: str, month: str, year: str, cvv: str) -> dict:
+    def encrypt_card(self, number: str, month: str, year: str, cvv: str, use_jwe: bool = False) -> dict:
         yr = year if len(year) == 4 else f"20{year}"
+        fn = self._encrypt_field_jwe if (use_jwe and _HAS_CRYPTOGRAPHY) else self._encrypt_field
         return {
-            "encryptedCardNumber":     self._encrypt_field("number",      number),
-            "encryptedExpiryMonth":    self._encrypt_field("expiryMonth", month.zfill(2)),
-            "encryptedExpiryYear":     self._encrypt_field("expiryYear",  yr),
-            "encryptedSecurityCode":   self._encrypt_field("cvc",         cvv),
+            "encryptedCardNumber":     fn("number",      number),
+            "encryptedExpiryMonth":    fn("expiryMonth", month.zfill(2)),
+            "encryptedExpiryYear":     fn("expiryYear",  yr),
+            "encryptedSecurityCode":   fn("cvc",         cvv),
         }
 
-    def encrypt_card_ccn(self, number: str, month: str, year: str, cvv: Optional[str] = None) -> dict:
+    def encrypt_card_jwe(self, number: str, month: str, year: str, cvv: str) -> dict:
+        """Encrypt card in modern Adyen v6 JWE format."""
+        return self.encrypt_card(number, month, year, cvv, use_jwe=True)
+
+    def encrypt_card_ccn(self, number: str, month: str, year: str, cvv: Optional[str] = None, use_jwe: bool = False) -> dict:
         """Encrypt card for CCN check — auto-attaches synthetic CVV if omitted."""
         if not cvv or cvv == '000':
             cvv = f"{random.randint(1000, 9999):04d}" if str(number).startswith(('34', '37')) else f"{random.randint(100, 999):03d}"
-        return self.encrypt_card(number, month, year, cvv)
+        return self.encrypt_card(number, month, year, cvv, use_jwe=use_jwe)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
