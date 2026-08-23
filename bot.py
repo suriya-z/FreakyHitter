@@ -1054,8 +1054,7 @@ async def hitad1_command(message: types.Message):
                 link_dead = True
                 try:
                     await status_msg.edit_text(
-                        "⚠️ <b>Link Expired</b>\n"
-                        "<code>This pay link is single-use and has been consumed. Provide a fresh link.</code>"
+                        "<b>[!] Session Expired</b>"
                     )
                 except Exception:
                     pass
@@ -1240,7 +1239,7 @@ async def hitad_command(message: types.Message):
                 
                 expired = is_session_expired_err(res)
                 if expired:
-                    block += "\n⚠️ <i>[Session Expired — Batch Halted]</i>"
+                    block += "\n<b>[!] Session Expired</b>"
 
                 card_blocks.append(block)
 
