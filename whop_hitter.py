@@ -16,26 +16,92 @@ from curl_compat import ChromeSession
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-def _generate_random_shopper(country_code: str = 'US') -> dict:
-    FIRST_NAMES = ['James', 'Michael', 'Robert', 'John', 'David', 'William', 'Richard', 'Joseph', 'Thomas', 'Charles', 'Christopher', 'Daniel', 'Matthew', 'Anthony', 'Mark', 'Steven', 'Paul', 'Andrew', 'Joshua', 'Sarah', 'Emily', 'Emma', 'Olivia', 'Sophia', 'Isabella', 'Ava', 'Mia', 'Charlotte', 'Amelia']
-    LAST_NAMES = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis', 'Rodriguez', 'Martinez', 'Hernandez', 'Lopez', 'Gonzalez', 'Wilson', 'Anderson', 'Thomas', 'Taylor', 'Moore', 'Jackson', 'Martin']
-    DOMAINS = ['gmail.com', 'outlook.com', 'yahoo.com', 'icloud.com', 'hotmail.com', 'proton.me']
-    
-    first = random.choice(FIRST_NAMES)
-    last = random.choice(LAST_NAMES)
-    num = random.randint(100, 9999)
+GLOBAL_SHOPPERS = {
+    'US': {
+        'first_names': ['James', 'Michael', 'Robert', 'John', 'David', 'William', 'Richard', 'Joseph', 'Thomas', 'Charles', 'Sarah', 'Emily', 'Emma', 'Olivia', 'Sophia', 'Ava'],
+        'last_names': ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis', 'Rodriguez', 'Martinez', 'Wilson', 'Anderson', 'Taylor', 'Moore'],
+        'cities': [('New York', 'NY', '10001'), ('Los Angeles', 'CA', '90001'), ('Chicago', 'IL', '60601'), ('Houston', 'TX', '77001'), ('Miami', 'FL', '33101'), ('Dallas', 'TX', '75201'), ('Seattle', 'WA', '98101'), ('Boston', 'MA', '02108'), ('Atlanta', 'GA', '30301'), ('Austin', 'TX', '78701')],
+        'streets': ['Oak Street', 'Maple Ave', 'Washington Blvd', 'Lincoln Way', 'Cedar Lane', 'Pine Street', 'Park Ave', 'Broadway', 'Elm St', 'Main St'],
+        'phone_prefix': '+1',
+    },
+    'GB': {
+        'first_names': ['Oliver', 'George', 'Harry', 'Noah', 'Jack', 'Leo', 'Arthur', 'Oscar', 'Olivia', 'Amelia', 'Isla', 'Ava', 'Mia', 'Lily', 'Sophia', 'Grace'],
+        'last_names': ['Smith', 'Jones', 'Taylor', 'Brown', 'Williams', 'Wilson', 'Johnson', 'Davies', 'Robinson', 'Wright', 'Thompson', 'Evans', 'Walker', 'White'],
+        'cities': [('London', 'Greater London', 'EC1A 1BB'), ('Manchester', 'Greater Manchester', 'M1 1AE'), ('Birmingham', 'West Midlands', 'B1 1AA'), ('Leeds', 'West Yorkshire', 'LS1 1UR'), ('Glasgow', 'Scotland', 'G1 1XQ'), ('Liverpool', 'Merseyside', 'L1 8JQ'), ('Bristol', 'Bristol', 'BS1 4ST')],
+        'streets': ['High Street', 'Station Road', 'Main Street', 'Church Lane', 'Victoria Road', 'Green Lane', 'Manor Road', 'Park Road', 'Queen Street'],
+        'phone_prefix': '+44',
+    },
+    'DE': {
+        'first_names': ['Lukas', 'Maximilian', 'Paul', 'Felix', 'Jonas', 'Leon', 'Finn', 'Noah', 'Elias', 'Emma', 'Mia', 'Hannah', 'Sophia', 'Anna', 'Emilia', 'Marie'],
+        'last_names': ['Müller', 'Schmidt', 'Schneider', 'Fischer', 'Weber', 'Meyer', 'Wagner', 'Becker', 'Schulz', 'Hoffmann', 'Schäfer', 'Koch', 'Bauer', 'Richter'],
+        'cities': [('Berlin', 'Berlin', '10115'), ('Munich', 'Bavaria', '80331'), ('Hamburg', 'Hamburg', '20095'), ('Frankfurt', 'Hesse', '60311'), ('Cologne', 'North Rhine-Westphalia', '50667'), ('Stuttgart', 'Baden-Württemberg', '70173'), ('Düsseldorf', 'North Rhine-Westphalia', '40213')],
+        'streets': ['Hauptstraße', 'Bahnhofstraße', 'Schillerstraße', 'Goethestraße', 'Berliner Straße', 'Gartenstraße', 'Bismarckstraße', 'Kirchstraße'],
+        'phone_prefix': '+49',
+    },
+    'FR': {
+        'first_names': ['Gabriel', 'Léo', 'Raphaël', 'Louis', 'Lucas', 'Adam', 'Arthur', 'Hugo', 'Jade', 'Louise', 'Emma', 'Alice', 'Ambre', 'Lina', 'Rose', 'Chloé'],
+        'last_names': ['Martin', 'Bernard', 'Dubois', 'Thomas', 'Robert', 'Richard', 'Petit', 'Durand', 'Leroy', 'Moreau', 'Simon', 'Laurent', 'Lefebvre', 'Michel'],
+        'cities': [('Paris', 'Île-de-France', '75001'), ('Marseille', 'Provence-Alpes-Côte d\'Azur', '13001'), ('Lyon', 'Auvergne-Rhône-Alpes', '69001'), ('Toulouse', 'Occitanie', '31000'), ('Nice', 'Provence-Alpes-Côte d\'Azur', '06000'), ('Nantes', 'Pays de la Loire', '44000')],
+        'streets': ['Rue de la Paix', 'Boulevard Saint-Germain', 'Avenue Victor Hugo', 'Rue de Rivoli', 'Rue Nationale', 'Avenue des Champs-Élysées', 'Rue de la République'],
+        'phone_prefix': '+33',
+    },
+    'CA': {
+        'first_names': ['Liam', 'Noah', 'Oliver', 'Lucas', 'Benjamin', 'Theodore', 'William', 'Olivia', 'Emma', 'Charlotte', 'Amelia', 'Sophia', 'Chloe', 'Mia'],
+        'last_names': ['Smith', 'Brown', 'Tremblay', 'Martin', 'Roy', 'Wilson', 'MacDonald', 'Gagnon', 'Johnson', 'Taylor', 'Campbell', 'Anderson', 'Leblanc'],
+        'cities': [('Toronto', 'ON', 'M5H 2N2'), ('Vancouver', 'BC', 'V6B 1A1'), ('Montreal', 'QC', 'H2Y 1C6'), ('Calgary', 'AB', 'T2P 1J9'), ('Ottawa', 'ON', 'K1P 1J1'), ('Edmonton', 'AB', 'T5J 0N3')],
+        'streets': ['Yonge Street', 'Queen Street West', 'Robson Street', 'Sainte-Catherine St', 'Jasper Ave', 'Bay Street', 'King Street', 'Main Street'],
+        'phone_prefix': '+1',
+    },
+    'AU': {
+        'first_names': ['Oliver', 'Noah', 'Henry', 'William', 'Jack', 'Charlie', 'Thomas', 'Charlotte', 'Amelia', 'Isla', 'Olivia', 'Mia', 'Ava', 'Grace'],
+        'last_names': ['Smith', 'Jones', 'Williams', 'Brown', 'Wilson', 'Taylor', 'Johnson', 'White', 'Martin', 'Anderson', 'Thompson', 'Nguyen', 'Thomas'],
+        'cities': [('Sydney', 'NSW', '2000'), ('Melbourne', 'VIC', '3000'), ('Brisbane', 'QLD', '4000'), ('Perth', 'WA', '6000'), ('Adelaide', 'SA', '5000'), ('Gold Coast', 'QLD', '4217')],
+        'streets': ['George Street', 'Collins Street', 'Queen Street', 'Bourke Street', 'St Kilda Road', 'Pitt Street', 'Flinders Street', 'Elizabeth Street'],
+        'phone_prefix': '+61',
+    },
+    'IN': {
+        'first_names': ['Aditya', 'Rohan', 'Vikram', 'Rajesh', 'Arjun', 'Dev', 'Karan', 'Siddharth', 'Aarav', 'Kabir', 'Adhira', 'Ananya', 'Priya', 'Sneha', 'Kavya', 'Pooja', 'Riya', 'Diya'],
+        'last_names': ['Sharma', 'Verma', 'Patel', 'Gupta', 'Rao', 'Nair', 'Singh', 'Kumar', 'Deshmukh', 'Chopra', 'Mehta', 'Reddy', 'Joshi', 'Bose'],
+        'cities': [('Mumbai', 'MH', '400001'), ('Delhi', 'DL', '110001'), ('Bangalore', 'KA', '560001'), ('Hyderabad', 'TS', '500001'), ('Ahmedabad', 'GJ', '380001'), ('Chennai', 'TN', '600001'), ('Kolkata', 'WB', '700001'), ('Pune', 'MH', '411001')],
+        'streets': ['MG Road', 'Park Street', 'Ashoka Road', 'GT Road', 'Ring Road', 'Brigade Road', 'Linking Road', 'FC Road'],
+        'phone_prefix': '+91',
+    },
+    'IT': {
+        'first_names': ['Leonardo', 'Francesco', 'Alessandro', 'Lorenzo', 'Mattia', 'Andrea', 'Gabriele', 'Sofia', 'Aurora', 'Giulia', 'Ginevra', 'Vittoria', 'Beatrice', 'Chiara'],
+        'last_names': ['Rossi', 'Russo', 'Ferrari', 'Esposito', 'Bianchi', 'Romano', 'Colombo', 'Ricci', 'Marino', 'Greco', 'Bruno', 'Gallo', 'Conti', 'De Luca'],
+        'cities': [('Rome', 'Lazio', '00118'), ('Milan', 'Lombardy', '20121'), ('Naples', 'Campania', '80121'), ('Turin', 'Piedmont', '10121'), ('Florence', 'Tuscany', '50121'), ('Bologna', 'Emilia-Romagna', '40121')],
+        'streets': ['Via Roma', 'Corso Vittorio Emanuele', 'Via Garibaldi', 'Via Dante', 'Via dei Mille', 'Via Cavour', 'Via Nazionale'],
+        'phone_prefix': '+39',
+    },
+    'ES': {
+        'first_names': ['Hugo', 'Mateo', 'Martin', 'Lucas', 'Leo', 'Daniel', 'Alejandro', 'Manuel', 'Lucia', 'Sofia', 'Martina', 'Maria', 'Julia', 'Paula', 'Valeria', 'Emma'],
+        'last_names': ['Garcia', 'Rodriguez', 'Gonzalez', 'Fernandez', 'Lopez', 'Martinez', 'Sanchez', 'Perez', 'Gomez', 'Martin', 'Jimenez', 'Ruiz', 'Hernandez', 'Diaz'],
+        'cities': [('Madrid', 'Madrid', '28001'), ('Barcelona', 'Catalonia', '08001'), ('Valencia', 'Valencia', '46001'), ('Seville', 'Andalusia', '41001'), ('Zaragoza', 'Aragon', '50001'), ('Malaga', 'Andalusia', '29001')],
+        'streets': ['Gran Vía', 'Calle Mayor', 'Paseo de la Castellana', 'Calle de Alcalá', 'Rambla de Catalunya', 'Avenida Diagonal', 'Calle San Fernando'],
+        'phone_prefix': '+34',
+    }
+}
+
+DOMAINS = ['gmail.com', 'outlook.com', 'yahoo.com', 'icloud.com', 'hotmail.com', 'proton.me', 'mail.com']
+
+def _generate_random_shopper(country_code: Optional[str] = None) -> dict:
+    """Generates realistic localized fake billing details for any global country."""
+    if not country_code or country_code.upper() not in GLOBAL_SHOPPERS:
+        country_code = random.choice(list(GLOBAL_SHOPPERS.keys()))
+    else:
+        country_code = country_code.upper()
+        
+    data = GLOBAL_SHOPPERS[country_code]
+    first = random.choice(data['first_names'])
+    last = random.choice(data['last_names'])
+    num = random.randint(10, 9999)
     email = f"{first.lower()}.{last.lower()}{num}@{random.choice(DOMAINS)}"
-    phone = f"{random.randint(201, 989)}{random.randint(100, 999)}{random.randint(1000, 9999)}"
     
-    STREETS = ['Oak Street', 'Maple Ave', 'Washington Blvd', 'Lincoln Way', 'Cedar Lane', 'Pine Street', 'Park Ave', 'Broadway', 'Elm St', 'Main St']
-    CITIES_ZIP = [
-        ('New York', 'NY', '10001'), ('Los Angeles', 'CA', '90001'), ('Chicago', 'IL', '60601'),
-        ('Houston', 'TX', '77001'), ('Miami', 'FL', '33101'), ('Dallas', 'TX', '75201'),
-        ('Seattle', 'WA', '98101'), ('Boston', 'MA', '02108'), ('Atlanta', 'GA', '30301'),
-    ]
-    city, state, zip_code = random.choice(CITIES_ZIP)
-    house_num = str(random.randint(10, 9999))
-    street = f"{house_num} {random.choice(STREETS)}"
+    city, state, zip_code = random.choice(data['cities'])
+    street_name = random.choice(data['streets'])
+    house_num = str(random.randint(10, 999))
+    street = f"{house_num} {street_name}"
+    phone = f"{data['phone_prefix']}{random.randint(2000000000, 9999999999)}"
     
     return {
         'first_name': first,
@@ -48,7 +114,7 @@ def _generate_random_shopper(country_code: str = 'US') -> dict:
         'city': city,
         'state': state,
         'postal_code': zip_code,
-        'country': country_code or 'US'
+        'country': country_code
     }
 
 class WhopHitter:
@@ -189,25 +255,33 @@ class WhopHitter:
 
             # 4. Fallback amount detection in HTML (Handles active discount vs strikethrough)
             if not cfg['amount']:
-                CURR_MAP = {'€': 'EUR', '£': 'GBP', '₹': 'INR', '$': 'USD'}
+                CURR_MAP = {
+                    '€': 'EUR', '£': 'GBP', '₹': 'INR', '$': 'USD', 'C$': 'CAD', 'CA$': 'CAD',
+                    'A$': 'AUD', 'AU$': 'AUD', '¥': 'JPY', '円': 'JPY', 'R$': 'BRL', 'Mex$': 'MXN',
+                    'CHF': 'CHF', 'kr': 'SEK', 'zł': 'PLN', 'NZ$': 'NZD', 'S$': 'SGD', 'HK$': 'HKD',
+                    '₺': 'TRY', 'R': 'ZAR', 'AED': 'AED', 'SAR': 'SAR', '₩': 'KRW', 'Kč': 'CZK',
+                    'Ft': 'HUF', 'lei': 'RON', 'лв': 'BGN', '₪': 'ILS', '₱': 'PHP', 'RM': 'MYR',
+                    '฿': 'THB', 'Rp': 'IDR', '₫': 'VND', '₴': 'UAH', '₦': 'NGN', 'KSh': 'KES',
+                    'E£': 'EGP', 'Rs': 'PKR', '৳': 'BDT'
+                }
                 # Check for discounted price tag following a line-through tag
-                disc_m = re.search(r'line-through[^>]*>[^<]+</span>\s*<span[^>]*>([€$£₹]?)\s*([\d\.]+)', html, re.I)
+                disc_m = re.search(r'line-through[^>]*>[^<]+</span>\s*<span[^>]*>([A-Za-z$€£₹¥₺₪₱฿₫₴₦৳]{1,4})\s*([\d\.]+)', html, re.I)
                 if disc_m:
-                    sym = disc_m.group(1)
+                    sym = disc_m.group(1).strip()
                     val = float(disc_m.group(2))
-                    c_name = CURR_MAP.get(sym, 'EUR')
+                    c_name = CURR_MAP.get(sym, sym if len(sym) == 3 else 'EUR')
                     cfg['amount'] = f"{c_name} {val:.2f}"
                 else:
-                    dom_price_m = re.search(r'([€$£₹])\s*(\d+(?:\.\d{2})?)\s*(?:</span>|<span|per\s+month|\/mo)', html, re.I)
+                    dom_price_m = re.search(r'([A-Za-z$€£₹¥₺₪₱฿₫₴₦৳]{1,4})\s*(\d+(?:\.\d{2})?)\s*(?:</span>|<span|per\s+month|\/mo)', html, re.I)
                     if dom_price_m:
-                        sym = dom_price_m.group(1)
+                        sym = dom_price_m.group(1).strip()
                         val = float(dom_price_m.group(2))
-                        c_name = CURR_MAP.get(sym, 'USD')
+                        c_name = CURR_MAP.get(sym, sym if len(sym) == 3 else 'USD')
                         cfg['amount'] = f"{c_name} {val:.2f}"
                     else:
-                        amt_m = re.search(r'(USD|EUR|GBP|INR|\$|£|€|₹)\s*([\d\.]+)', html)
+                        amt_m = re.search(r'(USD|EUR|GBP|INR|CAD|AUD|JPY|BRL|MXN|CHF|SEK|NOK|DKK|PLN|NZD|SGD|HKD|TRY|ZAR|AED|SAR|KRW|CZK|HUF|RON|BGN|ILS|PHP|MYR|THB|IDR|VND|CLP|COP|PEN|ARS|UAH|NGN|KES|EGP|PKR|BDT|\$|£|€|₹|¥|₺|₪|₱|฿|₫|₴|₦|৳)\s*([\d\.]+)', html)
                         if amt_m and float(amt_m.group(2)) > 0:
-                            sym = amt_m.group(1)
+                            sym = amt_m.group(1).strip()
                             c_name = CURR_MAP.get(sym, sym if len(sym) == 3 else 'USD')
                             cfg['amount'] = f"{c_name} {float(amt_m.group(2)):.2f}"
 
@@ -310,7 +384,24 @@ class WhopHitter:
                 if cfg.get('amount'):
                     result['amount'] = cfg['amount']
 
-                shopper = _generate_random_shopper()
+                # Localized shopper generation matching target store currency
+                curr_country = 'US'
+                if cfg.get('amount'):
+                    amt_str = cfg['amount'].upper()
+                    if 'EUR' in amt_str:
+                        curr_country = random.choice(['DE', 'FR', 'IT', 'ES'])
+                    elif 'GBP' in amt_str:
+                        curr_country = 'GB'
+                    elif 'INR' in amt_str:
+                        curr_country = 'IN'
+                    elif 'CAD' in amt_str:
+                        curr_country = 'CA'
+                    elif 'AUD' in amt_str:
+                        curr_country = 'AU'
+                    else:
+                        curr_country = random.choice(['US', 'GB', 'CA', 'AU'])
+
+                shopper = _generate_random_shopper(curr_country)
                 yr = card['year'] if len(card['year']) == 4 else f"20{card['year']}"
                 yr_short = yr[-2:]
 
