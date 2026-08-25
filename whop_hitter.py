@@ -150,15 +150,10 @@ class WhopHitter:
             if rsc_chunks:
                 full_rsc = "".join(rsc_chunks).replace('\\"', '"').replace('\\\\', '\\')
                 
-                # Company title
-                comp_m = re.search(r'["\']company["\']\s*:\s*\{[^}]*["\']title["\']\s*:\s*["\']([^"\']+)["\']', full_rsc)
-                if comp_m and comp_m.group(1).strip():
+                # Company title / Product name
+                comp_m = re.search(r'title["\']?\s*:\s*["\']([^"\']+)["\']', full_rsc)
+                if comp_m and 'whop' not in comp_m.group(1).lower() and len(comp_m.group(1).strip()) > 2:
                     cfg['merchant'] = comp_m.group(1).strip()[:35]
-
-                # Product name
-                prod_name_m = re.search(r'["\']product["\']\s*:\s*\{[^}]*["\']name["\']\s*:\s*["\']([^"\']+)["\']', full_rsc)
-                if prod_name_m and prod_name_m.group(1).strip():
-                    cfg['merchant'] = prod_name_m.group(1).strip()[:35]
 
                 # Product ID
                 if not cfg['product_id']:
@@ -172,19 +167,33 @@ class WhopHitter:
                     if pl_m:
                         cfg['plan_id'] = pl_m.group(1)
 
-                # Price / Currency in RSC
+                # Price / Currency in RSC (Handle initialPriceDueInCents, rawRenewalPrice, initial_price)
+                cents_m = re.search(r'initialPriceDueInCents["\']?\s*:\s*(\d+)', full_rsc)
+                renew_m = re.search(r'rawRenewalPrice["\']?\s*:\s*([0-9\.]+)', full_rsc)
                 price_m = re.search(r'["\'](?:initialPrice|initial_price|price|amount)["\']\s*:\s*([0-9\.]+)', full_rsc)
                 curr_m = re.search(r'["\']currency["\']\s*:\s*["\']([A-Za-z]{3})["\']', full_rsc)
-                if price_m and not cfg['amount']:
-                    curr = curr_m.group(1).upper() if curr_m else "USD"
-                    val = float(price_m.group(1))
-                    cfg['amount'] = f"{curr} {val:.2f}"
+                curr = curr_m.group(1).upper() if curr_m else "USD"
 
-            # 4. Fallback amount detection in HTML
+                if cents_m and int(cents_m.group(1)) > 0:
+                    val = float(cents_m.group(1)) / 100.0
+                    cfg['amount'] = f"{curr} {val:.2f}"
+                elif renew_m and float(renew_m.group(1)) > 0:
+                    val = float(renew_m.group(1))
+                    cfg['amount'] = f"{curr} {val:.2f}"
+                elif price_m:
+                    val = float(price_m.group(1))
+                    if val > 1:
+                        cfg['amount'] = f"{curr} {val:.2f}"
+
+            # 4. Fallback amount detection in HTML (e.g. $49 or $49.00)
             if not cfg['amount']:
-                amt_m = re.search(r'(?:USD|EUR|GBP|\$|£|€)\s*([\d\.]+)', html)
-                if amt_m:
-                    cfg['amount'] = f"USD {amt_m.group(1)}"
+                dom_price_m = re.search(r'\$(\d+(?:\.\d{2})?)\s*(?:</span>|<span|per\s+month|\/mo)', html, re.I)
+                if dom_price_m:
+                    cfg['amount'] = f"USD {float(dom_price_m.group(1)):.2f}"
+                else:
+                    amt_m = re.search(r'(?:USD|EUR|GBP|\$|£|€)\s*([\d\.]+)', html)
+                    if amt_m and float(amt_m.group(1)) > 0:
+                        cfg['amount'] = f"USD {float(amt_m.group(1)):.2f}"
 
         return cfg
 
