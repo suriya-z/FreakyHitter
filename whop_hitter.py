@@ -161,11 +161,12 @@ class WhopHitter:
                     if p_m:
                         cfg['product_id'] = p_m.group(1)
 
-                # Plan ID
+                # Plan ID (Must be authentic base62 token, not static UI strings)
                 if not cfg['plan_id']:
-                    pl_m = re.search(r'(plan_[A-Za-z0-9]{10,24})', full_rsc)
-                    if pl_m:
-                        cfg['plan_id'] = pl_m.group(1)
+                    for pl in re.findall(r'(plan_[A-Za-z0-9_]{10,28})', full_rsc):
+                        if any(c.isdigit() for c in pl) and not any(w in pl for w in ['success', 'cancel', 'delete', 'updat', 'desc', 'prevent', 'provid', 'base', 'student', 'class', 'embed', 'host', 'today', 'upgrade']):
+                            cfg['plan_id'] = pl
+                            break
 
                 # Price / Currency in RSC (Handle initialPriceDueInCents, rawRenewalPrice, initial_price)
                 cents_m = re.search(r'initialPriceDueInCents["\']?\s*:\s*(\d+)', full_rsc)
