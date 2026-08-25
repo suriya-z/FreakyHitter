@@ -2778,6 +2778,32 @@ async def gen_cards_command(message: types.Message):
         await message.reply(f"<b>Error generating CCs:</b> <code>{e}</code>", parse_mode="html")
 
 
+@dp.message(Command("id", "myid", "proxystatus"))
+async def id_command(message: types.Message):
+    user_id = message.from_user.id
+    user_proxies = await ProxyManager.get_user_proxies(user_id)
+    all_users = await ProxyManager.get_all_users()
+    
+    is_owner = OWNER_ID and str(user_id) == str(OWNER_ID)
+    is_app = user_id in approved_users_set
+    
+    status_role = "👑 Owner" if is_owner else ("💎 Approved" if is_app else "👤 User")
+    db_status = "🟢 Connected" if ProxyManager.db_pool else "🟡 In-Memory Mode (DB Reconnecting)"
+    
+    msg = (
+        f"🆔 <b>Account & Proxy Diagnostics</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
+        f"🏷 <b>Role:</b> {status_role}\n"
+        f"📁 <b>Database:</b> {db_status}\n"
+        f"🌐 <b>Your Active Proxies:</b> <b>{len(user_proxies)}</b>\n"
+        f"👥 <b>Total Registered Users:</b> <b>{len(all_users)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👉 <i>Use <code>/proxy</code> to test/load proxies or <code>/allproxies</code> to export.</i>"
+    )
+    await message.reply(msg, parse_mode="html")
+
+
 @dp.message(Command("fake"))
 async def fake_identity_command(message: types.Message):
     parts = message.text.strip().split(maxsplit=1)
