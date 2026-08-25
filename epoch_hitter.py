@@ -145,7 +145,23 @@ class EpochHitter:
         return self._base_cfg.copy()
 
     def _parse_response(self, html: str, status_code: int, result: dict) -> dict:
-        """Parses Epoch response page for approval or decline details."""
+        """Parses Epoch response page/JSON for approval or decline details."""
+        # Try JSON parsing first
+        try:
+            d = json.loads(html)
+            if isinstance(d, dict):
+                result['raw_response'] = d
+                msg = d.get('message') or d.get('error') or d.get('status') or ''
+                if d.get('status') is True or d.get('isApproved') is True or d.get('status') == 'Succeeded':
+                    result['success'] = True
+                    result['receipt_url'] = d.get('url') or d.get('receipt_url')
+                    return result
+                result['decline_code'] = 'card_declined'
+                result['error'] = msg or 'Your payment was declined; please try again.'
+                return result
+        except Exception:
+            pass
+
         html_low = html.lower()
 
         # Approval indicators
@@ -166,8 +182,8 @@ class EpochHitter:
                 result['redirect_url'] = m_url.group(1)
             return result
 
-        # Decline reason parsing
-        decline_m = re.search(r'(?:decline|refused|error|reason)\s*:\s*([^<.\n]+)', html, re.I)
+        # Explicit decline text extraction
+        decline_m = re.search(r'(?:decline|refused|error|reason|message)\s*[:=]\s*["\']?([^"\'<.\n]{5,100})', html, re.I)
         if decline_m:
             reason = decline_m.group(1).strip()
             reason_low = reason.lower()
@@ -177,7 +193,7 @@ class EpochHitter:
                     mapped = v
                     break
             result['decline_code'] = mapped
-            result['error'] = reason[:150]
+            result['error'] = reason
             result['is_live'] = mapped in ['insufficient_funds', 'incorrect_cvc', '3ds_required', 'restricted_card', 'issuer_unavailable']
             return result
 
@@ -194,7 +210,7 @@ class EpochHitter:
             return result
 
         result['decline_code'] = 'card_declined'
-        result['error'] = f"Epoch Declined (HTTP {status_code})" if status_code != 200 else "Epoch: Transaction Declined"
+        result['error'] = 'Your payment was declined; please try again.'
         return result
 
     async def hit(self, card: dict, attempt: int, user_id: int) -> dict:
