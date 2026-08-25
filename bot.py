@@ -2979,7 +2979,25 @@ async def main() -> None:
     db_url = os.environ.get("DATABASE_URL")
     if db_url:
         print("Connecting to Supabase...")
-        db_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=4)
+        try:
+            # Handle Supabase pooler / direct connection modes with SSL and statement cache compatibility
+            db_pool = await asyncpg.create_pool(
+                db_url,
+                min_size=1,
+                max_size=4,
+                command_timeout=30,
+                ssl="require" if "supabase.co" in db_url else None,
+                statement_cache_size=0 if ":6543" in db_url or "pooler" in db_url else 100
+            )
+        except Exception as e:
+            print(f"Warning: Direct Supabase connection failed ({e}). Retrying with safe parameters...")
+            try:
+                db_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=2, ssl=False)
+            except Exception as e2:
+                print(f"ERROR: Could not establish Supabase DB connection: {e2}")
+                db_pool = None
+
+    if db_pool:
         async with db_pool.acquire() as conn:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS user_proxies (
