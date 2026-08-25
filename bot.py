@@ -1053,6 +1053,7 @@ async def hitad1_command(message: types.Message):
         results = []
         link_dead = False
 
+        adyen_engine = AdyenHitter(url, proxy_data=proxy_data)
         for idx, card in enumerate(cards, 1):
             if active_sessions.get(user_id) != session_token or link_dead:
                 break
@@ -1060,7 +1061,6 @@ async def hitad1_command(message: types.Message):
             if idx > 1:
                 await asyncio.sleep(random.uniform(0.5, 1.0))
 
-            adyen_engine = AdyenHitter(url, proxy_data=proxy_data)
             res = await adyen_engine.hit_ccn(card, idx, user_id)
             results.append(res)
 
@@ -1223,15 +1223,16 @@ async def hitad_command(message: types.Message):
         merchant_name = "Adyen Merchant"
         amount_str = None
         results = []
+        link_dead = False
 
+        adyen_engine = AdyenHitter(url, proxy_data=proxy_data)
         for idx, card in enumerate(cards, 1):
-            if active_sessions.get(user_id) != session_token:
+            if active_sessions.get(user_id) != session_token or link_dead:
                 break
 
             if idx > 1:
                 await asyncio.sleep(random.uniform(0.5, 1.0))
 
-            adyen_engine = AdyenHitter(url, proxy_data=proxy_data)
             res = await adyen_engine.hit(card, idx, user_id)
             results.append(res)
             
