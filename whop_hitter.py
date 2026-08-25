@@ -196,6 +196,18 @@ class WhopHitter:
                     if amt_m and float(amt_m.group(1)) > 0:
                         cfg['amount'] = f"USD {float(amt_m.group(1)):.2f}"
 
+            # 5. Fallback Product / Plan ID from full HTML if missing from RSC
+            if not cfg['product_id']:
+                p_fallback = re.findall(r'(prod_[A-Za-z0-9]{10,24})', html)
+                if p_fallback:
+                    cfg['product_id'] = p_fallback[0]
+
+            if not cfg['plan_id']:
+                for pl in re.findall(r'(plan_[A-Za-z0-9_]{10,28})', html):
+                    if any(c.isdigit() for c in pl) and not any(w in pl for w in ['success', 'cancel', 'delete', 'updat', 'desc', 'prevent', 'provid', 'base', 'student', 'class', 'embed', 'host', 'today', 'upgrade']):
+                        cfg['plan_id'] = pl
+                        break
+
         return cfg
 
     async def _get_config(self, session: ChromeSession) -> dict:
