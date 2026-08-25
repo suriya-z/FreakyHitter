@@ -2846,6 +2846,9 @@ async def process_show_commands(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "menu_hitter")
 async def process_menu_hitter(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="𝘽𝘼𝘾𝙆", callback_data="menu_main")]
+    ])
     hitter_text = (
         "<b><i>Stripe Checkout Hitter</i></b>\n"
         "<code>/hit [url] [cc|mm|yy|cvv]</code>\n\n"
@@ -2860,7 +2863,10 @@ async def process_menu_hitter(callback: types.CallbackQuery):
         "<b><i>Whop Checkout Hitter</i></b>\n"
         "<code>/hitwhop [url] [cc|mm|yy|cvv]</code>"
     )
-    await callback.message.edit_text(hitter_text, reply_markup=markup)
+    try:
+        await callback.message.edit_text(hitter_text, reply_markup=markup)
+    except Exception:
+        await callback.message.answer(hitter_text, reply_markup=markup)
     await callback.answer()
 
 @dp.callback_query(F.data.in_({"menu_tools", "tools_p1"}))
