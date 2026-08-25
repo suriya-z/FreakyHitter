@@ -104,9 +104,13 @@ gate_adyen_enabled = True
 bot_start_time = time.time()
 
 async def check_access_and_register(event_user: types.User, message_or_cb) -> bool:
-    """Checks ban status & maintenance mode, auto-registers user and logs new registrations to LOG_GROUP_ID."""
+    """Checks ban status & maintenance mode. Only auto-registers new users interacting in private chat."""
     user_id = event_user.id
     
+    # Ignore bot accounts
+    if getattr(event_user, 'is_bot', False):
+        return True
+
     # 1. Ban Check
     if user_id in banned_users_set and str(user_id) != str(OWNER_ID):
         msg = "⛔ <b>Access Revoked</b>\n<code>Your user ID has been blacklisted from using this bot.</code>"
@@ -125,8 +129,15 @@ async def check_access_and_register(event_user: types.User, message_or_cb) -> bo
             await message_or_cb.answer("Maintenance Mode Active", show_alert=True)
         return False
 
-    # 3. Auto Register & Telemetry Log
-    if user_id not in registered_users_set:
+    # 3. Only register on Private Direct Messages (never in groups/channels or log groups)
+    chat_obj = getattr(message_or_cb, 'chat', None)
+    if isinstance(message_or_cb, types.CallbackQuery):
+        chat_obj = getattr(message_or_cb.message, 'chat', None)
+
+    is_private_chat = chat_obj and getattr(chat_obj, 'type', '') == 'private'
+
+    # Do not log registration if the message was sent inside the LOG_GROUP or if owner
+    if is_private_chat and user_id not in registered_users_set and str(user_id) != str(OWNER_ID):
         registered_users_set.add(user_id)
         if db_pool:
             try:
