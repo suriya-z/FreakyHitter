@@ -169,32 +169,47 @@ class WhopHitter:
                             break
 
                 # Price / Currency in RSC (Handle initialPriceDueInCents, rawRenewalPrice, initial_price)
-                cents_m = re.search(r'initialPriceDueInCents["\']?\s*:\s*(\d+)', full_rsc)
-                renew_m = re.search(r'rawRenewalPrice["\']?\s*:\s*([0-9\.]+)', full_rsc)
-                price_m = re.search(r'["\'](?:initialPrice|initial_price|price|amount)["\']\s*:\s*([0-9\.]+)', full_rsc)
-                curr_m = re.search(r'["\']currency["\']\s*:\s*["\']([A-Za-z]{3})["\']', full_rsc)
-                curr = curr_m.group(1).upper() if curr_m else "USD"
+                cents_m = re.search(r'initialPriceDueInCents["\']?\s*:\s*(\d+)', html)
+                renew_m = re.search(r'rawRenewalPrice["\']?\s*:\s*([0-9\.]+)', html)
+                price_m = re.search(r'["\'](?:initialPrice|initial_price|price|amount)["\']\s*:\s*([0-9\.]+)', html)
+                curr_m = re.search(r'baseCurrency["\']?\s*:\s*["\']([A-Za-z]{3})["\']', html, re.I) or \
+                         re.search(r'currency["\']?\s*:\s*["\']([A-Za-z]{3})["\']', html, re.I)
+                curr = curr_m.group(1).upper() if curr_m else None
 
                 if cents_m and int(cents_m.group(1)) > 0:
                     val = float(cents_m.group(1)) / 100.0
-                    cfg['amount'] = f"{curr} {val:.2f}"
+                    cfg['amount'] = f"{curr or 'USD'} {val:.2f}"
                 elif renew_m and float(renew_m.group(1)) > 0:
                     val = float(renew_m.group(1))
-                    cfg['amount'] = f"{curr} {val:.2f}"
+                    cfg['amount'] = f"{curr or 'USD'} {val:.2f}"
                 elif price_m:
                     val = float(price_m.group(1))
                     if val > 1:
-                        cfg['amount'] = f"{curr} {val:.2f}"
+                        cfg['amount'] = f"{curr or 'USD'} {val:.2f}"
 
-            # 4. Fallback amount detection in HTML (e.g. $49 or $49.00)
+            # 4. Fallback amount detection in HTML (Handles active discount vs strikethrough)
             if not cfg['amount']:
-                dom_price_m = re.search(r'\$(\d+(?:\.\d{2})?)\s*(?:</span>|<span|per\s+month|\/mo)', html, re.I)
-                if dom_price_m:
-                    cfg['amount'] = f"USD {float(dom_price_m.group(1)):.2f}"
+                CURR_MAP = {'€': 'EUR', '£': 'GBP', '₹': 'INR', '$': 'USD'}
+                # Check for discounted price tag following a line-through tag
+                disc_m = re.search(r'line-through[^>]*>[^<]+</span>\s*<span[^>]*>([€$£₹]?)\s*([\d\.]+)', html, re.I)
+                if disc_m:
+                    sym = disc_m.group(1)
+                    val = float(disc_m.group(2))
+                    c_name = CURR_MAP.get(sym, 'EUR')
+                    cfg['amount'] = f"{c_name} {val:.2f}"
                 else:
-                    amt_m = re.search(r'(?:USD|EUR|GBP|\$|£|€)\s*([\d\.]+)', html)
-                    if amt_m and float(amt_m.group(1)) > 0:
-                        cfg['amount'] = f"USD {float(amt_m.group(1)):.2f}"
+                    dom_price_m = re.search(r'([€$£₹])\s*(\d+(?:\.\d{2})?)\s*(?:</span>|<span|per\s+month|\/mo)', html, re.I)
+                    if dom_price_m:
+                        sym = dom_price_m.group(1)
+                        val = float(dom_price_m.group(2))
+                        c_name = CURR_MAP.get(sym, 'USD')
+                        cfg['amount'] = f"{c_name} {val:.2f}"
+                    else:
+                        amt_m = re.search(r'(USD|EUR|GBP|INR|\$|£|€|₹)\s*([\d\.]+)', html)
+                        if amt_m and float(amt_m.group(2)) > 0:
+                            sym = amt_m.group(1)
+                            c_name = CURR_MAP.get(sym, sym if len(sym) == 3 else 'USD')
+                            cfg['amount'] = f"{c_name} {float(amt_m.group(2)):.2f}"
 
             # 5. Fallback Product / Plan ID from full HTML if missing from RSC
             if not cfg['product_id']:
