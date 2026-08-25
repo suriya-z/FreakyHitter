@@ -129,42 +129,60 @@ async def check_access_and_register(event_user: types.User, message_or_cb) -> bo
             await message_or_cb.answer("Maintenance Mode Active", show_alert=True)
         return False
 
-    # 3. Only register on Private Direct Messages (never in groups/channels or log groups)
+    # 3. Persistent Registration Check (DB-authoritative with in-memory caching)
     chat_obj = getattr(message_or_cb, 'chat', None)
     if isinstance(message_or_cb, types.CallbackQuery):
         chat_obj = getattr(message_or_cb.message, 'chat', None)
 
     is_private_chat = chat_obj and getattr(chat_obj, 'type', '') == 'private'
 
-    # Do not log registration if the message was sent inside the LOG_GROUP or if owner
     if is_private_chat and user_id not in registered_users_set and str(user_id) != str(OWNER_ID):
-        registered_users_set.add(user_id)
+        is_truly_new_user = False
+        
         if db_pool:
             try:
                 async with db_pool.acquire() as conn:
-                    await conn.execute("""
+                    # Single atomic insert: only returns row if newly inserted (never on duplicate/conflict)
+                    inserted_row = await conn.fetchrow("""
                         INSERT INTO registered_users (user_id, username, first_name)
                         VALUES ($1, $2, $3)
-                        ON CONFLICT (user_id) DO UPDATE SET username = EXCLUDED.username, first_name = EXCLUDED.first_name
+                        ON CONFLICT (user_id) DO NOTHING
+                        RETURNING user_id;
                     """, user_id, event_user.username or "", event_user.first_name or "")
+                    
+                    if inserted_row:
+                        is_truly_new_user = True
+                    else:
+                        # Already exists in DB - update in-memory set so we never check again
+                        registered_users_set.add(user_id)
             except Exception as e:
-                print(f"Failed to register user in DB: {e}")
+                print(f"DB registration check error: {e}")
+                # Fallback: if DB error, only register once per session
+                if user_id not in registered_users_set:
+                    is_truly_new_user = True
+                    registered_users_set.add(user_id)
+        else:
+            if user_id not in registered_users_set:
+                is_truly_new_user = True
+                registered_users_set.add(user_id)
 
-        # Send Telegram notification to log group
-        if LOG_GROUP_ID:
-            try:
-                user_name = html.escape(event_user.first_name or "User")
-                user_tag = f"@{event_user.username}" if event_user.username else "N/A"
-                log_msg = (
-                    f"👤 <b>New User Registered</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👤 <b>Name:</b> {user_name} ({user_tag})\n"
-                    f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
-                    f"📅 <b>Date:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                )
-                await bot.send_message(LOG_GROUP_ID, log_msg)
-            except Exception as e:
-                print(f"Failed to log user registration: {e}")
+        # Send Telegram notification ONLY if user was truly inserted for the very first time
+        if is_truly_new_user:
+            registered_users_set.add(user_id)
+            if LOG_GROUP_ID:
+                try:
+                    user_name = html.escape(event_user.first_name or "User")
+                    user_tag = f"@{event_user.username}" if event_user.username else "N/A"
+                    log_msg = (
+                        f"👤 <b>New User Registered</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"👤 <b>Name:</b> {user_name} ({user_tag})\n"
+                        f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
+                        f"📅 <b>Date:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                    await bot.send_message(LOG_GROUP_ID, log_msg)
+                except Exception as e:
+                    print(f"Failed to log user registration: {e}")
                 
     return True
 
