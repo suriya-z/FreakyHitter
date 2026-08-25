@@ -1882,34 +1882,42 @@ async def allproxies_command(message: types.Message):
         return
         
     db_pool = ProxyManager.db_pool
-    if not db_pool:
-        await message.answer("📁 <b>Database connection not active.</b>")
-        return
-        
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT user_id, proxies FROM user_proxies")
-        
     unique_proxies = []
     seen = set()
     total_loaded = 0
     
-    for row in rows:
-        if row['proxies']:
-            import json
-            try:
-                user_proxies = json.loads(row['proxies'])
-                for p in user_proxies:
-                    raw_p = (p.get('raw') or p.get('server') or '').strip()
-                    if raw_p:
-                        total_loaded += 1
-                        if raw_p not in seen:
-                            seen.add(raw_p)
-                            unique_proxies.append(raw_p)
-            except Exception:
-                pass
+    # 1. Pull from DB if active
+    if db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                rows = await conn.fetch("SELECT user_id, proxies FROM user_proxies")
+                for row in rows:
+                    if row['proxies']:
+                        import json
+                        user_proxies = json.loads(row['proxies'])
+                        for p in user_proxies:
+                            raw_p = (p.get('raw') or p.get('server') or '').strip()
+                            if raw_p:
+                                total_loaded += 1
+                                if raw_p not in seen:
+                                    seen.add(raw_p)
+                                    unique_proxies.append(raw_p)
+        except Exception as e:
+            print(f"allproxies DB fetch error: {e}")
+
+    # 2. Pull from in-memory pools (guarantees export even during DB reconnect)
+    for uid, user_proxies in ProxyManager._in_memory_pools.items():
+        for p in user_proxies:
+            raw_p = (p.get('raw') or p.get('server') or '').strip()
+            if raw_p:
+                total_loaded += 1
+                if raw_p not in seen:
+                    seen.add(raw_p)
+                    unique_proxies.append(raw_p)
 
     if not unique_proxies:
-        await message.answer("📁 <b>No proxies loaded in database across any users.</b>")
+        status_note = " (Database reconnecting, in-memory pool empty)" if not db_pool else ""
+        await message.answer(f"📁 <b>No proxies loaded in pool across any users.{status_note}</b>")
         return
 
     temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
@@ -3036,6 +3044,73 @@ async def auto_proxy_checker_loop():
             print(f"Auto proxy loop error: {e}")
             await asyncio.sleep(60) # Prevent tight crash loop
 
+async def init_supabase_tables(pool):
+    global approved_users_set, banned_users_set, registered_users_set
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_proxies (
+                user_id BIGINT PRIMARY KEY,
+                proxies JSONB DEFAULT '[]'
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS approved_users (
+                user_id BIGINT PRIMARY KEY
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS registered_users (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS banned_users (
+                user_id BIGINT PRIMARY KEY,
+                reason TEXT,
+                banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        rows_app = await conn.fetch("SELECT user_id FROM approved_users")
+        for r in rows_app:
+            approved_users_set.add(r['user_id'])
+            
+        rows_banned = await conn.fetch("SELECT user_id FROM banned_users")
+        for r in rows_banned:
+            banned_users_set.add(r['user_id'])
+            
+        rows_reg = await conn.fetch("SELECT user_id FROM registered_users")
+        for r in rows_reg:
+            registered_users_set.add(r['user_id'])
+
+    await ProxyManager.init_db(pool)
+    print("Supabase connected! Tables (user_proxies, approved_users, registered_users, banned_users) ready!")
+
+async def db_reconnect_loop():
+    global db_pool
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        return
+    while db_pool is None:
+        try:
+            print("Attempting Supabase reconnection...")
+            pool = await asyncpg.create_pool(
+                db_url,
+                min_size=1,
+                max_size=3,
+                command_timeout=25,
+                ssl="require" if "supabase.co" in db_url else None,
+                statement_cache_size=0 if ":6543" in db_url or "pooler" in db_url else 100
+            )
+            db_pool = pool
+            await init_supabase_tables(db_pool)
+            break
+        except Exception as e:
+            print(f"Supabase reconnection attempt failed ({e}). Retrying in 15s...")
+            await asyncio.sleep(15)
+
 async def main() -> None:
     print("Bot is starting...")
     global db_pool
@@ -3043,7 +3118,6 @@ async def main() -> None:
     if db_url:
         print("Connecting to Supabase...")
         try:
-            # Handle Supabase pooler / direct connection modes with SSL and statement cache compatibility
             db_pool = await asyncpg.create_pool(
                 db_url,
                 min_size=1,
@@ -3052,59 +3126,13 @@ async def main() -> None:
                 ssl="require" if "supabase.co" in db_url else None,
                 statement_cache_size=0 if ":6543" in db_url or "pooler" in db_url else 100
             )
+            await init_supabase_tables(db_pool)
         except Exception as e:
-            print(f"Warning: Direct Supabase connection failed ({e}). Retrying with safe parameters...")
-            try:
-                db_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=2, ssl=False)
-            except Exception as e2:
-                print(f"ERROR: Could not establish Supabase DB connection: {e2}")
-                db_pool = None
-
-    if db_pool:
-        async with db_pool.acquire() as conn:
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS user_proxies (
-                    user_id BIGINT PRIMARY KEY,
-                    proxies JSONB DEFAULT '[]'
-                );
-            """)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS approved_users (
-                    user_id BIGINT PRIMARY KEY
-                );
-            """)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS registered_users (
-                    user_id BIGINT PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-            """)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS banned_users (
-                    user_id BIGINT PRIMARY KEY,
-                    reason TEXT,
-                    banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-            """)
-            rows_app = await conn.fetch("SELECT user_id FROM approved_users")
-            for r in rows_app:
-                approved_users_set.add(r['user_id'])
-                
-            rows_banned = await conn.fetch("SELECT user_id FROM banned_users")
-            for r in rows_banned:
-                banned_users_set.add(r['user_id'])
-                
-            rows_reg = await conn.fetch("SELECT user_id FROM registered_users")
-            for r in rows_reg:
-                registered_users_set.add(r['user_id'])
-
-        await ProxyManager.init_db(db_pool)
-        print("Supabase connected! Tables (user_proxies, approved_users, registered_users, banned_users) ready!")
+            print(f"Warning: Initial Supabase connection failed ({e}). Launching background reconnection loop...")
+            db_pool = None
+            asyncio.create_task(db_reconnect_loop())
     else:
-        print("WARNING: DATABASE_URL not set! Proxies will not be saved.")
-        
+        print("WARNING: DATABASE_URL not set! In-memory proxy mode active.")
         
     await start_web_server()
     asyncio.create_task(auto_proxy_checker_loop())

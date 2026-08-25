@@ -270,37 +270,62 @@ class StripeAPIExtractor:
 # ============= BASE AUTOFILL =============
 class ProxyManager:
     db_pool = None
+    _in_memory_pools: Dict[int, List[Dict]] = {}
 
     @classmethod
     async def init_db(cls, db_pool):
         cls.db_pool = db_pool
+        # Pre-load all user proxies from DB into memory cache
+        if db_pool:
+            try:
+                async with db_pool.acquire() as conn:
+                    rows = await conn.fetch("SELECT user_id, proxies FROM user_proxies")
+                    for row in rows:
+                        if row['proxies']:
+                            cls._in_memory_pools[row['user_id']] = json.loads(row['proxies'])
+            except Exception as e:
+                print(f"ProxyManager DB prefetch warning: {e}")
 
     @classmethod
     async def get_user_proxies(cls, user_id: int) -> List[Dict]:
-        if not cls.db_pool: return []
-        async with cls.db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT proxies FROM user_proxies WHERE user_id = $1", user_id)
-            if row and row['proxies']:
-                return json.loads(row['proxies'])
-            return []
+        if cls.db_pool:
+            try:
+                async with cls.db_pool.acquire() as conn:
+                    row = await conn.fetchrow("SELECT proxies FROM user_proxies WHERE user_id = $1", user_id)
+                    if row and row['proxies']:
+                        parsed = json.loads(row['proxies'])
+                        cls._in_memory_pools[user_id] = parsed
+                        return parsed
+            except Exception:
+                pass
+        return cls._in_memory_pools.get(user_id, [])
 
     @classmethod
     async def get_all_users(cls) -> List[int]:
-        if not cls.db_pool: return []
-        async with cls.db_pool.acquire() as conn:
-            rows = await conn.fetch("SELECT user_id FROM user_proxies")
-            return [row['user_id'] for row in rows]
-
+        users = set(cls._in_memory_pools.keys())
+        if cls.db_pool:
+            try:
+                async with cls.db_pool.acquire() as conn:
+                    rows = await conn.fetch("SELECT user_id FROM user_proxies")
+                    for r in rows:
+                        users.add(r['user_id'])
+            except Exception:
+                pass
+        return list(users)
 
     @classmethod
     async def save_user_proxies(cls, user_id: int, proxies: List[Dict]):
-        if not cls.db_pool: return
-        async with cls.db_pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO user_proxies (user_id, proxies)
-                VALUES ($1, $2)
-                ON CONFLICT (user_id) DO UPDATE SET proxies = EXCLUDED.proxies
-            """, user_id, json.dumps(proxies))
+        cls._in_memory_pools[user_id] = proxies
+        if cls.db_pool:
+            try:
+                async with cls.db_pool.acquire() as conn:
+                    await conn.execute("""
+                        INSERT INTO user_proxies (user_id, proxies)
+                        VALUES ($1, $2)
+                        ON CONFLICT (user_id) DO UPDATE SET proxies = EXCLUDED.proxies
+                    """, user_id, json.dumps(proxies))
+            except Exception as e:
+                print(f"ProxyManager save DB error: {e}")
 
     @classmethod
     async def load(cls, user_id: int, raw_text: str) -> int:
