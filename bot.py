@@ -3127,8 +3127,8 @@ async def db_reconnect_loop():
                 min_size=1,
                 max_size=3,
                 command_timeout=25,
-                ssl="require" if "supabase.co" in db_url else None,
-                statement_cache_size=0 if ":6543" in db_url or "pooler" in db_url else 100
+                ssl="require" if "supabase" in db_url or "postgres" in db_url or "pooler" in db_url else None,
+                statement_cache_size=0 if ":6543" in db_url or "pooler" in db_url or ":5432" in db_url else 100
             )
             db_pool = pool
             await init_supabase_tables(db_pool)
@@ -3149,8 +3149,8 @@ async def main() -> None:
                 min_size=1,
                 max_size=4,
                 command_timeout=30,
-                ssl="require" if "supabase.co" in db_url else None,
-                statement_cache_size=0 if ":6543" in db_url or "pooler" in db_url else 100
+                ssl="require" if "supabase" in db_url or "postgres" in db_url or "pooler" in db_url else None,
+                statement_cache_size=0 if ":6543" in db_url or "pooler" in db_url or ":5432" in db_url else 100
             )
             await init_supabase_tables(db_pool)
         except Exception as e:
