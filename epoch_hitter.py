@@ -123,10 +123,13 @@ class EpochHitter:
                 if name_m and val_m:
                     cfg['form_data'][name_m.group(1)] = val_m.group(1)
 
-            # Detect Epoch parameters in page or URL
-            for param in ['pi_code', 'reseller', 'co_code', 'member_idx', 'pi_idx', 'order_id']:
+            # Detect Epoch / WNU parameters in page or URL
+            for param in ['pi_code', 'reseller', 'co_code', 'member_idx', 'pi_idx', 'order_id', 'cachekey', 'sessionid', 'wnu.com', 'invoice']:
                 if param in html.lower() or param in self.url.lower():
                     cfg['is_epoch'] = True
+
+            if m_form:
+                cfg['is_epoch'] = True
 
             # Extract amount / price if visible
             amt_m = re.search(r'(?:USD|EUR|GBP|\$|£|€)\s*([\d\.]+)', html)
