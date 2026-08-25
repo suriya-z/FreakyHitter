@@ -2817,9 +2817,6 @@ async def process_show_commands(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "menu_hitter")
 async def process_menu_hitter(callback: types.CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="𝘽𝘼𝘾𝙆", callback_data="menu_main")]
-    ])
     hitter_text = (
         "<b><i>Stripe Checkout Hitter</i></b>\n"
         "<code>/hit [url] [cc|mm|yy|cvv]</code>\n\n"
@@ -2828,7 +2825,11 @@ async def process_menu_hitter(callback: types.CallbackQuery):
         "<b><i>Adyen Checkout CCN Hitter</i></b>\n"
         "<code>/hitad1 [url] [card_number]</code>\n\n"
         "<b><i>Checkout.com Hitter</i></b>\n"
-        "<code>/hitck [url] [cc|mm|yy|cvv]</code>"
+        "<code>/hitck [url] [cc|mm|yy|cvv]</code>\n\n"
+        "<b><i>Epoch Billing Hitter</i></b>\n"
+        "<code>/hitep [url] [cc|mm|yy|cvv]</code>\n\n"
+        "<b><i>Whop Checkout Hitter</i></b>\n"
+        "<code>/hitwhop [url] [cc|mm|yy|cvv]</code>"
     )
     await callback.message.edit_text(hitter_text, reply_markup=markup)
     await callback.answer()
