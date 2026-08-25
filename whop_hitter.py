@@ -81,7 +81,7 @@ class WhopHitter:
         return "https://whop.com"
 
     async def _scrape(self, session: ChromeSession) -> dict:
-        """Extracts Whop product plan metadata, pricing, and checkout backend endpoints."""
+        """Extracts Whop product/plan metadata, pricing, and checkout backend endpoints."""
         hdr = {
             "User-Agent": UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -95,26 +95,37 @@ class WhopHitter:
             'currency': 'USD',
             'is_whop': False,
             'api_base': 'https://api.whop.com',
-            'stripe_pk': 'pk_live_51JPnKxK2kC3b1mD5...',
         }
 
         if 'whop.com' in self.url.lower():
             cfg['is_whop'] = True
 
-        m_plan = re.search(r'(?:plan_|prod_)([A-Za-z0-9_]+)', self.url)
+        m_prod = re.search(r'prod_([A-Za-z0-9_]{10,24})', self.url)
+        if m_prod:
+            cfg['product_id'] = m_prod.group(0)
+
+        m_plan = re.search(r'plan_([A-Za-z0-9_]{10,24})', self.url)
         if m_plan:
             cfg['plan_id'] = m_plan.group(0)
 
         async with session.get(self.url, headers=hdr, timeout=12) as res:
             html = res.text() if callable(res.text) else res.text
 
-            t = re.search(r'<title>([^<]+)</title>', html, re.I)
-            if t:
-                title = t.group(1).strip().replace(' | Whop', '').replace(' - Whop', '')
-                if title:
-                    cfg['merchant'] = title[:35]
+            # 1. Meta / OpenGraph Title
+            og_title = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html, re.I) or \
+                       re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']', html, re.I)
+            if og_title:
+                t_clean = og_title.group(1).strip().replace(' | Whop', '').replace(' - Whop', '')
+                if t_clean and 'whop' not in t_clean.lower()[:5]:
+                    cfg['merchant'] = t_clean[:35]
+            else:
+                t = re.search(r'<title>([^<]+)</title>', html, re.I)
+                if t:
+                    t_clean = t.group(1).strip().replace(' | Whop', '').replace(' - Whop', '')
+                    if t_clean:
+                        cfg['merchant'] = t_clean[:35]
 
-            # Parse Next.js __NEXT_DATA__
+            # 2. Next.js Pages Router (__NEXT_DATA__)
             m_next = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
             if m_next:
                 try:
@@ -124,17 +135,52 @@ class WhopHitter:
                         cfg['merchant'] = props['company'].get('title') or cfg['merchant']
                     if props.get('product'):
                         prod = props['product']
-                        cfg['product_id'] = prod.get('id')
+                        cfg['product_id'] = prod.get('id') or cfg['product_id']
                         cfg['merchant'] = prod.get('name') or cfg['merchant']
                     if props.get('plan'):
                         plan = props['plan']
-                        cfg['plan_id'] = plan.get('id')
+                        cfg['plan_id'] = plan.get('id') or cfg['plan_id']
                         if plan.get('initial_price'):
                             cfg['amount'] = f"{plan.get('currency', 'USD').upper()} {float(plan['initial_price']):.2f}"
                 except Exception:
                     pass
 
-            # Detect pricing in HTML if not found in __NEXT_DATA__
+            # 3. Next.js App Router (RSC streaming chunks self.__next_f.push)
+            rsc_chunks = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, re.DOTALL)
+            if rsc_chunks:
+                full_rsc = "".join(rsc_chunks).replace('\\"', '"').replace('\\\\', '\\')
+                
+                # Company title
+                comp_m = re.search(r'["\']company["\']\s*:\s*\{[^}]*["\']title["\']\s*:\s*["\']([^"\']+)["\']', full_rsc)
+                if comp_m and comp_m.group(1).strip():
+                    cfg['merchant'] = comp_m.group(1).strip()[:35]
+
+                # Product name
+                prod_name_m = re.search(r'["\']product["\']\s*:\s*\{[^}]*["\']name["\']\s*:\s*["\']([^"\']+)["\']', full_rsc)
+                if prod_name_m and prod_name_m.group(1).strip():
+                    cfg['merchant'] = prod_name_m.group(1).strip()[:35]
+
+                # Product ID
+                if not cfg['product_id']:
+                    p_m = re.search(r'(prod_[A-Za-z0-9]{10,24})', full_rsc)
+                    if p_m:
+                        cfg['product_id'] = p_m.group(1)
+
+                # Plan ID
+                if not cfg['plan_id']:
+                    pl_m = re.search(r'(plan_[A-Za-z0-9]{10,24})', full_rsc)
+                    if pl_m:
+                        cfg['plan_id'] = pl_m.group(1)
+
+                # Price / Currency in RSC
+                price_m = re.search(r'["\'](?:initialPrice|initial_price|price|amount)["\']\s*:\s*([0-9\.]+)', full_rsc)
+                curr_m = re.search(r'["\']currency["\']\s*:\s*["\']([A-Za-z]{3})["\']', full_rsc)
+                if price_m and not cfg['amount']:
+                    curr = curr_m.group(1).upper() if curr_m else "USD"
+                    val = float(price_m.group(1))
+                    cfg['amount'] = f"{curr} {val:.2f}"
+
+            # 4. Fallback amount detection in HTML
             if not cfg['amount']:
                 amt_m = re.search(r'(?:USD|EUR|GBP|\$|£|€)\s*([\d\.]+)', html)
                 if amt_m:
