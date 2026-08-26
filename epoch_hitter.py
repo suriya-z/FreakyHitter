@@ -88,6 +88,8 @@ class EpochHitter:
         "suspected fraud": "fraud",
         "restricted card": "restricted_card",
         "issuer unavailable": "issuer_unavailable",
+        "paymenttypenotaccepted": "payment_type_not_accepted",
+        "payment_type_not_accepted": "payment_type_not_accepted",
     }
 
     def __init__(self, url: str, proxy_data: Optional[dict] = None):
@@ -248,17 +250,35 @@ class EpochHitter:
         """Parses HTML/JSON response from Epoch / WNU gateway."""
         result['raw_response'] = html
 
-        # Parse JSON structured responses
-        if status_code in (400, 401, 403, 404, 410, 500) or html.strip().startswith('{'):
+        # 1. Parse JSON structured responses (Array or Object)
+        trimmed = html.strip()
+        if trimmed.startswith(('[', '{')):
             try:
-                j = json.loads(html)
-                if isinstance(j, dict):
-                    err_msg = j.get('message') or j.get('error') or j.get('decline_code') or str(j)
-                    if j.get('statusCode') in (401, 410) or 'authorization' in str(err_msg).lower() or 'expired' in str(err_msg).lower():
+                d = json.loads(trimmed)
+                if isinstance(d, list) and len(d) > 0:
+                    item = d[0]
+                    if item.get('isApproved') is True or item.get('status') is True:
+                        result['success'] = True
+                        result['receipt_url'] = item.get('url') or item.get('receipt_url') or self.url
+                        return result
+                    err_code = item.get('error') or item.get('message') or 'card_declined'
+                    result['success'] = False
+                    result['decline_code'] = str(err_code)
+                    result['error'] = self.DECLINE_MAP.get(str(err_code).lower(), str(err_code))
+                    result['is_live'] = err_code in ['insufficient_funds', 'incorrect_cvc', '3ds_required', 'restricted_card', 'issuer_unavailable']
+                    return result
+                elif isinstance(d, dict):
+                    if d.get('isApproved') is True or d.get('status') is True or d.get('status') == 'Succeeded':
+                        result['success'] = True
+                        result['receipt_url'] = d.get('url') or d.get('receipt_url') or self.url
+                        return result
+                    err_msg = d.get('message') or d.get('error') or d.get('decline_code') or str(d)
+                    if d.get('statusCode') in (401, 410) or 'authorization' in str(err_msg).lower() or 'expired' in str(err_msg).lower():
                         result['decline_code'] = 'link_expired'
                         result['error'] = '[!] Link Expired'
                         return result
-                    result['decline_code'] = str(j.get('statusCode', 'error'))
+                    result['success'] = False
+                    result['decline_code'] = str(d.get('statusCode') or err_msg)
                     result['error'] = str(err_msg)[:120]
                     return result
             except Exception:
@@ -267,7 +287,7 @@ class EpochHitter:
         html_low = html.lower()
 
         # Approval indicators
-        if any(term in html_low for term in ['approved', 'thank you for your order', 'transaction successful', 'order confirmation', 'welcome to', 'payment successful', 'order id:']):
+        if ('"isapproved":false' not in html_low and 'isapproved: false' not in html_low) and any(term in html_low for term in ['approved', 'thank you for your order', 'transaction successful', 'order confirmation', 'welcome to', 'payment successful', 'order id:']):
             result['success'] = True
             m_url = re.search(r'href=["\'](https?://[^"\']+)["\']', html)
             if m_url:
