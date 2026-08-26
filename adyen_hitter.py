@@ -952,6 +952,10 @@ class AdyenHitter:
             result['receipt_url'] = data['returnUrl']
 
         rc = data.get('resultCode', '')
+        if not rc and data.get('status'):
+            rc = str(data.get('status'))
+        if not rc and ('refusalReason' in data or 'refusalReasonCode' in data):
+            rc = 'Refused'
 
         # ── approved ──
         if rc in ('Authorised', 'AuthenticationFinished'):
