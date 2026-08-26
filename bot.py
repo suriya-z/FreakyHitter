@@ -1119,7 +1119,9 @@ async def hitad1_command(message: types.Message):
         link_dead = False
 
         adyen_engine = AdyenHitter(url, proxy_data=proxy_data)
-        for idx, card in enumerate(cards, 1):
+        await adyen_engine.open_session()
+        try:
+          for idx, card in enumerate(cards, 1):
             if active_sessions.get(user_id) != session_token or link_dead:
                 break
 
@@ -1220,6 +1222,9 @@ async def hitad1_command(message: types.Message):
                         except: pass
                     asyncio.create_task(auto_del_ccn(sent_msg))
 
+        finally:
+          await adyen_engine.close_session()
+
         if len(cards) > 1 and not is_approved and status_msg:
             async def auto_del_ccn(m):
                 await asyncio.sleep(30)
@@ -1287,7 +1292,9 @@ async def hitad_command(message: types.Message):
         link_dead = False
 
         adyen_engine = AdyenHitter(url, proxy_data=proxy_data)
-        for idx, card in enumerate(cards, 1):
+        await adyen_engine.open_session()
+        try:
+          for idx, card in enumerate(cards, 1):
             if active_sessions.get(user_id) != session_token or link_dead:
                 break
 
@@ -1348,6 +1355,9 @@ async def hitad_command(message: types.Message):
 
                 if res.get('success') or expired:
                     break
+
+        finally:
+          await adyen_engine.close_session()
 
         is_approved = user_id in approved_users_set
 
