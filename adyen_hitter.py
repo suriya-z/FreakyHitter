@@ -351,12 +351,8 @@ class AdyenHitter:
                               loading_ctx: str, env: str) -> dict:
         """Fetch dropin config, sessionId, and sessionData for Pay by Link."""
         base = loading_ctx.rstrip('/')
-        # Append unique token parameter to isolate card sessions and avoid 903 conflicts
-        setup_url = (
-            f"{base}/session/paybylink/v1/{link_id}/setup"
-            f"?d={link_id}&generateSessionData=true&generateCheckoutAttemptId=true"
-            f"&_cb={random.randint(100000, 999999)}"
-        )
+        # Standard Adyen Pay by Link Dropin setup endpoint
+        setup_url = f"{base}/session/paybylink/v1/{link_id}/setup?d={link_id}"
         origin = self._get_origin()
         hdr = {
             "Accept": "application/json",
