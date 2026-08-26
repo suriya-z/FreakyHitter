@@ -9,12 +9,36 @@ def generate_bin_cards(bin_pattern: str, count: int = 10) -> list:
     - 453590xxxxxxxxxx
     - 453590xxxxxxxxxx|mm|yy|cvc
     - 453590|05|28|xxx
+    - 453590|05/28|000
+    - 453590|05/2028
     """
-    parts = bin_pattern.split('|')
-    card_pat = parts[0].strip()
-    mm_pat = parts[1].strip() if len(parts) > 1 else None
-    yy_pat = parts[2].strip() if len(parts) > 2 else None
-    cvc_pat = parts[3].strip() if len(parts) > 3 else None
+    raw = bin_pattern.strip()
+    parts = re.split(r'[|:]', raw)
+    card_pat = parts[0].strip() if parts else ""
+    
+    mm_pat = None
+    yy_pat = None
+    cvc_pat = None
+    
+    if len(parts) > 1:
+        rest = parts[1:]
+        if '/' in rest[0]:
+            sub = rest[0].split('/')
+            mm_pat = sub[0].strip()
+            yy_pat = sub[1].strip() if len(sub) > 1 else None
+            if len(rest) > 1:
+                cvc_pat = rest[1].strip()
+        else:
+            mm_pat = rest[0].strip()
+            if len(rest) > 1:
+                if '/' in rest[1]:
+                    sub = rest[1].split('/')
+                    yy_pat = sub[0].strip()
+                    cvc_pat = sub[1].strip() if len(sub) > 1 else None
+                else:
+                    yy_pat = rest[1].strip()
+            if len(rest) > 2 and not cvc_pat:
+                cvc_pat = rest[2].strip()
 
     prefix = re.sub(r'[^0-9xX]', '', card_pat)
     cards = []
@@ -48,17 +72,23 @@ def generate_bin_cards(bin_pattern: str, count: int = 10) -> list:
         check_digit = (10 - (checksum % 10)) % 10
         card_number = full_prefix + str(check_digit)
         
-        if mm_pat and mm_pat.isdigit():
+        if mm_pat and mm_pat.isdigit() and 1 <= int(mm_pat) <= 12:
             month = f"{int(mm_pat):02d}"
         else:
             month = f"{random.randint(1, 12):02d}"
             
         if yy_pat and yy_pat.isdigit():
-            year = yy_pat if len(yy_pat) == 2 else yy_pat[-2:]
+            y_int = int(yy_pat)
+            if y_int >= 2025:
+                year = str(y_int)[-2:]
+            elif 25 <= y_int <= 45:
+                year = f"{y_int:02d}"
+            else:
+                year = f"{random.randint(26, 31):02d}"
         else:
-            year = f"{random.randint(25, 30):02d}"
+            year = f"{random.randint(26, 31):02d}"
             
-        if cvc_pat and cvc_pat.isdigit():
+        if cvc_pat and cvc_pat.isdigit() and cvc_pat not in ('000', '0000'):
             cvc = cvc_pat
         else:
             cvc = f"{random.randint(1000, 9999):04d}" if is_amex else f"{random.randint(100, 999):03d}"
