@@ -834,7 +834,7 @@ async def hitck_command(message: types.Message):
                 break
                 
             if idx > 1:
-                await asyncio.sleep(random.uniform(0.5, 1.0))
+                await asyncio.sleep(random.uniform(1.5, 2.5))
                 
             res = await checkout_engine.hit(card, idx, user_id)
             results.append(res)
@@ -1114,7 +1114,7 @@ async def hitad1_command(message: types.Message):
                 break
 
             if idx > 1:
-                await asyncio.sleep(random.uniform(0.5, 1.0))
+                await asyncio.sleep(random.uniform(1.5, 2.5))
 
             res = await adyen_engine.hit_ccn(card, idx, user_id)
             results.append(res)
@@ -1290,7 +1290,7 @@ async def hitad_command(message: types.Message):
                 break
 
             if idx > 1:
-                await asyncio.sleep(random.uniform(0.5, 1.0))
+                await asyncio.sleep(random.uniform(1.5, 2.5))
 
             res = await adyen_engine.hit(card, idx, user_id)
             results.append(res)
@@ -1463,7 +1463,7 @@ async def hitep_command(message: types.Message):
                 break
 
             if idx > 1:
-                await asyncio.sleep(random.uniform(0.5, 1.0))
+                await asyncio.sleep(random.uniform(1.5, 2.5))
 
             res = await epoch_engine.hit(card, idx, user_id)
             results.append(res)
@@ -1632,7 +1632,7 @@ async def hitwhop_command(message: types.Message):
                 break
 
             if idx > 1:
-                await asyncio.sleep(random.uniform(0.5, 1.0))
+                await asyncio.sleep(random.uniform(1.5, 2.5))
 
             res = await whop_engine.hit(card, idx, user_id)
             results.append(res)
@@ -1801,7 +1801,7 @@ async def hitpad_command(message: types.Message):
                 break
 
             if idx > 1:
-                await asyncio.sleep(random.uniform(0.5, 1.0))
+                await asyncio.sleep(random.uniform(1.5, 2.5))
 
             res = await paddle_engine.hit(card, idx, user_id)
             results.append(res)
