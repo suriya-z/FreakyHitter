@@ -881,6 +881,10 @@ async def hitck_command(message: types.Message):
                 except Exception:
                     pass
 
+            # Halt batch immediately if payment succeeded
+            if res.get('success'):
+                break
+
             # Halt batch immediately if single-use pay link has expired
             if is_session_expired_err(res) or res.get('session_expired'):
                 if len(cards) > 1 and status_msg:
@@ -1173,6 +1177,9 @@ async def hitad1_command(message: types.Message):
                 except Exception:
                     pass
 
+                if res.get('success'):
+                    break
+
             elif len(cards) == 1:
                 if status_msg:
                     try: await status_msg.delete()
@@ -1343,7 +1350,7 @@ async def hitad_command(message: types.Message):
                 except Exception:
                     pass
 
-                if expired:
+                if res.get('success') or expired:
                     break
 
         is_approved = user_id in approved_users_set
@@ -1503,6 +1510,9 @@ async def hitep_command(message: types.Message):
                 except Exception:
                     pass
 
+                if res.get('success'):
+                    break
+
         is_approved = user_id in approved_users_set
 
         if len(cards) == 1 and results:
@@ -1660,6 +1670,9 @@ async def hitwhop_command(message: types.Message):
                 except Exception:
                     pass
 
+                if res.get('success'):
+                    break
+
         is_approved = user_id in approved_users_set
 
         if len(cards) == 1 and results:
@@ -1816,6 +1829,9 @@ async def hitpad_command(message: types.Message):
                     await status_msg.edit_text(msg_text, disable_web_page_preview=True)
                 except Exception:
                     pass
+
+                if res.get('success'):
+                    break
 
         is_approved = user_id in approved_users_set
 
