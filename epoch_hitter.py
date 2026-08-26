@@ -216,10 +216,16 @@ class EpochHitter:
                                 cfg['merchant'] = site_name.replace('www.', '').capitalize()
                             billing = p0.get('billing', {})
                             curr = billing.get('currency', 'USD')
-                            cfg['currency'] = curr
-                            amt = billing.get('initial', {}).get('dollarAmount') or billing.get('initial', {}).get('amount')
-                            if amt:
-                                cfg['amount'] = amt
+                            initial = billing.get('initial', {})
+                            dollar_amt = initial.get('dollarAmount')
+                            local_amt = initial.get('amount')
+                            
+                            if dollar_amt:
+                                cfg['currency'] = 'USD'
+                                cfg['amount'] = dollar_amt
+                            elif local_amt:
+                                cfg['currency'] = curr
+                                cfg['amount'] = local_amt
             except Exception:
                 pass
 
