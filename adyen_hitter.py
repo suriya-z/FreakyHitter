@@ -406,11 +406,8 @@ class AdyenHitter:
                 out['linkId']   = link_id
                 out['pbl_base'] = base
                 
-                # Check for JWE indicators strictly against sdkVersion and known JS paths
-                out['use_jwe'] = False
-                sdk_ver = str(d.get('sdkVersion') or dc.get('sdkVersion') or '')
-                if sdk_ver.startswith('6.') or sdk_ver.startswith('v6.'):
-                    out['use_jwe'] = True
+                # Modern Adyen Pay by Link requires JWE v1 encryption (RSA-OAEP-256 + A256GCM)
+                out['use_jwe'] = True
         except Exception as e:
             out['error'] = f"PBL setup error: {str(e)[:80]}"
         return out
@@ -503,7 +500,7 @@ class AdyenHitter:
             return self._base_cfg.copy()
 
         cfg = self._base_cfg.copy()
-        if cfg.get('is_pbl') and cfg.get('linkId'):
+        if cfg.get('is_pbl') and cfg.get('linkId') and not cfg.get('sessionData'):
             lctx = cfg.get('loadingContext') or self._adyen_base(
                 cfg.get('environment', 'live')) + '/'
             pbl = await self._bootstrap_pbl(
@@ -560,7 +557,11 @@ class AdyenHitter:
             "Referer": self.url,
         }
         async with session.post(url, json=body, headers=hdr, timeout=15) as r:
-            return r.json() if callable(r.json) else r.json
+            res_data = r.json() if callable(r.json) else r.json
+            if isinstance(res_data, dict) and res_data.get('sessionData'):
+                if self._base_cfg is not None:
+                    self._base_cfg['sessionData'] = res_data['sessionData']
+            return res_data
 
     # ── submit payment details (3DS completion) ─────────────────────────────
     async def _submit_details(self, session, sid: str, sdata: str,
