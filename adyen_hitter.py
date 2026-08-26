@@ -964,6 +964,8 @@ class AdyenHitter:
         # ── approved ──
         if rc in ('Authorised', 'AuthenticationFinished'):
             result['success'] = True
+            result['decline_code'] = 'authorised'
+            result['error'] = 'Authorised'
             if not result.get('receipt_url') and data.get('url'):
                 result['receipt_url'] = data['url']
             return result
