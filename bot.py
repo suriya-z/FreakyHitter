@@ -1479,6 +1479,11 @@ async def hitep_command(message: types.Message):
                 status_str = "Payment Successful ✅" if res['success'] else "Payment Failed ❌"
                 resp_str = "Authorised" if res['success'] else (res.get('error') or res.get('decline_code') or "Refused")
 
+                block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
+                succ_url_line = extract_success_url_line(res)
+                if succ_url_line:
+                    block += succ_url_line
+
                 expired = is_session_expired_err(res)
                 if expired:
                     block += "\n<b>[!] Session Expired</b>"
@@ -1638,6 +1643,11 @@ async def hitwhop_command(message: types.Message):
                 status_str = "Payment Successful ✅" if res['success'] else "Payment Failed ❌"
                 resp_str = "Authorised" if res['success'] else (res.get('error') or res.get('decline_code') or "Refused")
 
+                block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
+                succ_url_line = extract_success_url_line(res)
+                if succ_url_line:
+                    block += succ_url_line
+
                 expired = is_session_expired_err(res)
                 if expired:
                     block += "\n<b>[!] Session Expired</b>"
@@ -1796,6 +1806,11 @@ async def hitpad_command(message: types.Message):
             if len(cards) > 1:
                 status_str = "Payment Successful ✅" if res['success'] else "Payment Failed ❌"
                 resp_str = "Authorised" if res['success'] else (res.get('error') or res.get('decline_code') or "Refused")
+
+                block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
+                succ_url_line = extract_success_url_line(res)
+                if succ_url_line:
+                    block += succ_url_line
 
                 expired = is_session_expired_err(res)
                 if expired:
