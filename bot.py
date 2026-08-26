@@ -475,16 +475,19 @@ def is_session_expired_err(res: dict) -> bool:
     if any(card_err in reason or card_err in raw_resp for card_err in ['card_expired', 'expired_card', 'card expired', 'invalid_expiry']):
         return False
 
+    # Check for Adyen session consumed / invalid session data
+    if '14_0422' in dec_code or '14_0422' in reason or 'session identifier or data is invalid' in reason or 'session identifier or data is invalid' in raw_resp:
+        return True
+
     if res.get('session_expired'):
         return True
-    if dec_code.startswith('link_') or 'already consumed' in reason or 'link_completed' in dec_code or 'link is completed' in reason:
+    if dec_code.startswith('link_') or 'already consumed' in reason or 'link_completed' in dec_code or 'link is completed' in reason or 'link_expired' in dec_code or 'link_closed' in dec_code or 'link_paymentpending' in dec_code:
         return True
-    if res.get('pbl_reusable') is True:
-        return False
 
     return any(k in reason or k in raw_resp for k in [
         'single-use link exhausted', 'checkout_session_expired', 'pay by link exhausted',
-        'no such payment_intent', 'no such checkout.session'
+        'no such payment_intent', 'no such checkout.session', 'session is expired', 'session expired',
+        'link is closed', 'session closed', 'already paid', 'link already used', 'session already completed'
     ])
 
 def parse_cards_input(payload_tokens: list, raw_payload: str):
@@ -1126,22 +1129,13 @@ async def hitad1_command(message: types.Message):
             res = await adyen_engine.hit_ccn(card, idx, user_id)
             results.append(res)
 
-            if is_session_expired_err(res):
-                link_dead = True
-                try:
-                    await status_msg.edit_text(
-                        "<b>[!] Session Expired</b>"
-                    )
-                except Exception:
-                    pass
-                break
-
             card_str = f"{res['card']['card']}|{res['card']['month']}|{res['card']['year']}|{res['card'].get('cvv', '000')}"
             merchant_name = res.get('merchant') or merchant_name
             if res.get('amount'):
                 amount_str = res['amount']
             site_domain = extract_clean_site_domain(merchant_name, url)
             is_approved = user_id in approved_users_set
+            expired = is_session_expired_err(res)
 
             if len(cards) > 1:
                 status_str = "Payment Successful ✅" if res['success'] else ("LIVE CARD 🔥" if res.get('is_live') else "Payment Failed ❌")
@@ -1154,6 +1148,8 @@ async def hitad1_command(message: types.Message):
                     resp_str = res.get('error') or res.get('decline_code') or 'Refused'
 
                 block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
+                if expired:
+                    block += "\n<b>[!] Session Expired</b>"
                 card_blocks.append(block)
 
                 site_line = f"Site: {html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else f"Site: {html.escape(merchant_name)}"
@@ -1177,7 +1173,7 @@ async def hitad1_command(message: types.Message):
                 except Exception:
                     pass
 
-                if res.get('success'):
+                if res.get('success') or expired:
                     break
 
             elif len(cards) == 1:
@@ -1483,10 +1479,9 @@ async def hitep_command(message: types.Message):
                 status_str = "Payment Successful ✅" if res['success'] else "Payment Failed ❌"
                 resp_str = "Authorised" if res['success'] else (res.get('error') or res.get('decline_code') or "Refused")
 
-                block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
-                succ_url_line = extract_success_url_line(res)
-                if succ_url_line:
-                    block += succ_url_line
+                expired = is_session_expired_err(res)
+                if expired:
+                    block += "\n<b>[!] Session Expired</b>"
 
                 card_blocks.append(block)
 
@@ -1510,7 +1505,7 @@ async def hitep_command(message: types.Message):
                 except Exception:
                     pass
 
-                if res.get('success'):
+                if res.get('success') or expired:
                     break
 
         is_approved = user_id in approved_users_set
@@ -1643,10 +1638,9 @@ async def hitwhop_command(message: types.Message):
                 status_str = "Payment Successful ✅" if res['success'] else "Payment Failed ❌"
                 resp_str = "Authorised" if res['success'] else (res.get('error') or res.get('decline_code') or "Refused")
 
-                block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
-                succ_url_line = extract_success_url_line(res)
-                if succ_url_line:
-                    block += succ_url_line
+                expired = is_session_expired_err(res)
+                if expired:
+                    block += "\n<b>[!] Session Expired</b>"
 
                 card_blocks.append(block)
 
@@ -1670,7 +1664,7 @@ async def hitwhop_command(message: types.Message):
                 except Exception:
                     pass
 
-                if res.get('success'):
+                if res.get('success') or expired:
                     break
 
         is_approved = user_id in approved_users_set
@@ -1803,10 +1797,9 @@ async def hitpad_command(message: types.Message):
                 status_str = "Payment Successful ✅" if res['success'] else "Payment Failed ❌"
                 resp_str = "Authorised" if res['success'] else (res.get('error') or res.get('decline_code') or "Refused")
 
-                block = f"CC: <code>{card_str}</code>\nStatus: {status_str}\nResponse: {html.escape(resp_str)}"
-                succ_url_line = extract_success_url_line(res)
-                if succ_url_line:
-                    block += succ_url_line
+                expired = is_session_expired_err(res)
+                if expired:
+                    block += "\n<b>[!] Session Expired</b>"
 
                 card_blocks.append(block)
 
@@ -1830,7 +1823,7 @@ async def hitpad_command(message: types.Message):
                 except Exception:
                     pass
 
-                if res.get('success'):
+                if res.get('success') or expired:
                     break
 
         is_approved = user_id in approved_users_set
