@@ -647,7 +647,7 @@ async def hit_command(message: types.Message):
                     succ_url_line = f"\n<b><i>Success URL</i></b> ➔ {html.escape(str(succ_url))}" if succ_url else ""
                     hit_text = (
                         f"✅ <b><i>PAYMENT SUCCESSFUL [STRIPE]</i></b>\n"
-                        f"──────────────────────\n"
+                        f"────────────\n"
                         f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                         f"<b><i>Amount</i></b> ➔ {amt_val}\n"
                         f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
@@ -655,7 +655,7 @@ async def hit_command(message: types.Message):
                         f"{tds_line}"
                         f"{cpt_line}"
                         f"{succ_url_line}\n"
-                        f"──────────────────────"
+                        f"────────────"
                         f"{note_line}"
                     )
                 else:
@@ -683,13 +683,13 @@ async def hit_command(message: types.Message):
 
                     hit_text = (
                         f"❌ <b><i>{status_title.replace('<b>', '').replace('</b>', '')}</i></b>\n"
-                        f"──────────────────────\n"
+                        f"────────────\n"
                         f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                         f"<b><i>Amount</i></b> ➔ {amt_val}\n"
                         f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                         f"<b><i>Response</i></b> ➔ {reason_msg}\n"
                         f"<b><i>Time</i></b> ➔ {res['response_time']:.2f}s\n"
-                        f"──────────────────────" + note_line
+                        f"────────────" + note_line
                     )
 
                 sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
@@ -925,14 +925,14 @@ async def hitck_command(message: types.Message):
                 time_str = f"{res.get('response_time', 0):.2f}s"
                 msg = (
                     f"✅ <b><i>PAYMENT SUCCESSFUL [CHECKOUT.COM]</i></b>\n"
-                    f"──────────────────────\n"
+                    f"────────────\n"
                     f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                     f"<b><i>Amount</i></b> ➔ {html.escape(amount_val)}\n"
                     f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                     f"<b><i>Response</i></b> ➔ <code>{html.escape(resp_str)}</code>\n"
                     f"<b><i>Time</i></b> ➔ {time_str}"
                     f"{succ_url_line}\n"
-                    f"──────────────────────"
+                    f"────────────"
                     f"{note_line}"
                 )
             else:
@@ -941,13 +941,13 @@ async def hitck_command(message: types.Message):
                 
                 msg = (
                     f"❌ <b><i>PAYMENT UNSUCCESSFUL</i></b>\n"
-                    f"──────────────────────\n"
+                    f"────────────\n"
                     f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                     f"<b><i>Amount</i></b> ➔ {html.escape(amount_val)}\n"
                     f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                     f"<b><i>Response</i></b> ➔ <code>{html.escape(resp_str)}</code>\n"
                     f"<b><i>Time</i></b> ➔ {time_str}\n"
-                    f"──────────────────────"
+                    f"────────────"
                     f"{note_line}"
                 )
                 
@@ -1194,26 +1194,26 @@ async def hitad1_command(message: types.Message):
                     succ_url_line = f"\n<b><i>Success URL</i></b> ➔ {html.escape(str(succ_url))}" if succ_url else ""
                     hit_text = (
                         f"✅ <b><i>PAYMENT SUCCESSFUL [ADYEN CCN]</i></b>\n"
-                        f"──────────────────────\n"
+                        f"────────────\n"
                         f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                         f"<b><i>Amount</i></b> ➔ {amount_val}\n"
                         f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                         f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s"
                         f"{succ_url_line}\n"
-                        f"──────────────────────"
+                        f"────────────"
                         f"{note_line}"
                     )
                 else:
                     reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
                     hit_text = (
                         f"❌ <b><i>PAYMENT UNSUCCESSFUL</i></b>\n"
-                        f"──────────────────────\n"
+                        f"────────────\n"
                         f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                         f"<b><i>Amount</i></b> ➔ {amount_val}\n"
                         f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                         f"<b><i>Response</i></b> ➔ {reason_msg}\n"
                         f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s\n"
-                        f"──────────────────────" + note_line
+                        f"────────────" + note_line
                     )
 
                 sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
@@ -1373,26 +1373,26 @@ async def hitad_command(message: types.Message):
                 succ_url_line = f"\n<b><i>Success URL</i></b> ➔ {html.escape(str(succ_url))}" if succ_url else ""
                 hit_text = (
                     f"✅ <b><i>PAYMENT SUCCESSFUL [ADYEN]</i></b>\n"
-                    f"──────────────────────\n"
+                    f"────────────\n"
                     f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                     f"<b><i>Amount</i></b> ➔ {amount_val}\n"
                     f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                     f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s"
                     f"{succ_url_line}\n"
-                    f"──────────────────────"
+                    f"────────────"
                     f"{note_line}"
                 )
             else:
                 reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
                 hit_text = (
                     f"❌ <b><i>PAYMENT UNSUCCESSFUL</i></b>\n"
-                    f"──────────────────────\n"
+                    f"────────────\n"
                     f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                     f"<b><i>Amount</i></b> ➔ {amount_val}\n"
                     f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                     f"<b><i>Response</i></b> ➔ {reason_msg}\n"
                     f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s\n"
-                    f"──────────────────────" + note_line
+                    f"────────────" + note_line
                 )
 
             sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
@@ -1533,26 +1533,26 @@ async def hitep_command(message: types.Message):
                 succ_url_line = f"\n<b><i>Success URL</i></b> ➔ {html.escape(str(succ_url))}" if succ_url else ""
                 hit_text = (
                     f"✅ <b><i>PAYMENT SUCCESSFUL [EPOCH]</i></b>\n"
-                    f"──────────────────────\n"
+                    f"────────────\n"
                     f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                     f"<b><i>Amount</i></b> ➔ {amount_val}\n"
                     f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                     f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s"
                     f"{succ_url_line}\n"
-                    f"──────────────────────"
+                    f"────────────"
                     f"{note_line}"
                 )
             else:
                 reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
                 hit_text = (
                     f"❌ <b><i>PAYMENT UNSUCCESSFUL</i></b>\n"
-                    f"──────────────────────\n"
+                    f"────────────\n"
                     f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                     f"<b><i>Amount</i></b> ➔ {amount_val}\n"
                     f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                     f"<b><i>Response</i></b> ➔ {reason_msg}\n"
                     f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s\n"
-                    f"──────────────────────" + note_line
+                    f"────────────" + note_line
                 )
 
             sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
@@ -1693,26 +1693,26 @@ async def hitwhop_command(message: types.Message):
                 succ_url_line = f"\n<b><i>Success URL</i></b> ➔ {html.escape(str(succ_url))}" if succ_url else ""
                 hit_text = (
                     f"✅ <b><i>PAYMENT SUCCESSFUL [WHOP]</i></b>\n"
-                    f"──────────────────────\n"
+                    f"────────────\n"
                     f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                     f"<b><i>Amount</i></b> ➔ {amount_val}\n"
                     f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                     f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s"
                     f"{succ_url_line}\n"
-                    f"──────────────────────"
+                    f"────────────"
                     f"{note_line}"
                 )
             else:
                 reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
                 hit_text = (
                     f"❌ <b><i>PAYMENT UNSUCCESSFUL</i></b>\n"
-                    f"──────────────────────\n"
+                    f"────────────\n"
                     f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                     f"<b><i>Amount</i></b> ➔ {amount_val}\n"
                     f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                     f"<b><i>Response</i></b> ➔ {reason_msg}\n"
                     f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s\n"
-                    f"──────────────────────" + note_line
+                    f"────────────" + note_line
                 )
 
             sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
@@ -1853,26 +1853,26 @@ async def hitpad_command(message: types.Message):
                 succ_url_line = f"\n<b><i>Success URL</i></b> ➔ {html.escape(str(succ_url))}" if succ_url else ""
                 hit_text = (
                     f"✅ <b><i>PAYMENT SUCCESSFUL [PADDLE]</i></b>\n"
-                    f"──────────────────────\n"
+                    f"────────────\n"
                     f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                     f"<b><i>Amount</i></b> ➔ {amount_val}\n"
                     f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                     f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s"
                     f"{succ_url_line}\n"
-                    f"──────────────────────"
+                    f"────────────"
                     f"{note_line}"
                 )
             else:
                 reason_msg = html.escape(str(res.get('error') or res.get('decline_code') or 'refused')[:250])
                 hit_text = (
                     f"❌ <b><i>PAYMENT UNSUCCESSFUL</i></b>\n"
-                    f"──────────────────────\n"
+                    f"────────────\n"
                     f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                     f"<b><i>Amount</i></b> ➔ {amount_val}\n"
                     f"<b><i>Merchant</i></b> ➔ {merchant_disp}\n"
                     f"<b><i>Response</i></b> ➔ {reason_msg}\n"
                     f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s\n"
-                    f"──────────────────────" + note_line
+                    f"────────────" + note_line
                 )
 
             sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
