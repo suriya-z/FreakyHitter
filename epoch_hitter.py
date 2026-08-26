@@ -238,35 +238,26 @@ class EpochHitter:
             return self._base_cfg.copy()
         return self._base_cfg.copy()
 
+    # ── response parser ───────────────────────────────────────────────────────
     def _parse_response(self, html: str, status_code: int, result: dict) -> dict:
-        """Parses Epoch / WNU response page/JSON for approval or decline details."""
-        # Try JSON parsing first
-        try:
-            d = json.loads(html)
-            if isinstance(d, list) and len(d) > 0:
-                item = d[0]
-                result['raw_response'] = d
-                if item.get('isApproved') is True or item.get('status') is True:
-                    result['success'] = True
-                    result['receipt_url'] = item.get('url') or item.get('receipt_url') or self.url
+        """Parses HTML/JSON response from Epoch / WNU gateway."""
+        result['raw_response'] = html
+
+        # Parse JSON structured responses
+        if status_code in (400, 401, 403, 404, 410, 500) or html.strip().startswith('{'):
+            try:
+                j = json.loads(html)
+                if isinstance(j, dict):
+                    err_msg = j.get('message') or j.get('error') or j.get('decline_code') or str(j)
+                    if j.get('statusCode') in (401, 410) or 'authorization' in str(err_msg).lower() or 'expired' in str(err_msg).lower():
+                        result['decline_code'] = 'link_expired'
+                        result['error'] = '[!] Link Expired'
+                        return result
+                    result['decline_code'] = str(j.get('statusCode', 'error'))
+                    result['error'] = str(err_msg)[:120]
                     return result
-                err_code = item.get('error') or item.get('message') or 'card_declined'
-                result['decline_code'] = 'card_declined'
-                result['error'] = err_code
-                result['is_live'] = err_code in ['insufficient_funds', 'incorrect_cvc', '3ds_required', 'restricted_card', 'issuer_unavailable']
-                return result
-            elif isinstance(d, dict):
-                result['raw_response'] = d
-                msg = d.get('message') or d.get('error') or d.get('status') or ''
-                if d.get('status') is True or d.get('isApproved') is True or d.get('status') == 'Succeeded':
-                    result['success'] = True
-                    result['receipt_url'] = d.get('url') or d.get('receipt_url')
-                    return result
-                result['decline_code'] = 'card_declined'
-                result['error'] = msg or 'Your payment was declined; please try again.'
-                return result
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         html_low = html.lower()
 
@@ -315,6 +306,11 @@ class EpochHitter:
             result['is_live'] = True
             return result
 
+        if status_code >= 400:
+            result['decline_code'] = f'http_{status_code}'
+            result['error'] = f'Epoch Gateway HTTP {status_code}'
+            return result
+
         result['decline_code'] = 'card_declined'
         result['error'] = 'Your payment was declined; please try again.'
         return result
@@ -345,9 +341,21 @@ class EpochHitter:
                     curr = cfg.get('currency', 'USD')
                     result['amount'] = f"{curr} {cfg['amount']}"
 
+                if cfg.get('expired'):
+                    result['error'] = "[!] Link Expired"
+                    result['decline_code'] = 'link_expired'
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
                 if not cfg.get('is_epoch') and 'epoch' not in self.url.lower():
                     result['error'] = "No Epoch checkout gateway detected on this page"
                     result['decline_code'] = 'no_epoch'
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
+                if 'wnu.com' in self.url.lower() and not cfg.get('token'):
+                    result['error'] = "[!] Link Expired"
+                    result['decline_code'] = 'link_expired'
                     result['response_time'] = round(time.time() - t0, 2)
                     return result
 
