@@ -1,6 +1,8 @@
 import os
 import asyncio
 import re
+import random
+import time
 import asyncpg
 from typing import Optional, Tuple, List, Dict
 from dotenv import load_dotenv
