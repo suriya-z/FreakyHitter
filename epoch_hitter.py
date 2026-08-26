@@ -134,6 +134,11 @@ class EpochHitter:
         async with session.get(self.url, headers=hdr, timeout=12) as res:
             html = res.text() if callable(res.text) else res.text
             
+            if res.status_code in (404, 410) or 'ERR_KEY_EXPIRED' in html or 'ERR_INVOICE_EXPIRED' in html:
+                cfg['expired'] = True
+                cfg['is_epoch'] = True
+                cfg['error'] = '[!] Link Expired'
+
             # Check title
             t = re.search(r'<title>([^<]+)</title>', html, re.I)
             if t:
