@@ -962,8 +962,17 @@ class AdyenHitter:
             result['success'] = True
             result['decline_code'] = 'authorised'
             result['error'] = 'Authorised'
-            if not result.get('receipt_url') and data.get('url'):
-                result['receipt_url'] = data['url']
+            if not result.get('receipt_url'):
+                if data.get('returnUrl'):
+                    result['receipt_url'] = data['returnUrl']
+                elif data.get('url'):
+                    result['receipt_url'] = data['url']
+                elif data.get('redirectUrl'):
+                    result['receipt_url'] = data['redirectUrl']
+                elif data.get('sessionResult'):
+                    result['receipt_url'] = f"{self.url}?sessionResult={data['sessionResult']}"
+                else:
+                    result['receipt_url'] = self.url
             return result
 
         # ── pending ──
