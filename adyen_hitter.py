@@ -538,11 +538,7 @@ class AdyenHitter:
         origin = self._get_origin()
         
         shopper = _generate_random_shopper()
-        brand = _detect_brand(card_num)
-
         pm = {"type": "scheme", "holderName": shopper["full_name"], **encrypted}
-        if brand and brand != "scheme":
-            pm["brand"] = brand
 
         body = {
             "sessionData": sdata,
@@ -891,11 +887,7 @@ class AdyenHitter:
             '/api/adyen/payments', '/api/pay', '/payments',
         ]
         shopper = _generate_random_shopper()
-        brand = _detect_brand(card_num)
-        
         pm = {"type": "scheme", "holderName": shopper["full_name"], **encrypted}
-        if brand and brand != "scheme":
-            pm["brand"] = brand
 
         body = {
             "paymentMethod": pm,
