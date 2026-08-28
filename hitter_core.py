@@ -1232,10 +1232,10 @@ class StripeAPIHitter:
                 pm_url = "https://api.stripe.com/v1/payment_methods"
                 pm_data = {
                     "type": "card",
-                    "card[number]": card.get('card') or card.get('number', ''),
+                    "card[number]": card.get('card') or card.get('number') or card.get('cc', ''),
                     "card[cvc]": card.get('cvc') or card.get('cvv', ''),
-                    "card[exp_month]": card.get('month') or card.get('exp_month', ''),
-                    "card[exp_year]": card.get('year') or card.get('exp_year', ''),
+                    "card[exp_month]": card.get('month') or card.get('exp_month') or card.get('mm', ''),
+                    "card[exp_year]": card.get('year') or card.get('exp_year') or card.get('yy', ''),
                 }
                 if self.tax_country:
                     address["country"] = self.tax_country
