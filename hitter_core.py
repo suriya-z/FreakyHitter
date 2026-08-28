@@ -1386,17 +1386,17 @@ class StripeAPIHitter:
                             confirm_data["client_attribution_metadata[checkout_config_id]"] = self._init_json["config_id"]
                         if self._init_json.get("init_checksum"):
                             confirm_data["init_checksum"] = self._init_json["init_checksum"]
-                    if self.raw_amount is not None and self.raw_amount > 0:
+                    if self.raw_amount is not None:
                         confirm_data["expected_amount"] = str(self.raw_amount)
                     elif self._init_json:
-                        # Extract amount from total_summary, adaptive_pricing_info, or line_item_group if raw_amount was 0 or unparsed
-                        # NOTE: `or {}` — Stripe init JSON can carry keys set to null
                         tot = (self._init_json.get("total_summary") or {}).get("total")
+                        if tot is None:
+                            tot = (self._init_json.get("total_summary") or {}).get("due")
                         if tot is None:
                             tot = (self._init_json.get("adaptive_pricing_info") or {}).get("integration_amount")
                         if tot is None:
                             tot = (self._init_json.get("payment_intent") or {}).get("amount")
-                        if tot is not None and tot > 0:
+                        if tot is not None:
                             confirm_data["expected_amount"] = str(tot)
                 
                 confirm_headers = headers.copy()
