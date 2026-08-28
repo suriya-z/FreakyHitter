@@ -1740,8 +1740,8 @@ class StripeAPIHitter:
                                     or next_action.get("source")
                                 )
 
-                                # If CAPTCHA triggered and no source found — must solve captcha before re-confirming
-                                if captcha_triggered and not source:
+                                # Execute app (3).py secondary PI/SETI confirm with client_secret on all requires_action responses
+                                if pi and client_secret:
                                     # Attempt captcha solve if we have rqdata
                                     _hcaptcha_token = None
                                     if _top_rqdata:
