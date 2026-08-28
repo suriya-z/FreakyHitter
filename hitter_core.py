@@ -1374,6 +1374,7 @@ class StripeAPIHitter:
                     confirm_data = {
                         "payment_method": pm_id,
                         "expected_payment_method_type": "card",
+                        "use_stripe_sdk": "false",
                         "consent[terms_of_service]": "accepted",
                         "key": self.pk_live,
                         "client_attribution_metadata[client_session_id]": self.cs_live,
