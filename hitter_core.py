@@ -158,6 +158,7 @@ class StripeAPIExtractor:
                 locked_email = None
                 if resp_json.get('customer_email'): locked_email = resp_json['customer_email']
                 elif resp_json.get('prefilled_email'): locked_email = resp_json['prefilled_email']
+                elif resp_json.get('email'): locked_email = resp_json['email']
                 elif isinstance(resp_json.get('customer'), dict) and resp_json['customer'].get('email'): locked_email = resp_json['customer']['email']
                 elif isinstance(resp_json.get('customer_details'), dict) and resp_json['customer_details'].get('email'): locked_email = resp_json['customer_details']['email']
                 
@@ -1662,9 +1663,16 @@ class StripeAPIHitter:
                         try:
                             state = None
                             captcha_triggered = False
+                            # Unwrap: confirm returns a checkout.session object. PI lives inside it.
+                            # res must be the PI/SI dict — not the outer session (status='open')
                             res = confirm_json.get('payment_intent') or confirm_json.get('setup_intent') or confirm_json
                             if not isinstance(res, dict):
                                 res = confirm_json
+                            # If outer object is a checkout.session, unwrap the inner PI
+                            if res.get('object') in ('checkout.session', 'payment_pages.checkout_session'):
+                                res = res.get('payment_intent') or res.get('setup_intent') or res
+                                if not isinstance(res, dict):
+                                    res = confirm_json
                             pk = self.pk_live
                             pi = intent_id
                             taken = time.time() - start
@@ -1673,9 +1681,11 @@ class StripeAPIHitter:
                             if proxies:
                                 session.proxies = proxies
 
-                            if res.get("status") in ["requires_action", "requires_source_action"]:
-                                next_action = res.get("next_action", {})
-                                sdk = next_action.get("use_stripe_sdk", {})
+                            # Always enter action block — we're already in the requires_action branch
+                            _res_status = res.get("status") or status
+                            if _res_status in ["requires_action", "requires_source_action"] or status in ["requires_action", "requires_source_action"]:
+                                next_action = res.get("next_action") or {}
+                                sdk = next_action.get("use_stripe_sdk") or {}
                                 captcha_triggered = False
                                 
                                 stripe_js = sdk.get('stripe_js') or {}
@@ -1846,6 +1856,7 @@ class StripeAPIHitter:
                                                 proxies=proxies, timeout=25, impersonate=profile["impersonate"]))
                                             auth_json = auth_resp_raw.json()
                                             state = auth_json.get("state")
+                                            print(f"[DEBUG 3DS] var={var} state={state} ares={auth_json.get('ares',{}).get('transStatus')} acsURL={bool(auth_json.get('ares',{}).get('acsURL'))} cReq={bool(auth_json.get('ares',{}).get('cReq'))}")
                                             if state in ["succeeded", "authenticated"]:
                                                 break
                                             

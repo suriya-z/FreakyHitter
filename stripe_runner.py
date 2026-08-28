@@ -63,12 +63,36 @@ async def main():
         print(f"pk_live: {pk_live[:24]}...")
         print(f"has init_json: {bool(init_json)}")
 
+        # Extract locked email — Stripe throws customer_and_confirmation_email_mismatch
+        # if the billing email on the PM doesn't match the session's pre-filled customer email
+        locked_email = None
+        if init_json:
+            locked_email = (
+                init_json.get('customer_email')
+                or init_json.get('prefilled_email')
+                or init_json.get('email')
+                or (init_json.get('customer') or {}).get('email')
+                or (init_json.get('customer_details') or {}).get('email')
+            )
+        if locked_email:
+            print(f"locked_email: {locked_email}")
+
+        # raw_amount — handle 0 (free trial) as valid, not None
+        ts = init_json.get('total_summary') if init_json else None
+        raw_amount = ts.get('total') if isinstance(ts, dict) else None
+        if raw_amount is None and init_json:
+            raw_amount = (
+                (init_json.get('invoice') or {}).get('amount_due')
+                or (init_json.get('payment_intent') or {}).get('amount')
+            )
+
     # Step 3: build hitter + hit
     striker = StripeAPIHitter(
         pk_live=pk_live,
         cs_live=cs_live,
         proxy_data=None,  # no proxy for test
-        raw_amount=init_json.get("total_summary", {}).get("total") if init_json else None,
+        raw_amount=raw_amount,
+        locked_email=locked_email,
         stripe_account=stripe_account,
         init_json=init_json,
     )
