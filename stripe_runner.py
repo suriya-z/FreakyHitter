@@ -32,13 +32,15 @@ async def main():
 
         pk_live = StripeAPIExtractor.extract_pk_live(html)
 
-        # The URL hash is authoritative — it carries the REAL apiKey (live) +
-        # stripeAccount. HTML often contains test keys that shadow it.
+        # The URL hash is authoritative only when it carries a LIVE key.
+        # Hashes on checkout.stripe.com often embed pk_test_ for the hosted
+        # JS context — blindly using it against cs_live_ causes requires_action loops.
         hash_info = StripeAPIExtractor.extract_details_from_url_hash(url)
         hash_pk = hash_info.get('pk_key')
         stripe_account = hash_info.get('stripe_account')
-        if hash_pk:
+        if hash_pk and hash_pk.startswith('pk_live_'):
             pk_live = hash_pk
+        # else keep what was scraped from HTML (already a live key or the best we have)
         if not pk_live:
             print("ERROR: couldn't extract pk_live")
             return
