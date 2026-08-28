@@ -1676,6 +1676,7 @@ class StripeAPIHitter:
                         try:
                             state = None
                             captcha_triggered = False
+                            _hcaptcha_token = None
                             # Unwrap: confirm returns a checkout.session object. PI lives inside it.
                             # res must be the PI/SI dict — not the outer session (status='open')
                             res = confirm_json.get('payment_intent') or confirm_json.get('setup_intent') or confirm_json
