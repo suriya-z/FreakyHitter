@@ -1887,6 +1887,8 @@ class StripeAPIHitter:
 
                                     auth_variations = [
                                         {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "01", "fingerprintAttempted": True},
+                                        {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "04", "fingerprintAttempted": True},
+                                        {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "05", "fingerprintAttempted": True},
                                         {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "02", "fingerprintAttempted": True},
                                         {"threeDSCompInd": "U", "threeDSRequestorChallengeInd": "01", "fingerprintAttempted": True},
                                         {"threeDSCompInd": "N", "threeDSRequestorChallengeInd": "03", "fingerprintAttempted": False}
