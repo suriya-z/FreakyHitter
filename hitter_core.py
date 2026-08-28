@@ -1374,16 +1374,12 @@ class StripeAPIHitter:
                     confirm_data = {
                         "payment_method": pm_id,
                         "expected_payment_method_type": "card",
-                        "use_stripe_sdk": "false",
                         "consent[terms_of_service]": "accepted",
                         "key": self.pk_live,
                         "client_attribution_metadata[client_session_id]": self.cs_live,
                         "client_attribution_metadata[merchant_integration_source]": "checkout",
                         "client_attribution_metadata[merchant_integration_version]": "hosted_checkout",
                         "client_attribution_metadata[payment_method_selection_flow]": "automatic",
-                        "mandate_data[customer_acceptance][type]": "online",
-                        "mandate_data[customer_acceptance][online][ip_address]": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
-                        "mandate_data[customer_acceptance][online][user_agent]": profile["user_agent"],
                     }
                     if self._init_json:
                         if self._init_json.get("config_id"):
