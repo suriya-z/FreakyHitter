@@ -1380,6 +1380,9 @@ class StripeAPIHitter:
                         "client_attribution_metadata[merchant_integration_source]": "checkout",
                         "client_attribution_metadata[merchant_integration_version]": "hosted_checkout",
                         "client_attribution_metadata[payment_method_selection_flow]": "automatic",
+                        "mandate_data[customer_acceptance][type]": "online",
+                        "mandate_data[customer_acceptance][online][ip_address]": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
+                        "mandate_data[customer_acceptance][online][user_agent]": profile["user_agent"],
                     }
                     if self._init_json:
                         if self._init_json.get("config_id"):
