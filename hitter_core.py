@@ -918,6 +918,19 @@ class StripeAPIHitter:
         self.tax_country = tax_country
         self.tax_zip = tax_zip
         self._init_json = init_json or {}
+        
+        # Parse merchant display name and currency formatted amount string
+        self.merchant = "Unknown"
+        self.amount = None
+        if self._init_json:
+            acct = self._init_json.get('account_settings') or {}
+            self.merchant = acct.get('display_name') or self._init_json.get('statement_descriptor') or "Unknown"
+            curr = self._init_json.get('currency', 'usd').upper()
+            if self.raw_amount is not None:
+                self.amount = f"{curr} {self.raw_amount/100:.2f}"
+            elif self._init_json.get('total_summary', {}).get('total') is not None:
+                tot = self._init_json['total_summary']['total']
+                self.amount = f"{curr} {tot/100:.2f}"
 
     async def generate_stripe_telemetry(self, profile: dict, proxies: dict, address: dict, page_url: str = None, session=None) -> Dict[str, str]:
         """Generate Stripe device fingerprint tokens via m.stripe.com/6"""
@@ -1037,7 +1050,7 @@ class StripeAPIHitter:
 
     async def hit(self, card: Dict, attempt: int, user_id: int, cached_stripe_tokens: dict = None) -> Dict:
         start = time.time()
-        result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': None, 'merchant': None, 'proxy_raw': None, 'error': None, 'raw_response': None}
+        result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': self.amount, 'merchant': self.merchant, 'proxy_raw': None, 'error': None, 'raw_response': None, 'is_live': None, '3ds_bypassed': False, '3ds_type': None, '3ds_attempted': False, 'captcha_bypassed': False}
         
         BROWSER_PROFILES = [
             {
@@ -2046,6 +2059,10 @@ class StripeAPIHitter:
                                     else:
                                         result['decline_code'] = status_2 or '3ds_unknown'
                                         result['error'] = f"3ds_challenge_unresolved"
+                                    result['is_live'] = True
+                                    result['3ds_attempted'] = True
+                                    result['3ds_type'] = 'stripe_3ds2'
+                                    result['captcha_bypassed'] = bool(_hcaptcha_token)
                                     result['raw_response'] = poll_json
                                     return result
                         except Exception as ex:
