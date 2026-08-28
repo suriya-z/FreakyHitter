@@ -100,7 +100,14 @@ class StripeCaptchaBypasser:
         proxies = None
         if proxy_data:
             auth = f"{proxy_data['username']}:{proxy_data['password']}@" if 'username' in proxy_data else ""
-            purl = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
+            raw_srv = proxy_data['server']
+            scheme = "http"
+            for s in ("http://", "https://", "socks5://", "socks5h://", "socks4://"):
+                if raw_srv.startswith(s):
+                    scheme = s.rstrip("://")
+                    raw_srv = raw_srv[len(s):]
+                    break
+            purl = f"{scheme}://{auth}{raw_srv}"
             proxies = {"http": purl, "https": purl}
 
         try:
@@ -138,7 +145,7 @@ class StripeCaptchaBypasser:
                 confirm_body = {
                     "client_secret": client_secret,
                     "key": pk_key,
-                    "payment_method_options[card][request_three_d_secure]": "any",
+                    "payment_method_options[card][request_three_d_secure]": "automatic",
                 }
                 hdr = {
                     "Content-Type": "application/x-www-form-urlencoded",

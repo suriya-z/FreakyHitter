@@ -460,10 +460,24 @@ class RandomData:
             return RandomData._geo_cache[proxy_url]
 
         timezone_id = 'America/New_York'
+        # Coherent US address tuples — city/state/zip must MATCH or Stripe's
+        # automatic tax rejects the location (customer_tax_location_invalid)
+        US_PLACES = [
+            ("New York", "NY", "10001"), ("Los Angeles", "CA", "90001"),
+            ("Chicago", "IL", "60601"), ("Houston", "TX", "77001"),
+            ("Phoenix", "AZ", "85001"), ("Philadelphia", "PA", "19101"),
+            ("San Antonio", "TX", "78201"), ("San Diego", "CA", "92101"),
+            ("Dallas", "TX", "75201"), ("Austin", "TX", "73301"),
+            ("Seattle", "WA", "98101"), ("Miami", "FL", "33101"),
+            ("Boston", "MA", "02108"), ("Atlanta", "GA", "30301"),
+            ("Denver", "CO", "80014"), ("Nashville", "TN", "37201"),
+            ("Portland", "OR", "97201"), ("Detroit", "MI", "48201"),
+        ]
+        _city, _state, _zip = random.choice(US_PLACES)
         address = {"line1": f"{random.randint(100,9999)} {random.choice(RandomData.STREETS)}",
-                "city": random.choice(RandomData.CITIES),
-                "state": random.choice(RandomData.STATES),
-                "zip": random.choice(RandomData.ZIP_CODES),
+                "city": _city,
+                "state": _state,
+                "zip": _zip,
                 "country": "US"}
                 
         # Map country to locale
@@ -487,7 +501,7 @@ class RandomData:
                             new_country = data.get("countryCode")
                             if new_country:
                                 fallback_addresses = {
-                                    "US": {"zip": random.choice(RandomData.ZIP_CODES), "city": "New York", "state": "NY"},
+                                    "US": {"zip": "10001", "city": "New York", "state": "NY"},
                                     "GB": {"zip": "SW1A 1AA", "city": "London", "state": "London"},
                                     "CA": {"zip": "M5V 2L7", "city": "Toronto", "state": "ON"},
                                     "AU": {"zip": "2000", "city": "Sydney", "state": "NSW"},
@@ -1324,8 +1338,8 @@ class StripeAPIHitter:
                         confirm_data["save_payment_method"] = "true"
                         confirm_data["allow_redisplay"] = "always"
 
-                    if self.raw_amount is not None and self.raw_amount > 0:
-                        confirm_data["expected_amount"] = self.raw_amount
+                    if self.raw_amount is not None:
+                        confirm_data["expected_amount"] = str(self.raw_amount)
                 elif is_seti:
                     seti_id = self.cs_live.split('_secret_')[0]
                     confirm_url = f"https://api.stripe.com/v1/setup_intents/{seti_id}/confirm"
@@ -1358,17 +1372,19 @@ class StripeAPIHitter:
                             confirm_data["client_attribution_metadata[checkout_config_id]"] = self._init_json["config_id"]
                         if self._init_json.get("init_checksum"):
                             confirm_data["init_checksum"] = self._init_json["init_checksum"]
-                    if self.raw_amount is not None and self.raw_amount > 0:
-                        confirm_data["expected_amount"] = self.raw_amount
+                    if self.raw_amount is not None:
+                        confirm_data["expected_amount"] = str(self.raw_amount)
                     elif self._init_json:
                         # Extract amount from total_summary, adaptive_pricing_info, or line_item_group if raw_amount was 0 or unparsed
-                        tot = self._init_json.get("total_summary", {}).get("total")
-                        if not tot:
-                            tot = self._init_json.get("adaptive_pricing_info", {}).get("integration_amount")
-                        if not tot:
-                            tot = self._init_json.get("payment_intent", {}).get("amount")
-                        if tot:
-                            confirm_data["expected_amount"] = tot
+                        # NOTE: `or {}` — Stripe init JSON can carry keys set to null
+                        # NOTE: 0 is a valid amount (e.g. fully discounted subscription)
+                        tot = (self._init_json.get("total_summary") or {}).get("total")
+                        if tot is None:
+                            tot = (self._init_json.get("adaptive_pricing_info") or {}).get("integration_amount")
+                        if tot is None:
+                            tot = (self._init_json.get("payment_intent") or {}).get("amount")
+                        if tot is not None:
+                            confirm_data["expected_amount"] = str(tot)
                 
                 confirm_headers = headers.copy()
                 confirm_headers["Idempotency-Key"] = confirm_idempotency
@@ -1771,6 +1787,7 @@ class StripeAPIHitter:
                                         _tds_server_trans_id = sdk.get("server_transaction_id") or sdk.get("three_ds_server_trans_id")
                                     
                                     auth_variations = [
+                                        {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "01", "fingerprintAttempted": True},
                                         {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "02", "fingerprintAttempted": True},
                                         {"threeDSCompInd": "U", "threeDSRequestorChallengeInd": "01", "fingerprintAttempted": True},
                                         {"threeDSCompInd": "N", "threeDSRequestorChallengeInd": "03", "fingerprintAttempted": False}
