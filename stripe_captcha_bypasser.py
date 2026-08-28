@@ -24,17 +24,19 @@ class StripeCaptchaBypasser:
         if not isinstance(raw, dict):
             return False
 
-        pi = raw.get('payment_intent') or raw.get('setup_intent') or raw
-        if not isinstance(pi, dict):
-            return False
+        # 1. Check top-level raw response (e.g. checkout session level rqdata)
+        if raw.get('rqdata') or (raw.get('link_settings') or {}).get('hcaptcha_rqdata'):
+            return True
 
-        next_action = pi.get('next_action') or {}
-        if isinstance(next_action, dict):
-            sdk = next_action.get('use_stripe_sdk') or {}
-            if isinstance(sdk, dict):
-                stripe_js = sdk.get('stripe_js') or {}
-                if isinstance(stripe_js, dict) and 'rqdata' in stripe_js:
-                    return True
+        pi = raw.get('payment_intent') or raw.get('setup_intent') or raw
+        if isinstance(pi, dict):
+            next_action = pi.get('next_action') or {}
+            if isinstance(next_action, dict):
+                sdk = next_action.get('use_stripe_sdk') or {}
+                if isinstance(sdk, dict):
+                    stripe_js = sdk.get('stripe_js') or {}
+                    if isinstance(stripe_js, dict) and 'rqdata' in stripe_js:
+                        return True
 
         err = raw.get('error') or {}
         if isinstance(err, dict) and ('captcha' in str(err).lower() or 'rqdata' in str(err).lower()):
@@ -48,6 +50,16 @@ class StripeCaptchaBypasser:
         raw = res.get('raw_response') or {}
         if not isinstance(raw, dict):
             return None
+
+        # Check top-level checkout session / link_settings rqdata first
+        top_rqdata = raw.get('rqdata') or (raw.get('link_settings') or {}).get('hcaptcha_rqdata')
+        top_sitekey = raw.get('site_key') or raw.get('hcaptcha_site_key') or (raw.get('link_settings') or {}).get('hcaptcha_site_key')
+        if top_rqdata:
+            return {
+                'rqdata': top_rqdata,
+                'sitekey': top_sitekey or STRIPE_HCAPTCHA_SITEKEY,
+                'source': None
+            }
 
         candidates = [raw]
         for key in ('payment_intent', 'setup_intent', 'session'):

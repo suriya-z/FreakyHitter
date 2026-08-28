@@ -1687,13 +1687,38 @@ class StripeAPIHitter:
                                 next_action = res.get("next_action") or {}
                                 sdk = next_action.get("use_stripe_sdk") or {}
                                 captcha_triggered = False
-                                
+                                _top_rqdata = None
+                                _top_sitekey = None
+
+                                # ── CAPTCHA DETECTION (3 locations) ─────────────────────────────────
+                                # 1. Classic: rqdata inside next_action.use_stripe_sdk.stripe_js
                                 stripe_js = sdk.get('stripe_js') or {}
                                 if isinstance(stripe_js, dict) and 'rqdata' in stripe_js:
                                     captcha_triggered = True
+                                    _top_rqdata = stripe_js.get('rqdata')
+                                    _top_sitekey = stripe_js.get('captcha_site_key')
                                     rq_source = stripe_js.get('source') or stripe_js.get('three_d_secure_2_source')
                                     if rq_source:
                                         sdk['_rq_source_override'] = rq_source
+
+                                # 2. Session-level: rqdata at top level of checkout.session confirm_json
+                                #    Merchants like Flyps return rqdata here — completely missed by stripe_js check
+                                if not captcha_triggered:
+                                    _sess_rqdata = confirm_json.get('rqdata')
+                                    if _sess_rqdata:
+                                        captcha_triggered = True
+                                        _top_rqdata = _sess_rqdata
+                                        _top_sitekey = confirm_json.get('site_key') or confirm_json.get('hcaptcha_site_key')
+
+                                # 3. Link settings: hcaptcha_rqdata in link_settings block
+                                if not captcha_triggered:
+                                    _ls = confirm_json.get('link_settings') or {}
+                                    _ls_rqdata = _ls.get('hcaptcha_rqdata')
+                                    if _ls_rqdata:
+                                        captcha_triggered = True
+                                        _top_rqdata = _ls_rqdata
+                                        _top_sitekey = _ls.get('hcaptcha_site_key')
+                                # ────────────────────────────────────────────────────────────────────
 
                                 source = (
                                     sdk.get("three_d_secure_2_source")
@@ -1702,8 +1727,23 @@ class StripeAPIHitter:
                                     or next_action.get("source")
                                 )
 
-                                # If CAPTCHA triggered and no source found, re-confirm with fresh 3DS path
+                                # If CAPTCHA triggered and no source found — must solve captcha before re-confirming
                                 if captcha_triggered and not source:
+                                    # Attempt captcha solve if we have rqdata
+                                    _hcaptcha_token = None
+                                    if _top_rqdata:
+                                        try:
+                                            from stripe_captcha_bypasser import StripeCaptchaBypasser as _SCB
+                                            _hcaptcha_token = await asyncio.get_event_loop().run_in_executor(
+                                                None, lambda: _SCB._solve_hcaptcha_sync(
+                                                    _top_sitekey or "4c787647-7985-4804-b8e9-f431dd3031d7",
+                                                    _top_rqdata,
+                                                    proxy_data=self.proxy_data
+                                                ) if hasattr(_SCB, '_solve_hcaptcha_sync') else None
+                                            )
+                                        except Exception:
+                                            pass
+                                    print(f"[DEBUG CAPTCHA] triggered=True rqdata={bool(_top_rqdata)} token={bool(_hcaptcha_token)}")
                                     try:
                                         if is_pi or is_seti:
                                             reconfirm_data = {
