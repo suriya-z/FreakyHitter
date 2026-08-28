@@ -75,7 +75,6 @@ class Stripe3DSBypasser:
         tz_offset = str((profile or {}).get("tz_offset", "-300"))
         browser_info = {
             "threeDSCompInd": "Y",
-            "frictionless": "true",
             "threeDSRequestorChallengeInd": "01",
             "threeDSServerTransID": server_trans_id,
             "browserJavaEnabled": False,

