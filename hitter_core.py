@@ -1190,8 +1190,41 @@ class StripeAPIHitter:
                     if "sec-ch-ua-mobile" in profile: warmup_headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
                     if "sec-ch-ua-platform" in profile: warmup_headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
 
-                    warmup_res = await loop.run_in_executor(None, lambda: _cffi_session.get(
-                        checkout_page_url, headers=warmup_headers, timeout=15))
+                    import os
+                    trawl_api_url = os.environ.get("TRAWL_API_URL")
+                    if trawl_api_url:
+                        try:
+                            import requests as _trawl_req
+                            trawl_payload = {
+                                "url": checkout_page_url,
+                                "type": "browser",
+                                "challenge": True
+                            }
+                            trawl_headers = {"Content-Type": "application/json"}
+                            trawl_res = await loop.run_in_executor(None, lambda: _trawl_req.post(
+                                f"{trawl_api_url.rstrip('/')}/scrape",
+                                json=trawl_payload,
+                                headers=trawl_headers,
+                                timeout=45
+                            ))
+                            if trawl_res and trawl_res.status_code == 200:
+                                trawl_json = trawl_res.json()
+                                # Support both TRAWL native and FlareSolverr compatible schemas
+                                trawl_data = trawl_json.get("data") or trawl_json or {}
+                                trawl_cookies = trawl_data.get("cookies") or []
+                                for cookie in trawl_cookies:
+                                    _cffi_session.cookies.set(
+                                        cookie["name"],
+                                        cookie["value"],
+                                        domain=cookie.get("domain", ".stripe.com"),
+                                        path=cookie.get("path", "/")
+                                    )
+                                print(f"[DEBUG TRAWL] Successfully populated {len(trawl_cookies)} cookies via TRAWL")
+                        except Exception as te:
+                            print(f"[DEBUG TRAWL] Warmup failed: {te}")
+                    else:
+                        warmup_res = await loop.run_in_executor(None, lambda: _cffi_session.get(
+                            checkout_page_url, headers=warmup_headers, timeout=15))
                 except Exception:
                     pass  # warmup failure is non-fatal — continue
 
