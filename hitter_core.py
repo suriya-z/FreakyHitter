@@ -606,14 +606,17 @@ class CardGenerator:
         card = ''
         for c in bin_clean:
             card += str(random.randint(0,9)) if c.lower()=='x' else c
+        if len(card) >= target_len:
+            card = card[:target_len - 1]
         remaining = target_len - len(card) - 1
-        for _ in range(remaining): card += str(random.randint(0,9))
+        if remaining > 0:
+            for _ in range(remaining): card += str(random.randint(0,9))
         for i in range(10):
             if CardGenerator.luhn(card+str(i))==0:
                 full_card = card+str(i)
                 break
         else: full_card = card+'0'
-        if len(full_card) != target_len: full_card = full_card.ljust(target_len,'0')
+        if len(full_card) != target_len: full_card = full_card[:target_len]
         month = parts[1].zfill(2) if len(parts)>1 and parts[1].lower()!='xx' else f"{random.randint(1,12):02d}"
         year = parts[2].zfill(2) if len(parts)>2 and parts[2].lower()!='xx' else f"{(datetime.now().year+random.randint(1,5)) % 100:02d}"
         cvv = parts[3] if len(parts)>3 and parts[3].lower() not in ('xxx','xxxx') else ''.join(str(random.randint(0,9)) for _ in range(cvv_len))
