@@ -25,7 +25,9 @@ def generate_luhn_cards(bin_prefix: str, count: int = 10):
         i += 7
     return cards
 
-CARDS = generate_luhn_cards("415464440233", 10)
+from hitter_core import CardGenerator
+
+CARDS = []  # populated dynamically in main
 
 async def run_single_card(url: str, card_str: str, index: int):
     parts = card_str.split("|")
@@ -107,14 +109,28 @@ async def run_single_card(url: str, card_str: str, index: int):
 
 async def main():
     if len(sys.argv) < 2:
-        print("Usage: python sweep_runner.py <url>")
+        print("Usage: python sweep_runner.py <url> [card_pattern]")
         return
     url = sys.argv[1]
-    print(f"=== STARTING 10-CARD SWEEP FOR WISPR.AI LINK ===")
-    print(f"Target URL: {url[:80]}...\n")
     
+    card_pattern = "415464440233xxxxx|05|28|378"
+    if len(sys.argv) > 2:
+        card_pattern = sys.argv[2]
+        
+    print(f"=== STARTING 10-CARD SWEEP ===")
+    print(f"Target URL: {url[:80]}...")
+    print(f"Card Pattern: {card_pattern}\n")
+    
+    # Generate 10 unique cards matching the requested pattern
+    generated_cards = []
+    for _ in range(10):
+        c_data = CardGenerator.generate(card_pattern)
+        if c_data:
+            card_str = f"{c_data['card']}|{c_data['month']}|{c_data['year']}|{c_data['cvv']}"
+            generated_cards.append(card_str)
+            
     results = []
-    for idx, card in enumerate(CARDS):
+    for idx, card in enumerate(generated_cards):
         res = await run_single_card(url, card, idx)
         results.append(res)
         await asyncio.sleep(1) # clean 1s gap between hits
