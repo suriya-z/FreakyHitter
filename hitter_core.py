@@ -1834,16 +1834,19 @@ class StripeAPIHitter:
                                                 result['receipt_url'] = receipt_url
                                             return result
                                         elif _vstat in ['requires_action', 'requires_source_action']:
-                                            # Gate cleared — update PI state, fall through to 3DS matrix
-                                            _waf_cleared = True
                                             _vnext = (isinstance(_vpi, dict) and _vpi.get('next_action')) or {}
                                             _vsdk = _vnext.get('use_stripe_sdk') or {}
+                                            _vnext_type = _vsdk.get('type') or ''
                                             _new_source = (
                                                 _vsdk.get('three_d_secure_2_source')
                                                 or _vsdk.get('source')
                                                 or _vnext.get('source')
                                             )
-                                            if _new_source:
+                                            # Gate is only cleared if Stripe issued REAL 3DS (source present)
+                                            # or next_action type changed away from intent_confirmation_challenge
+                                            _waf_cleared = (_vnext_type != 'intent_confirmation_challenge') or bool(_new_source)
+                                            print(f"[DEBUG WAF VERIFY] cleared={_waf_cleared} new_sdk_type={_vnext_type} source={bool(_new_source)}")
+                                            if _waf_cleared and _new_source:
                                                 sdk = _vsdk
                                                 next_action = _vnext
                                                 res = _vpi
