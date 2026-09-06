@@ -1233,35 +1233,36 @@ class StripeAPIHitter:
 
 
 
-                    try:
-                        import requests as _trawl_req
-                        _scrape_payload = {
-                            "url": checkout_page_url,
-                            "maxTimeout": 60000,
-                            "skipHttp": True
-                        }
-                        _scrape_res = await loop.run_in_executor(None, lambda: _trawl_req.post(
-                            f"{trawl_api_url.rstrip('/')}/scrape",
-                            json=_scrape_payload,
-                            headers={"Content-Type": "application/json"},
-                            timeout=70
-                        ))
-                        if _scrape_res and _scrape_res.status_code == 200:
-                            _scrape_json = _scrape_res.json()
-                            _scrape_cookies = _scrape_json.get("cookies") or []
-                            _injected = 0
-                            for _ck in _scrape_cookies:
-                                _ck_name = _ck.get("name") or ""
-                                _ck_val = _ck.get("value") or ""
-                                _ck_dom = _ck.get("domain") or ".stripe.com"
-                                if _ck_name and _ck_val:
-                                    _cffi_session.cookies.set(_ck_name, _ck_val, domain=_ck_dom, path=_ck.get("path", "/"))
-                                    _injected += 1
-                            print(f"[DEBUG TRAWL] Warmup via /scrape (skipHttp=True) injected {_injected} cookies")
-                        else:
-                            print(f"[DEBUG TRAWL] /scrape returned status {_scrape_res.status_code if _scrape_res else 'None'}")
-                    except Exception as _te:
-                        print(f"[DEBUG TRAWL] /scrape warmup failed: {_te}")
+                    if trawl_api_url:
+                        try:
+                            import requests as _trawl_req
+                            _scrape_payload = {
+                                "url": checkout_page_url,
+                                "maxTimeout": 60000,
+                                "skipHttp": True
+                            }
+                            _scrape_res = await loop.run_in_executor(None, lambda: _trawl_req.post(
+                                f"{trawl_api_url.rstrip('/')}/scrape",
+                                json=_scrape_payload,
+                                headers={"Content-Type": "application/json"},
+                                timeout=70
+                            ))
+                            if _scrape_res and _scrape_res.status_code == 200:
+                                _scrape_json = _scrape_res.json()
+                                _scrape_cookies = _scrape_json.get("cookies") or []
+                                _injected = 0
+                                for _ck in _scrape_cookies:
+                                    _ck_name = _ck.get("name") or ""
+                                    _ck_val = _ck.get("value") or ""
+                                    _ck_dom = _ck.get("domain") or ".stripe.com"
+                                    if _ck_name and _ck_val:
+                                        _cffi_session.cookies.set(_ck_name, _ck_val, domain=_ck_dom, path=_ck.get("path", "/"))
+                                        _injected += 1
+                                print(f"[DEBUG TRAWL] Warmup via /scrape (skipHttp=True) injected {_injected} cookies")
+                            else:
+                                print(f"[DEBUG TRAWL] /scrape returned status {_scrape_res.status_code if _scrape_res else 'None'}")
+                        except Exception as _te:
+                            print(f"[DEBUG TRAWL] /scrape warmup failed: {_te}")
                     # ── Fallback: always also do a native warmup GET to warm _cffi_session ──
                     try:
                         await loop.run_in_executor(None, lambda: _cffi_session.get(
