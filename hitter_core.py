@@ -2235,6 +2235,11 @@ class StripeAPIHitter:
                                 )
                                 processed_auth = False
 
+                                # Fallback source: use PaymentIntent ID if sdk didn't surface three_d_secure_2_source
+                                # Some merchants (e.g. PoYo) don't surface source in confirm — pi_id IS the source
+                                if not source and pi:
+                                    source = pi
+
                                 if source:
                                     # STAGE 1: 3DS2 EMV Exemption Matrix Sweep (01, 04, 05, 02, U/01, N/03)
                                     auth_headers = {
