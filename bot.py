@@ -674,7 +674,10 @@ async def hit_command(message: types.Message):
                     if 'raw:' in err_str or '{"' in err_str or 'rqdata_captcha' in err_str:
                         reason_msg = html.escape(decline_code.lower()) if decline_code and decline_code not in ('unknown', 'exception') else "stripe_captcha_bypass_failed"
                     elif decline_code and decline_code not in ('unknown', 'exception', 'declined', 'failed'):
-                        reason_msg = html.escape(decline_code.lower())
+                        if err_str and err_str.lower() != decline_code.lower() and not err_str.startswith("3ds_"):
+                            reason_msg = f"{html.escape(decline_code.lower())} - {html.escape(err_str[:120])}"
+                        else:
+                            reason_msg = html.escape(decline_code.lower())
                     elif err_str:
                         reason_msg = html.escape(err_str[:150])
                     else:

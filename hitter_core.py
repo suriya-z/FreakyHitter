@@ -2447,21 +2447,17 @@ class StripeAPIHitter:
                                     if self.stripe_account:
                                         poll_headers["Stripe-Account"] = self.stripe_account
                                         
-                                    # Polling retry loop (up to 3 attempts with 1.5s delay)
-                                    # Recipe 5 Fix: Include challenge_required in active polling state
+                                    # Polling status check (fast 1-pass check before fallback confirm)
                                     status_2 = None
                                     poll_json = {}
-                                    for poll_idx in range(3):
+                                    try:
                                         poll_resp_raw = await loop.run_in_executor(None, lambda: cffi_requests.get(
                                             poll_url, headers=poll_headers, proxies=proxies,
-                                            timeout=30, impersonate=profile["impersonate"]))
+                                            timeout=12, impersonate=profile["impersonate"]))
                                         poll_json = poll_resp_raw.json()
                                         status_2 = poll_json.get('status')
-                                        if status_2 in ['succeeded', 'requires_capture', 'complete']:
-                                            break
-                                        if status_2 not in ['requires_action', 'requires_source_action', 'challenge_required']:
-                                            break
-                                        await asyncio.sleep(1.5)
+                                    except Exception:
+                                        pass
                                     
                                     # Fallback Exemption Re-confirm if still requires_action
                                     # Recipe 4 Fix: Ensure self.pk_live is passed consistently
@@ -2488,7 +2484,7 @@ class StripeAPIHitter:
                                             fb_json = fb_res.json()
                                             fb_pi = fb_json.get('payment_intent') or fb_json.get('setup_intent') or fb_json
                                             fb_status = fb_pi.get('status') if isinstance(fb_pi, dict) else None
-                                            if fb_status in ['succeeded', 'requires_capture', 'complete']:
+                                            if isinstance(fb_pi, dict) and fb_status:
                                                 poll_json = fb_json
                                                 status_2 = fb_status
                                         except Exception:
@@ -2506,12 +2502,25 @@ class StripeAPIHitter:
                                             result['receipt_url'] = receipt_url
                                         return result
 
-                                    err = poll_json.get('last_payment_error') or poll_json.get('error') or {}
-                                    if isinstance(err, dict) and err.get('message'):
-                                        result['decline_code'] = err.get('decline_code', err.get('code', status_2))
+                                    # Extract real decline code from last_payment_error / error if available
+                                    _raw_pi_res = poll_json.get('payment_intent') or poll_json.get('setup_intent') or poll_json
+                                    err = (
+                                        _raw_pi_res.get('last_payment_error')
+                                        or _raw_pi_res.get('last_setup_error')
+                                        or poll_json.get('last_payment_error')
+                                        or poll_json.get('error')
+                                        or {}
+                                    )
+                                    if isinstance(err, dict) and (err.get('decline_code') or err.get('code') or err.get('message')):
+                                        result['decline_code'] = err.get('decline_code') or err.get('code') or status_2
+                                        result['error'] = err.get('message') or f"Declined ({result['decline_code']})"
+                                    elif status_2 and status_2 not in ['requires_action', 'requires_source_action', 'challenge_required']:
+                                        result['decline_code'] = status_2
+                                        result['error'] = f"Status: {status_2}"
                                     else:
-                                        result['decline_code'] = status_2 or '3ds_unknown'
-                                        result['error'] = f"3ds_challenge_unresolved"
+                                        result['decline_code'] = status_2 or '3ds_challenge_unresolved'
+                                        result['error'] = "3ds_challenge_unresolved"
+
                                     result['is_live'] = True
                                     result['3ds_attempted'] = True
                                     result['3ds_type'] = 'waf_challenge' if (_is_waf_gate and not _waf_cleared) else 'stripe_3ds2'
