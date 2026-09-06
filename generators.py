@@ -88,7 +88,9 @@ def generate_bin_cards(bin_pattern: str, count: int = 10) -> list:
         else:
             year = f"{random.randint(26, 31):02d}"
             
-        if cvc_pat and cvc_pat.isdigit() and cvc_pat not in ('000', '0000'):
+        # Recipe 3 Fix: Validate cvc_pat length matches expected brand length (4 for Amex, 3 for others)
+        expected_cvc_len = 4 if is_amex else 3
+        if cvc_pat and cvc_pat.isdigit() and len(cvc_pat) == expected_cvc_len and cvc_pat not in ('000', '0000'):
             cvc = cvc_pat
         else:
             cvc = f"{random.randint(1000, 9999):04d}" if is_amex else f"{random.randint(100, 999):03d}"
@@ -164,10 +166,13 @@ IBAN_COUNTRIES = {
 }
 
 def calculate_mod97_iban(country_code, bban):
-    """Calculates valid MOD-97 check digits for IBAN"""
+    """Calculates valid MOD-97 check digits for IBAN using piecewise modulo to avoid Bignum allocations"""
     temp = bban.upper() + country_code.upper() + "00"
     numeric_str = "".join(str(ord(c) - 55) if c.isalpha() else c for c in temp)
-    remainder = int(numeric_str) % 97
+    remainder = 0
+    for i in range(0, len(numeric_str), 7):
+        block = numeric_str[i:i+7]
+        remainder = int(str(remainder) + block) % 97
     check_digits = 98 - remainder
     return f"{check_digits:02d}"
 

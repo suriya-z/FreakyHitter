@@ -7,7 +7,9 @@ from hitter_core import BINLookup
 
 # Card Brand Detector
 def detect_card_brand(card_num: str) -> str:
-    if card_num.startswith('4'):
+    if card_num.startswith(('300', '305', '36', '38')):
+        return 'Diners Club'
+    elif card_num.startswith('4'):
         return 'Visa'
     elif any(card_num.startswith(p) for p in ('51', '52', '53', '54', '55')) or (len(card_num) >= 4 and 2221 <= int(card_num[:4]) <= 2720):
         return 'Mastercard'
@@ -17,8 +19,6 @@ def detect_card_brand(card_num: str) -> str:
         return 'Discover'
     elif card_num.startswith(('3528', '3589')) or (len(card_num) >= 4 and 3528 <= int(card_num[:4]) <= 3589):
         return 'JCB'
-    elif card_num.startswith(('300', '305', '36', '38')):
-        return 'Diners Club'
     return 'Other'
 
 BRAND_ORDER = {'Visa': 1, 'Mastercard': 2, 'Amex': 3, 'Discover': 4, 'JCB': 5, 'Diners Club': 6, 'Other': 7}
@@ -62,7 +62,8 @@ def clean_and_sort_cards_text(raw_text: str) -> Tuple[str, Dict]:
         if not line_str:
             continue
             
-        matches = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})[|/](\d{3,4})', line_str)
+        # Recipe 2 Fix: Support pipe, slash, colon, semi-colon, space delimiters
+        matches = re.findall(r'(\d{13,19})[|/:\s;]+(\d{1,2})[|/:\s;]+(\d{2,4})[|/:\s;]+(\d{3,4})', line_str)
         if not matches:
             invalid_count += 1
             continue
@@ -71,6 +72,7 @@ def clean_and_sort_cards_text(raw_text: str) -> Tuple[str, Dict]:
         month = month.zfill(2)
         year_str = year[-2:] if len(year) >= 2 else year.zfill(2)
         
+        # Recipe 6 Fix: Standardize 2-digit year representation for accurate deduplication
         formatted = f"{card}|{month}|{year_str}|{cvv}"
         
         if not is_valid_card(card, month, year_str, cvv):
@@ -125,9 +127,12 @@ def filter_by_bin_prefix(text: str, bin_prefix: str) -> Tuple[str, int]:
     clean_bin = re.sub(r'\D', '', bin_prefix)
     
     for line in lines:
-        matches = re.findall(r'(\d{6,19})', line)
-        if matches and matches[0].startswith(clean_bin):
-            matched.append(line)
+        # Recipe 1 Fix: Target card pattern first so order IDs / prefixes aren't matched instead
+        card_matches = re.findall(r'(\d{13,19})', line)
+        if card_matches:
+            target_bin = card_matches[0]
+            if target_bin.startswith(clean_bin):
+                matched.append(line)
             
     return "\n".join(matched), len(matched)
 
