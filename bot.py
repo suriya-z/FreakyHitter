@@ -2049,8 +2049,6 @@ async def test_proxy_list(proxies_to_test, is_pool, user_id, status_msg=None):
             dead_proxies.append(raw)
             if err:
                 error_reasons.add(err)
-            if is_pool:
-                await ProxyManager.remove(user_id, raw)
 
         now = time.time()
         if status_msg and (now - last_edit_time >= 0.8 or completed_count == total):
@@ -2071,6 +2069,13 @@ async def test_proxy_list(proxies_to_test, is_pool, user_id, status_msg=None):
 
     tasks = [_worker(p) for p in proxies_to_test]
     await asyncio.gather(*tasks)
+
+    # Recipe 4 Fix: Perform a single atomic batch save after sweep finishes to avoid DB connection pool thrashing
+    if is_pool and dead_proxies:
+        dead_raws = set(dead_proxies)
+        current_pool = await ProxyManager.get_user_proxies(user_id)
+        filtered_pool = [p for p in current_pool if p.get('raw') not in dead_raws]
+        await ProxyManager.save_user_proxies(user_id, filtered_pool)
 
     return live_proxies, dead_proxies, weak_proxies, list(error_reasons)
 

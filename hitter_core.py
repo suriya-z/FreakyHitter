@@ -364,14 +364,15 @@ class ProxyManager:
                 
             parts = line.split(':')
             if len(parts) == 4:
-                # Check if format is user:pass:ip:port or ip:port:user:pass
-                if parts[1].isdigit():  # ip:port:user:pass
+                # Recipe 1 Fix: Check if parts[0] has IP dots vs username so numeric passwords don't trigger ip:port parse
+                if '.' in parts[0] and parts[1].isdigit():  # ip:port:user:pass
                     p = {"raw": raw_line, "server": f"{prefix}{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]}
-                elif parts[3].isdigit():  # user:pass:ip:port
+                elif '.' in parts[2] and parts[3].isdigit():  # user:pass:ip:port
                     p = {"raw": raw_line, "server": f"{prefix}{parts[2]}:{parts[3]}", "username": parts[0], "password": parts[1]}
-                else:
-                    # Fallback to standard ip:port:user:pass
+                elif parts[1].isdigit():  # fallback ip:port:user:pass
                     p = {"raw": raw_line, "server": f"{prefix}{parts[0]}:{parts[1]}", "username": parts[2], "password": parts[3]}
+                else:  # fallback user:pass:ip:port
+                    p = {"raw": raw_line, "server": f"{prefix}{parts[2]}:{parts[3]}", "username": parts[0], "password": parts[1]}
                 pool.append(p)
                 added += 1
             elif len(parts) == 2:
@@ -424,21 +425,30 @@ class ProxyManager:
         if matches:
             return random.choice(matches)
         uncached = [p for p in pool if p.get('server', '') not in cls._geo_cache]
-        random.shuffle(uncached)
-        for proxy in uncached[:3]:
-            try:
-                auth_str = f"{proxy['username']}:{proxy['password']}@" if proxy.get('username') else ""
-                purl = f"http://{auth_str}{proxy['server'].replace('http://', '')}"
-                async with aiohttp.ClientSession() as sess:
-                    async with sess.get("http://ip-api.com/json/", proxy=purl, timeout=aiohttp.ClientTimeout(total=3)) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            cc = (data.get('countryCode') or '').upper()
-                            cls._geo_cache[proxy.get('server', '')] = cc
-                            if cc == target:
-                                return proxy
-            except:
-                pass
+        if uncached:
+            random.shuffle(uncached)
+            # Recipe 2 Fix: Execute uncached proxy geo-checks concurrently with short 1.5s timeout
+            async def _check_geo(proxy):
+                try:
+                    auth_str = f"{proxy['username']}:{proxy['password']}@" if proxy.get('username') else ""
+                    raw_srv = proxy['server'].replace('http://', '').replace('socks5://', '').replace('socks4://', '')
+                    purl = f"http://{auth_str}{raw_srv}"
+                    async with aiohttp.ClientSession() as sess:
+                        async with sess.get("http://ip-api.com/json/?fields=countryCode", proxy=purl, timeout=aiohttp.ClientTimeout(total=1.5)) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                cc = (data.get('countryCode') or '').upper()
+                                cls._geo_cache[proxy.get('server', '')] = cc
+                                return proxy if cc == target else None
+                except Exception:
+                    pass
+                return None
+
+            results = await asyncio.gather(*[_check_geo(p) for p in uncached[:5]], return_exceptions=True)
+            valid_matches = [r for r in results if isinstance(r, dict) and r]
+            if valid_matches:
+                return random.choice(valid_matches)
+
         return random.choice(pool)
 
     @classmethod

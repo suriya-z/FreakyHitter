@@ -28,7 +28,12 @@ class Scraper:
         try:
             raw_text = await self.get_response_text(session)
             parsed_text = await self.handle(raw_text)
-            pattern = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}:(?:\d{1,5})")
+            # Recipe 3 Fix: Strict IPv4 octet (0-255) and port range (1-65535) regex validation
+            pattern = re.compile(
+                r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}"
+                r"(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):"
+                r"(?:6553[0-5]|655[0-2][0-9]|654[0-9]{2}|6[0-4][0-9]{3}|[1-5]?[0-9]{1,4})\b"
+            )
             return re.findall(pattern, parsed_text)
         except Exception:
             return []
@@ -178,7 +183,7 @@ async def fetch_and_test_live_proxies(target_limit: int = 15, timeout: float = 4
             try:
                 items = await s.scrape(session)
                 for item in items:
-                    if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}:\d{1,5}$", item):
+                    if re.match(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):\d{1,5}$", item):
                         all_scraped.add(item)
             except Exception:
                 pass
@@ -208,7 +213,8 @@ async def fetch_and_test_live_proxies(target_limit: int = 15, timeout: float = 4
                     if len(live_proxies) >= target_limit:
                         stop_event.set()
 
-        tasks = [asyncio.create_task(worker(p)) for p in scraped_list[:800]]
+        all_tasks = [asyncio.create_task(worker(p)) for p in scraped_list[:800]]
+        tasks = list(all_tasks)
         
         while tasks and not stop_event.is_set():
             done, tasks = await asyncio.wait(tasks, timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
@@ -216,9 +222,12 @@ async def fetch_and_test_live_proxies(target_limit: int = 15, timeout: float = 4
                 stop_event.set()
                 break
                 
-        for t in tasks:
+        # Recipe 5 Fix: Clean up and await cancelled tasks to prevent pending task warnings
+        for t in all_tasks:
             if not t.done():
                 t.cancel()
+        if all_tasks:
+            await asyncio.gather(*all_tasks, return_exceptions=True)
 
     live_proxies.sort(key=lambda x: x['ping_ms'])
     return live_proxies
