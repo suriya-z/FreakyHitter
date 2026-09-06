@@ -635,10 +635,6 @@ async def hit_command(message: types.Message):
             is_approved = user_id in approved_users_set
 
             if len(cards) == 1:
-                if status_msg:
-                    try: await status_msg.delete()
-                    except: pass
-
                 merchant_disp = f"{html.escape(merchant_name)} ({html.escape(site_domain)})" if site_domain else html.escape(merchant_name)
                 note_line = "" if is_approved else "\n\n<i>Note: this message will be deleted automatically after 30sec</i>"
                 amt_val = amount_str or "USD 0.00"
@@ -695,7 +691,11 @@ async def hit_command(message: types.Message):
                         f"────────────" + note_line
                     )
 
-                sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
+                try:
+                    sent_msg = await status_msg.edit_text(hit_text, disable_web_page_preview=True)
+                except Exception:
+                    sent_msg = await message.reply(hit_text, disable_web_page_preview=True)
+
                 if not is_approved:
                     async def auto_del_single(m):
                         await asyncio.sleep(30)
