@@ -19,6 +19,15 @@ class Stripe3DSBypasser:
     """Standalone 3DS bypasser for Stripe PaymentIntents."""
 
     @staticmethod
+    def _gen_random_cavv() -> str:
+        """Generates dynamic, per-session 20-byte CSPRNG authentication cryptogram (CAVV/AAV) in Base64."""
+        try:
+            import os
+            return base64.b64encode(os.urandom(20)).decode()
+        except Exception:
+            return "AQIDBAUGBwgJCgsMDQ4PEBESExQ="
+
+    @staticmethod
     def _b64url_encode(data: bytes) -> str:
         return base64.b64encode(data).decode().rstrip('=').replace('+', '-').replace('/', '_')
 
@@ -77,6 +86,7 @@ class Stripe3DSBypasser:
             "threeDSCompInd": "Y",
             "threeDSRequestorChallengeInd": "01",
             "threeDSServerTransID": server_trans_id,
+            "authenticationValue": cls._gen_random_cavv(),
             "browserJavaEnabled": False,
             "browserJavascriptEnabled": True,
             "browserLanguage": "en-US", # Can refine later
