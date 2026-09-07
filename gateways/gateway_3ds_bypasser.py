@@ -1,15 +1,7 @@
-import os, re, json, uuid, base64
+import os, json, uuid, base64
 from typing import Dict, Optional, Any
 
-TDS_REGEX = re.compile(r"(3ds2?|three_?ds[_2]?|3d_?secure|cardinal|songbird|centinel|auth3ds)/(authenticate|challenge|validate|details|result|complete)|/3ds/(auth|challenge|validate|details)|authenticate3ds|/authentication/3ds|/payments?/details", re.I)
-
 class MultiGateway3DSBypasser:
-    @staticmethod
-    def is_3ds_url(url: str) -> bool:
-        if not url: return False
-        u = str(url).lower()
-        targets = ["/v1/3ds2/authenticate", "/v2/3ds2/authenticate", "/v3/3ds2/authenticate", "/v1/3ds2/challenge_complete", "/v1/three_d_secure/authenticate", "/v1/threeDS2/authenticate", "/v2/threeDS2/authenticate", "/v1/submitAdditionalDetails", "/checkout/v1/payments/details", "songbird.cardinalcommerce.com", "cardinalcommerce.com", "centinelapi", "safekeyacs.americanexpress.com", "3dsmethod", "braintreegateway.com"]
-        return any(t in u for t in targets) or bool(TDS_REGEX.search(u))
 
     @staticmethod
     def gen_random_cavv() -> str:
