@@ -2524,8 +2524,7 @@ async def process_add_scraped_all(callback: types.CallbackQuery):
     for p in cache:
         raw_p = p['raw']
         if raw_p not in existing_raws:
-            parts = raw_p.split(':')
-            pool.append({"raw": raw_p, "server": f"http://{parts[0]}:{parts[1]}"})
+            pool.append({"raw": raw_p, "server": p.get("server", f"http://{raw_p}")})
             added += 1
             
     if added > 0:
@@ -2556,8 +2555,7 @@ async def process_add_scraped_fast(callback: types.CallbackQuery):
     for p in fast_proxies:
         raw_p = p['raw']
         if raw_p not in existing_raws:
-            parts = raw_p.split(':')
-            pool.append({"raw": raw_p, "server": f"http://{parts[0]}:{parts[1]}"})
+            pool.append({"raw": raw_p, "server": p.get("server", f"http://{raw_p}")})
             added += 1
             
     if added > 0:
