@@ -3,7 +3,7 @@ import os
 import asyncio
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional
-from hitter_core import BINLookup
+from gateways.stripe.stripe_hitter import BINLookup
 
 # Card Brand Detector
 def detect_card_brand(card_num: str) -> str:

@@ -3,11 +3,14 @@ import json
 import asyncio
 import aiohttp
 
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 # Force UTF-8 output on Windows (cp1252 can't encode ─ ➜ ✅ ❌ 🔐)
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-from hitter_core import StripeAPIHitter, StripeAPIExtractor
+from gateways.stripe.stripe_hitter import StripeAPIHitter, StripeAPIExtractor
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
@@ -30,7 +33,7 @@ def generate_luhn_cards(bin_prefix: str, count: int = 10):
         i += 7
     return cards
 
-from hitter_core import CardGenerator
+from gateways.stripe.stripe_hitter import CardGenerator
 
 CARDS = []  # populated dynamically in main
 
@@ -111,7 +114,7 @@ async def run_single_card(url: str, card_str: str, index: int):
         res = await striker.hit(card_dict, attempt=1, user_id=0)
 
         # -- Live BIN lookup --
-        from hitter_core import BINLookup
+        from gateways.stripe.stripe_hitter import BINLookup
         bin_info   = await BINLookup.lookup(parts[0])
 
         success    = res.get('success', False)

@@ -74,7 +74,7 @@ requests.get = wrapped_get
 requests.request = wrapped_request
 # ---------------------------------------------------------------------------------
 
-from hitter_core import CardGenerator, ConcurrentHitter, STRIPE_DECLINE_CODES, ProxyManager
+from gateways.stripe.stripe_hitter import CardGenerator, ConcurrentHitter, STRIPE_DECLINE_CODES, ProxyManager
 from file_tools import clean_and_sort_cards_text, split_text_n_parts, filter_by_bin_prefix, group_text_by_country
 
 

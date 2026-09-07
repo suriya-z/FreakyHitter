@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 import math
 import numpy as np
 from scipy.interpolate import interp1d
-from stripe_3ds_bypasser import Stripe3DSBypasser
+from gateways.stripe.stripe_3ds_bypasser import Stripe3DSBypasser
 
 load_dotenv()
 
@@ -2190,7 +2190,7 @@ class StripeAPIHitter:
                                     _hcaptcha_token = None
                                     if _top_rqdata:
                                         try:
-                                            from stripe_captcha_bypasser import StripeCaptchaBypasser as _SCB
+                                            from gateways.stripe.stripe_captcha_bypasser import StripeCaptchaBypasser as _SCB
                                             _hcaptcha_token = await asyncio.get_event_loop().run_in_executor(
                                                 None, lambda: _SCB._solve_hcaptcha_sync(
                                                     _top_sitekey or "4c787647-7985-4804-b8e9-f431dd3031d7",

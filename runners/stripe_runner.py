@@ -1,10 +1,9 @@
 """Stripe test runner — extract cs/pk from URL, build hitter, hit."""
 import asyncio, json, sys, os
-os.chdir(r"C:\Users\acer\Downloads\ai\gokuhitter_bot")
-sys.path.insert(0, r"C:\Users\acer\Downloads\ai\gokuhitter_bot")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from curl_compat import ChromeSession
-from hitter_core import StripeAPIHitter, StripeAPIExtractor
+from gateways.stripe.stripe_hitter import StripeAPIHitter, StripeAPIExtractor
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
