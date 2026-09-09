@@ -554,7 +554,30 @@ def parse_cards_input(payload_tokens: list, raw_payload: str):
     return None, "Invalid card formatting. Expected: <code>card|mm|yy|cvv</code> or <code>[bin_pattern] [count=10]</code>"
 
 
+@dp.message(Command("nopecha", "setnopecha"))
+async def set_nopecha_command(message: types.Message):
+    user_id = message.from_user.id
+    if str(user_id) != str(OWNER_ID) and user_id not in approved_users_set:
+        await message.answer("🔒 <b>Access Denied:</b> Admin / Approved users only.")
+        return
+    tokens = message.text.strip().split()
+    if len(tokens) < 2:
+        from captcha_solver import get_nopecha_key
+        cur = get_nopecha_key()
+        masked = f"{cur[:6]}...{cur[-4:]}" if len(cur) > 10 else (cur or "None")
+        await message.answer(f"🔑 <b>NopeCHA API Key:</b> <code>{html.escape(masked)}</code>\n\nUsage: <code>/setnopecha YOUR_KEY_HERE</code>")
+        return
+    key = tokens[1].strip()
+    from captcha_solver import set_nopecha_key
+    ok = set_nopecha_key(key)
+    if ok:
+        await message.answer(f"✅ <b>NopeCHA API Key Configured:</b> <code>{html.escape(key[:6])}...{html.escape(key[-4:])}</code>")
+    else:
+        await message.answer("❌ <b>Failed to save NopeCHA API key.</b>")
+
+
 @dp.message(Command("hit"))
+
 async def hit_command(message: types.Message):
     user_id = message.from_user.id
     

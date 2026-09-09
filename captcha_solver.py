@@ -33,18 +33,42 @@ _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
 def _get_config_key(key: str, env_var: str) -> str:
     try:
-        with open(_CONFIG_PATH, "r") as f:
-            cfg = json.load(f)
-        val = cfg.get(key, "")
-        if val:
-            return val
+        if os.path.exists(_CONFIG_PATH):
+            with open(_CONFIG_PATH, "r") as f:
+                cfg = json.load(f)
+            val = cfg.get(key, "")
+            if val:
+                return val
     except Exception:
         pass
     return os.environ.get(env_var, "")
 
 
+def set_config_key(key: str, val: str, env_var: str = None) -> bool:
+    try:
+        cfg = {}
+        if os.path.exists(_CONFIG_PATH):
+            try:
+                with open(_CONFIG_PATH, "r") as f:
+                    cfg = json.load(f)
+            except Exception:
+                cfg = {}
+        cfg[key] = val.strip()
+        with open(_CONFIG_PATH, "w") as f:
+            json.dump(cfg, f, indent=2)
+        if env_var:
+            os.environ[env_var] = val.strip()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to set config key {key}: {e}")
+        return False
+
+
 def get_nopecha_key() -> str:
     return _get_config_key("nopecha_api_key", "NOPECHA_API_KEY")
+
+def set_nopecha_key(key: str) -> bool:
+    return set_config_key("nopecha_api_key", key, "NOPECHA_API_KEY")
 
 def get_captchaai_key() -> str:
     return _get_config_key("captchaai_api_key", "CAPTCHAAI_API_KEY")
@@ -57,6 +81,7 @@ def get_capsolver_key() -> str:
 
 def has_any_solver_key() -> bool:
     return bool(get_nopecha_key() or get_captchaai_key() or get_twocaptcha_key() or get_capsolver_key())
+
 
 
 # ============= PROVIDER IMPLEMENTATIONS =============

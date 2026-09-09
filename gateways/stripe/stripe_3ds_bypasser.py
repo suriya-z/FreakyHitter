@@ -160,6 +160,10 @@ class Stripe3DSBypasser:
         if not isinstance(sdk_data, dict):
             return None
 
+        # Guard: Stripe Radar bot challenge is NOT 3DS
+        if sdk_data.get('type') == 'intent_confirmation_challenge':
+            return {'success': False, 'status': 'intent_confirmation_challenge', 'radar_challenge': True}
+
         server_trans_id = sdk_data.get('three_ds_server_trans_id') or sdk_data.get('three_ds_2_server_trans_id')
         method_url = sdk_data.get('three_ds_method_url')
         three_ds_2_intent_id = sdk_data.get('three_ds_2_intent_id') or sdk_data.get('id')
@@ -453,10 +457,16 @@ class Stripe3DSBypasser:
                     result['error'] = None
                     if outcome.get('raw_response'):
                         result['raw_response'] = outcome['raw_response']
+                elif outcome and outcome.get('radar_challenge'):
+                    result['is_radar_challenge'] = True
+                    result['3ds_attempted'] = False
+                    result['decline_code'] = 'radar_bot_challenge'
+                    result['error'] = 'Stripe Radar Bot Challenge (hCaptcha Enterprise triggered by Stripe WAF)'
                 elif outcome:
                     result['3ds_attempted'] = True
                     result['3ds_type'] = act_type or '3DS'
                     result['3ds_status'] = outcome.get('status', 'failed')
+
 
         except Exception as ex:
             result['3ds_error'] = str(ex)[:100]
