@@ -28,6 +28,22 @@ import captcha_solver
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 DEFAULT_IMPERSONATE = "chrome131"
 
+GEO_ADDRESSES = {
+    "US": [
+        {"line1": "100 Main St", "city": "New York", "state": "NY", "postal_code": "10001", "country": "US"},
+        {"line1": "500 Market St", "city": "San Francisco", "state": "CA", "postal_code": "94105", "country": "US"},
+        {"line1": "1200 Wilshire Blvd", "city": "Los Angeles", "state": "CA", "postal_code": "90017", "country": "US"},
+        {"line1": "400 N Michigan Ave", "city": "Chicago", "state": "IL", "postal_code": "60611", "country": "US"},
+    ],
+    "GB": [
+        {"line1": "10 Downing St", "city": "London", "state": "England", "postal_code": "SW1A 2AA", "country": "GB"},
+        {"line1": "221B Baker St", "city": "London", "state": "England", "postal_code": "NW1 6XE", "country": "GB"},
+    ],
+    "CA": [
+        {"line1": "100 King St W", "city": "Toronto", "state": "ON", "postal_code": "M5X 1A9", "country": "CA"},
+    ]
+}
+
 def _amount_mismatch(status_code: int, err: dict) -> bool:
     if status_code not in (200, 400, 402, 409):
         return False
@@ -183,10 +199,13 @@ class CsHitSession:
         card_dict = {"card": cc, "month": mm, "year": yy, "cvv": cvv}
 
         # 1. Tokenize Card (POST /v1/payment_methods)
-        cc_country = self.customer_country or "US"
-        tz_pool = GEO_TIMEZONES.get(cc_country.upper(), GEO_TIMEZONES["US"])
+        cc_country = (self.customer_country or "US").upper()
+        tz_pool = GEO_TIMEZONES.get(cc_country, GEO_TIMEZONES["US"])
         tz_offset = str(random.choice(tz_pool))
         width, height = random.choice(SCREEN_RESOLUTIONS)
+
+        addr_pool = GEO_ADDRESSES.get(cc_country, GEO_ADDRESSES["US"])
+        addr = random.choice(addr_pool)
 
         guid = str(uuid.uuid4())
         muid = str(uuid.uuid4())
@@ -198,6 +217,11 @@ class CsHitSession:
             "card[exp_month]": mm,
             "card[exp_year]": yy,
             "card[cvc]": cvv,
+            "billing_details[address][line1]": addr["line1"],
+            "billing_details[address][city]": addr["city"],
+            "billing_details[address][state]": addr["state"],
+            "billing_details[address][postal_code]": addr["postal_code"],
+            "billing_details[address][country]": addr["country"],
             "guid": guid,
             "muid": muid,
             "sid": sid,
@@ -210,6 +234,8 @@ class CsHitSession:
             tok_body["billing_details[email]"] = self.customer_email
         if self.customer_name:
             tok_body["billing_details[name]"] = self.customer_name
+        else:
+            tok_body["billing_details[name]"] = "Alex Smith"
 
         tok_headers = {
             "Content-Type": "application/x-www-form-urlencoded",
