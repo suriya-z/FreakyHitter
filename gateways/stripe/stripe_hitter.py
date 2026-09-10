@@ -2134,11 +2134,23 @@ class StripeAPIHitter:
                                                 pi = _vpi.get('id') or pi
                                                 client_secret = _vpi.get('client_secret') or client_secret
                                         elif _vstat == 'requires_payment_method':
-                                            # Issuer soft declined after challenge cleared
-                                            _verr = _vpi.get('last_payment_error') or {}
-                                            result['decline_code'] = _verr.get('decline_code') or _verr.get('code') or 'declined_after_waf'
-                                            result['error'] = _verr.get('message', 'Declined after WAF verification')
-                                            result['is_live'] = True
+                                            # Challenge cleared; issuer declined or card requires method
+                                            _verr = (
+                                                _vpi.get('last_payment_error')
+                                                or _vpi.get('last_setup_error')
+                                                or _verify_json.get('last_payment_error')
+                                                or _verify_json.get('error')
+                                                or {}
+                                            )
+                                            _real_code = _verr.get('decline_code') or _verr.get('code')
+                                            _real_msg = _verr.get('message')
+                                            
+                                            result['decline_code'] = _real_code or 'card_declined'
+                                            result['error'] = _real_msg or f"Card declined ({result['decline_code']})"
+                                            result['is_live'] = result['decline_code'] in (
+                                                'insufficient_funds', 'incorrect_cvc', 'invalid_cvc',
+                                                'restricted_card', 'card_velocity_exceeded', 'withdrawal_count_limit_exceeded'
+                                            )
                                             result['3ds_bypassed'] = False
                                             result['3ds_type'] = 'waf_gate'
                                             result['captcha_bypassed'] = bool(_best_token or _trawl_cleared_cookies)

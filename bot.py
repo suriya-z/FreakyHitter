@@ -497,9 +497,10 @@ def parse_cards_input(payload_tokens: list, raw_payload: str):
     1. Single or Multiple CCs (up to 10): /hit [url] [cc1] [cc2] ... [cc10]
     2. BIN generation: /hit [url] [bin_pattern] [count=10] (defaults to 10 if count omitted)
     """
+def parse_cards_input(payload_tokens: list, raw_payload: str, allow_no_cvc: bool = False):
     cards = []
 
-    # 1. Direct card regex matching
+    # 1. Direct card regex matching (with CVV: 4 parts)
     matches = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})[|/](\d{3,4})', raw_payload)
     if matches:
         for m in matches:
@@ -512,6 +513,21 @@ def parse_cards_input(payload_tokens: list, raw_payload: str):
         if len(cards) > 10:
             return None, f"Submission of {len(cards)} cards rejected. Max concurrent limit is 10."
         return cards, None
+
+    # 1b. Direct CCN regex matching (without CVV: 3 parts: pan|mm|yy) if allow_no_cvc is enabled
+    if allow_no_cvc:
+        matches_nocvv = re.findall(r'(\d{13,19})[|/](\d{1,2})[|/](\d{2,4})', raw_payload)
+        if matches_nocvv:
+            for m in matches_nocvv:
+                cards.append({
+                    'card': m[0],
+                    'month': m[1].zfill(2),
+                    'year': m[2].zfill(2) if len(m[2]) <= 2 else m[2][-2:],
+                    'cvv': ''
+                })
+            if len(cards) > 10:
+                return None, f"Submission of {len(cards)} cards rejected. Max concurrent limit is 10."
+            return cards, None
 
     # 2. Check for BIN pattern (with or without count)
     if payload_tokens:
@@ -530,10 +546,10 @@ def parse_cards_input(payload_tokens: list, raw_payload: str):
             if count > 10:
                 return None, "Maximum batch limit is 10 concurrent requests."
             from generators import generate_bin_cards
-            raw_gen_cards = generate_bin_cards(potential_bin, count)
+            raw_gen_cards = generate_bin_cards(potential_bin, count, preserve_no_cvc=allow_no_cvc)
             for gc in raw_gen_cards:
                 gp = gc.split('|')
-                cards.append({'card': gp[0], 'month': gp[1], 'year': gp[2], 'cvv': gp[3]})
+                cards.append({'card': gp[0], 'month': gp[1], 'year': gp[2], 'cvv': gp[3] if len(gp) > 3 else ''})
             if not cards:
                 return None, "BIN pattern generation failed."
             return cards, None
@@ -548,6 +564,14 @@ def parse_cards_input(payload_tokens: list, raw_payload: str):
             'month': cc_parts[1].zfill(2),
             'year': cc_parts[2].zfill(2) if len(cc_parts[2]) <= 2 else cc_parts[2][-2:],
             'cvv': cc_parts[3]
+        })
+        return cards, None
+    elif allow_no_cvc and len(cc_parts) == 3:
+        cards.append({
+            'card': cc_parts[0],
+            'month': cc_parts[1].zfill(2),
+            'year': cc_parts[2].zfill(2) if len(cc_parts[2]) <= 2 else cc_parts[2][-2:],
+            'cvv': ''
         })
         return cards, None
 
@@ -706,8 +730,9 @@ async def hit_command(message: types.Message):
                     else:
                         reason_msg = "card_declined"
 
+                    clean_title = status_title.replace('<b>', '').replace('</b>', '').strip()
                     hit_text = (
-                        f"❌ <b><i>{status_title.replace('<b>', '').replace('</b>', '')}</i></b>\n"
+                        f"<b><i>{clean_title}</i></b>\n"
                         f"────────────\n"
                         f"<b><i>CC</i></b> ➔ <code>{card_str}</code>\n"
                         f"<b><i>Amount</i></b> ➔ {amt_val}\n"
@@ -1634,7 +1659,7 @@ async def hitwhop_command(message: types.Message):
     payload_tokens = raw_tokens[2:]
     raw_payload = message.text.strip().split(None, 2)[2] if len(message.text.strip().split(None, 2)) >= 3 else (payload_tokens[0] if payload_tokens else "")
     
-    cards, err = parse_cards_input(payload_tokens, raw_payload)
+    cards, err = parse_cards_input(payload_tokens, raw_payload, allow_no_cvc=True)
     if err:
         await message.answer(f"<b>Error</b>\n<code>{err}</code>")
         return
@@ -1955,9 +1980,9 @@ async def stop_command(message: types.Message):
         if hasattr(hitter, 'is_running'):
             hitter.is_running = False
         del active_sessions[user_id]
-        await message.answer("<b>Status</b>\n<code>Session termination requested. Pending final queue execution.</code>")
+        await message.answer("🛑 <b>Stopped.</b>")
     else:
-        await message.answer("<b>Status</b>\n<code>No active sessions found.</code>")
+        await message.answer("ℹ️ <b>No active task running.</b>")
 
 
 

@@ -1,7 +1,7 @@
 import random, re
 
 # ==================== BIN CARD GENERATOR ====================
-def generate_bin_cards(bin_pattern: str, count: int = 10) -> list:
+def generate_bin_cards(bin_pattern: str, count: int = 10, preserve_no_cvc: bool = False) -> list:
     """
     Generates Luhn-valid cards matching bin_pattern.
     Supports formats:
@@ -19,6 +19,7 @@ def generate_bin_cards(bin_pattern: str, count: int = 10) -> list:
     mm_pat = None
     yy_pat = None
     cvc_pat = None
+    cvc_specified = False
     
     if len(parts) > 1:
         rest = parts[1:]
@@ -28,6 +29,7 @@ def generate_bin_cards(bin_pattern: str, count: int = 10) -> list:
             yy_pat = sub[1].strip() if len(sub) > 1 else None
             if len(rest) > 1:
                 cvc_pat = rest[1].strip()
+                cvc_specified = True
         else:
             mm_pat = rest[0].strip()
             if len(rest) > 1:
@@ -35,10 +37,13 @@ def generate_bin_cards(bin_pattern: str, count: int = 10) -> list:
                     sub = rest[1].split('/')
                     yy_pat = sub[0].strip()
                     cvc_pat = sub[1].strip() if len(sub) > 1 else None
+                    if len(sub) > 1:
+                        cvc_specified = True
                 else:
                     yy_pat = rest[1].strip()
             if len(rest) > 2 and not cvc_pat:
                 cvc_pat = rest[2].strip()
+                cvc_specified = True
 
     prefix = re.sub(r'[^0-9xX]', '', card_pat)
     cards = []
@@ -92,6 +97,8 @@ def generate_bin_cards(bin_pattern: str, count: int = 10) -> list:
         expected_cvc_len = 4 if is_amex else 3
         if cvc_pat and cvc_pat.isdigit() and len(cvc_pat) == expected_cvc_len and cvc_pat not in ('000', '0000'):
             cvc = cvc_pat
+        elif preserve_no_cvc and not cvc_specified:
+            cvc = ""
         else:
             cvc = f"{random.randint(1000, 9999):04d}" if is_amex else f"{random.randint(100, 999):03d}"
             

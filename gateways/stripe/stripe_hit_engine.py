@@ -116,9 +116,17 @@ class CsHitSession:
             pi = data.get("payment_intent") or {}
             self.secret = str(pi.get("client_secret") or "")
             self.pi_id = str(pi.get("id") or "")
-            self.amount = int(pi.get("amount") or 0)
-            self.currency = str(pi.get("currency") or "").upper()
             self.checksum = str(data.get("init_checksum") or "")
+
+            # Prioritize total_summary due / invoice amount_due as that reflects
+            # localized/adaptive presentation currency required by payment_pages confirm
+            due = ((data.get("total_summary") or {}).get("due")) or ((data.get("invoice") or {}).get("amount_due"))
+            if due:
+                self.amount = int(due)
+                self.currency = str(data.get("currency") or (data.get("invoice") or {}).get("currency") or pi.get("currency") or "USD").upper()
+            else:
+                self.amount = int(pi.get("amount") or 0)
+                self.currency = str(pi.get("currency") or data.get("currency") or "USD").upper()
 
             cust = data.get("customer") or {}
             self.customer_email = str(data.get("customer_email") or cust.get("email") or "")
@@ -134,12 +142,7 @@ class CsHitSession:
                 await s.close()
                 return False, f"PaymentIntent status={status} — session cannot be reused"
 
-            if not status or self.amount == 0:
-                due = ((data.get("total_summary") or {}).get("due")) or ((data.get("invoice") or {}).get("amount_due"))
-                if due:
-                    self.amount = int(due)
-                self.currency = str(data.get("currency") or (data.get("invoice") or {}).get("currency") or "USD").upper()
-                self.is_subscription = bool(data.get("mode") == "subscription" or data.get("subscription_data"))
+            self.is_subscription = bool(data.get("mode") == "subscription" or data.get("subscription_data"))
 
             if self.amount > self.max_amount:
                 await s.close()
@@ -291,6 +294,10 @@ class CsHitSession:
         err = resp.get("error") or {}
         if _amount_mismatch(getattr(r_conf, "status_code", 0), err):
             try:
+                err_msg = str(err.get("message") or "")
+                m = re.search(r'(?:actual|expected) amount \((\d+)\)', err_msg.lower())
+                exact_amt = int(m.group(1)) if m else None
+
                 rg = await self.s.get(
                     f"https://api.stripe.com/v1/payment_pages/{self.cs}",
                     params={"key": self.pk},
@@ -299,7 +306,10 @@ class CsHitSession:
                 )
                 data0 = rg.json() or {}
                 pi0 = data0.get("payment_intent") or {}
-                new_amt = pi0.get("amount") or ((data0.get("total_summary") or {}).get("due")) or ((data0.get("invoice") or {}).get("amount_due"))
+                tot0 = (data0.get("total_summary") or {}).get("due") or (data0.get("invoice") or {}).get("amount_due")
+                new_amt = exact_amt or tot0 or pi0.get("amount")
+                if data0.get("currency"):
+                    self.currency = str(data0.get("currency")).upper()
                 if new_amt and int(new_amt) != self.amount:
                     self.amount = int(new_amt)
                     confirm_body["expected_amount"] = str(self.amount)

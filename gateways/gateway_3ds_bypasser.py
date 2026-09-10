@@ -29,6 +29,21 @@ class MultiGateway3DSBypasser:
         elif 'cardinal' in gw or 'songbird' in gw or 'centinel' in gw:
             return {"Status": True, "ActionCode": "SUCCESS", "ErrorNumber": 0, "ErrorDescription": "Success", "Validated": True, "Payment": {"Type": "CCA", "ProcessorTransactionId": str(uuid.uuid4()), "ExtendedData": {"SignatureVerification": "Y", "EciFlag": "02", "CAVV": auth_val, "XID": str(uuid.uuid4()), "Enrolled": "Y", "PAResStatus": "Y"}}}
         elif 'amex' in gw or 'safekey' in gw:
-            return {"status": "Y", "transStatus": "Y", "authenticationValue": auth_val, "eci": "05", "acsTransID": acs_trans_id, "dsTransID": ds_trans_id, "threeDSServerTransID": server_trans_id, "messageVersion": "2.2.0", "challengeCompletionInd": "Y"}
+            # SafeKey 2.0+ ECI: 06 = Merchant Attempted / Frictionless Liability Shift
+            # 05 requires cryptographically signed ARes Key Exchange. Default to 06 for synthetic liability shift.
+            req_str = str(req_body or "").lower()
+            eci_val = "05" if "cres" in req_str or "authenticated" in req_str else "06"
+            ver_val = "2.1.0" if "2.1.0" in req_str else "2.2.0"
+            return {
+                "status": "Y",
+                "transStatus": "Y",
+                "authenticationValue": auth_val,
+                "eci": eci_val,
+                "acsTransID": acs_trans_id,
+                "dsTransID": ds_trans_id,
+                "threeDSServerTransID": server_trans_id,
+                "messageVersion": ver_val,
+                "challengeCompletionInd": "Y"
+            }
         return {"status": "succeeded", "transStatus": "Y", "eci": "02", "authenticationValue": auth_val, "dsTransID": ds_trans_id, "acsTransID": acs_trans_id, "threeDSServerTransID": server_trans_id, "messageVersion": "2.2.0"}
 

