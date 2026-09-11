@@ -2322,10 +2322,21 @@ async def proxy_command(message: types.Message):
     total_tested = len(proxies_to_test)
 
     if is_loading_new:
+        pool = list(await ProxyManager.get_user_proxies(user_id))
+        existing_raws = {p.get('raw', '').strip() for p in pool}
+        
+        live_dupes = sum(1 for p in live_proxies if p in existing_raws)
+        live_new = live_count - live_dupes
+
         final_msg = (
-            f"⚡ <b>Proxies Checked!</b>\n\n"
-            f"<code>🟢 Live : {live_count} / {total_tested}</code>\n"
-            f"<code>🔴 Dead : {dead_count}</code>"
+            f"📡 <b>PROXY AUDIT COMPLETE</b>\n"
+            f"────────────────────────\n\n"
+            f"⚡ <b>Tested:</b> <code>{total_tested}</code>\n"
+            f"✅ <b>Live Verified:</b> <code>{live_count}</code>\n"
+            f"🆕 <b>New Found:</b> <code>{live_new}</code>\n"
+            f"♻️ <b>Duplicates In Pool:</b> <code>{live_dupes}</code>\n"
+            f"💀 <b>Dead Dropped:</b> <code>{dead_count}</code>\n"
+            f"📊 <b>Your Personal Active Proxies:</b> <code>{len(pool)}</code>"
         )
     else:
         final_msg = (
@@ -2337,7 +2348,7 @@ async def proxy_command(message: types.Message):
     if is_loading_new:
         if live_count == 0:
             err_str = ", ".join(err_reasons) if err_reasons else "All proxies failed"
-            final_msg += f"\n<code>⚠️ Error: {err_str}</code>"
+            final_msg += f"\n\n<code>⚠️ Error: {err_str}</code>"
             await status_msg.edit_text(final_msg)
             return
 
@@ -2345,6 +2356,9 @@ async def proxy_command(message: types.Message):
             bot.pasted_proxies_cache = {}
 
         premium_raws = [p for p in live_proxies if p not in weak_proxies]
+        new_premium_raws = [p for p in premium_raws if p not in existing_raws]
+        new_live_raws = [p for p in live_proxies if p not in existing_raws]
+
         bot.pasted_proxies_cache[user_id] = {
             'premium': premium_raws,
             'live': live_proxies
@@ -2352,12 +2366,17 @@ async def proxy_command(message: types.Message):
 
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         buttons = []
-        if len(premium_raws) > 0:
-            buttons.append([InlineKeyboardButton(text=f"➕ ADD PREMIUM ONLY ({len(premium_raws)})", callback_data="add_strong_only")])
-        buttons.append([InlineKeyboardButton(text=f"➕ ADD ALL {live_count} PROXIES", callback_data="add_live_all")])
+        if len(new_premium_raws) > 0:
+            buttons.append([InlineKeyboardButton(text=f"➕ ADD PREMIUM ONLY ({len(new_premium_raws)})", callback_data="add_strong_only")])
+        if len(new_live_raws) > 0:
+            buttons.append([InlineKeyboardButton(text=f"➕ ADD NEW ({len(new_live_raws)})", callback_data="add_live_all")])
 
-        markup = InlineKeyboardMarkup(inline_keyboard=buttons)
-        await status_msg.edit_text(final_msg, reply_markup=markup)
+        if buttons:
+            markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await status_msg.edit_text(final_msg, reply_markup=markup)
+        else:
+            final_msg += f"\n\n<code>ℹ️ All live proxies are already in your active pool. Nothing to add.</code>"
+            await status_msg.edit_text(final_msg)
     else:
         if dead_count > 0:
             final_msg += f"\n<code>Removed {dead_count} dead proxies from pool</code>"
@@ -2468,9 +2487,13 @@ async def process_add_live_all(callback: types.CallbackQuery):
 
     bot.pasted_proxies_cache[user_id] = {}
     await callback.message.edit_reply_markup(reply_markup=None)
+    
+    dupes_skipped = len(live_raws) - new_added
+    dupe_line = f"\n<code>♻️ Duplicates Skipped: {dupes_skipped}</code>" if dupes_skipped > 0 else ""
     await callback.message.reply(
         f"⚡ <b>Proxy Pool Updated</b>\n"
         f"<code>Added {new_added} new proxies to active pool. Total Pool: {len(pool)}</code>"
+        f"{dupe_line}"
     )
     await callback.answer("Live proxies added!")
 
