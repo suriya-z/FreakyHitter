@@ -95,12 +95,25 @@ class JioHitter:
 
         try:
             async with AsyncSession(impersonate=pf["imp"], proxies=proxies, timeout=25, verify=False) as s:
+                # Helper for safe json extraction
+                def safe_json(resp):
+                    try:
+                        return resp.json() or {}
+                    except Exception:
+                        return {}
+
                 # 1. Number Lookup
                 r_num = await s.get(
                     f"https://www.jio.com/api/jio-recharge-service/recharge/mobility/number/{self.phone}",
                     headers=self._get_headers(pf, lg, "https://www.jio.com/", extra={"Accept": "application/json, text/plain, */*"})
                 )
-                lookup = r_num.json() or {}
+                lookup = safe_json(r_num)
+                if lookup.get("errorMessage") == "CAPTCHA_REQUIRED" or r_num.status_code == 429:
+                    result["decline_code"] = "captcha_required"
+                    result["error"] = "Jio rate limit / captcha triggered. Try again with proxy."
+                    result["response_time"] = round(time.time() - t0, 2)
+                    return result
+
                 if lookup.get("errorMessage") == "NOT_SUBSCRIBED_USER":
                     result["decline_code"] = "invalid_number"
                     result["error"] = f"{self.phone} is not an active Jio subscriber."
@@ -120,7 +133,7 @@ class JioHitter:
                     f"https://www.jio.com/api/jio-recharge-service/recharge/plans/serviceId/{self.phone}",
                     headers=self._get_headers(pf, lg, plans_ref, extra={"Accept": "*/*"})
                 )
-                plans_json = r_plans.json() or {}
+                plans_json = safe_json(r_plans)
 
                 # Find plan matching target_amount or fallback to cheapest
                 chosen_plan = None
@@ -142,13 +155,12 @@ class JioHitter:
                     chosen_plan = min(all_plans, key=lambda x: x["amount"])
 
                 if not chosen_plan:
-                    result["decline_code"] = "no_plans"
-                    result["error"] = "Unable to resolve recharge plan from catalog."
-                    result["response_time"] = round(time.time() - t0, 2)
-                    return result
+                    # Fallback to standard DATA11 add-on if catalog lookup failed
+                    chosen_plan = {"key": "DATA11", "amount": float(self.target_amount), "name": "11"}
 
                 plan_key = chosen_plan["key"]
                 result["amount"] = f"INR {chosen_plan['amount']:.2f}"
+                result["plan_name"] = chosen_plan.get("name", "Jio Recharge")
                 result["plan_name"] = chosen_plan.get("name", "Jio Recharge")
 
                 # 3. Buy & Pay
