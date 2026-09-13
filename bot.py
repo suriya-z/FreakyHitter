@@ -1634,6 +1634,88 @@ async def hitep_command(message: types.Message):
         if active_sessions.get(user_id) == session_token:
             del active_sessions[user_id]
 
+@dp.message(Command("jio", "hitjio"))
+async def jio_recharge_command(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in active_sessions:
+        await message.answer("<b>Alert</b>\n<code>Active session detected. Abort current task before launching new checks.</code>")
+        return
+
+    text = message.text.strip()
+    parts = text.split()
+    if len(parts) < 3:
+        await message.reply(
+            "⚠️ <b>Jio Recharge Hitter</b>\n"
+            "<code>Usage: /jio [10-digit number] [cc|mm|yy|cvv] [optional: amount]</code>\n\n"
+            "<i>Example:</i>\n"
+            "<code>/jio 9876543210 5131234567891234|08|2028|123 11</code>"
+        )
+        return
+
+    phone_num = parts[1].strip()
+    raw_card = parts[2].strip()
+    target_amt = float(parts[3]) if len(parts) > 3 and parts[3].replace(".", "", 1).isdigit() else 11.0
+
+    card_parts = [p.strip() for p in re.split(r"[|:;\s]+", raw_card) if p.strip()]
+    if len(card_parts) < 3:
+        await message.reply("⚠️ <b>Invalid Card Format</b>\n<code>Provide card as NUMBER|MM|YY|CVV</code>")
+        return
+
+    card_dict = {
+        "card": card_parts[0],
+        "month": card_parts[1],
+        "year": card_parts[2],
+        "cvv": card_parts[3] if len(card_parts) > 3 else ""
+    }
+
+    session_token = f"jio_{user_id}_{time.time()}"
+    active_sessions[user_id] = session_token
+    status_msg = await message.reply(f"⚡ <b>Initiating Jio Recharge...</b>\n<code>Number: {phone_num} | Amount: INR {target_amt:.2f}</code>")
+
+    try:
+        from jio_hitter import JioHitter
+        proxy_data = await ProxyManager.get_random(user_id)
+        hitter = JioHitter(phone_number=phone_num, proxy_data=proxy_data, plan_amount=target_amt)
+        res = await hitter.hit(card_dict)
+
+        if status_msg:
+            try: await status_msg.delete()
+            except: pass
+
+        if res.get("success"):
+            reply_text = (
+                f"✅ <b><i>JIO RECHARGE SUCCESSFUL</i></b>\n"
+                f"────────────\n"
+                f"<b><i>Phone</i></b> ➔ <code>{phone_num}</code>\n"
+                f"<b><i>Amount</i></b> ➔ {res.get('amount')}\n"
+                f"<b><i>Plan</i></b> ➔ {html.escape(str(res.get('plan_name', 'Jio Data')))}\n"
+                f"<b><i>Card</i></b> ➔ <code>{res.get('card')}</code>\n"
+                f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s\n"
+                f"────────────"
+            )
+        else:
+            reason = res.get("error") or res.get("decline_code") or "Payment declined"
+            reply_text = (
+                f"❌ <b><i>JIO RECHARGE FAILED</i></b>\n"
+                f"────────────\n"
+                f"<b><i>Phone</i></b> ➔ <code>{phone_num}</code>\n"
+                f"<b><i>Amount</i></b> ➔ {res.get('amount')}\n"
+                f"<b><i>Card</i></b> ➔ <code>{res.get('card')}</code>\n"
+                f"<b><i>Response</i></b> ➔ <code>{html.escape(str(reason))}</code>\n"
+                f"<b><i>Status</i></b> ➔ <code>{res.get('status', 'DECLINED')}</code>\n"
+                f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s\n"
+                f"────────────"
+            )
+        await message.reply(reply_text)
+    except Exception as ex:
+        if status_msg:
+            try: await status_msg.delete()
+            except: pass
+        await message.reply(f"❌ <b>Jio Engine Error:</b>\n<code>{html.escape(str(ex))}</code>")
+    finally:
+        if active_sessions.get(user_id) == session_token:
+            del active_sessions[user_id]
+
 @dp.message(Command("hitwhop", "hitwp"))
 async def hitwhop_command(message: types.Message):
     user_id = message.from_user.id
@@ -3199,7 +3281,9 @@ async def process_menu_hitter(callback: types.CallbackQuery):
         "<b><i>Whop Checkout Hitter</i></b>\n"
         "<code>/hitwhop [url] [cc|mm|yy|cvv]</code>\n\n"
         "<b><i>Paddle Billing Hitter</i></b>\n"
-        "<code>/hitpad [url] [cc|mm|yy|cvv]</code>"
+        "<code>/hitpad [url] [cc|mm|yy|cvv]</code>\n\n"
+        "<b><i>Jio Mobility Hitter</i></b>\n"
+        "<code>/jio [phone] [cc|mm|yy|cvv] [amt=11]</code>"
     )
     try:
         await callback.message.edit_text(hitter_text, reply_markup=markup)
