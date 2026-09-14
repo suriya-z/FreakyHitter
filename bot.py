@@ -1686,13 +1686,18 @@ async def jio_recharge_command(message: types.Message):
             except: pass
 
         if res.get("success"):
+            status_label = res.get('status', 'APPROVED@PAID')
+            icon = "⏳" if "PENDING" in status_label or "PREAUTH" in status_label else "✅"
+            title = "JIO RECHARGE PRE-AUTH HOLD" if "PENDING" in status_label else "JIO RECHARGE SUCCESSFUL"
             reply_text = (
-                f"✅ <b><i>JIO RECHARGE SUCCESSFUL</i></b>\n"
+                f"{icon} <b><i>{title}</i></b>\n"
                 f"────────────\n"
                 f"<b><i>Phone</i></b> ➔ <code>{phone_num}</code>\n"
                 f"<b><i>Amount</i></b> ➔ {res.get('amount')}\n"
                 f"<b><i>Plan</i></b> ➔ {html.escape(str(res.get('plan_name', 'Jio Data')))}\n"
                 f"<b><i>Card</i></b> ➔ <code>{res.get('card')}</code>\n"
+                f"<b><i>Status</i></b> ➔ <code>{status_label}</code>\n"
+                f"<b><i>Response</i></b> ➔ <code>{html.escape(str(res.get('error') or 'Approved'))}</code>\n"
                 f"<b><i>Time</i></b> ➔ {res.get('response_time', 0):.2f}s\n"
                 f"────────────"
             )
