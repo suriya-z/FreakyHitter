@@ -369,9 +369,9 @@ class EpochHitter:
         result['decline_code'] = 'card_declined'
         result['error'] = 'Your payment was declined; please try again.'
         return result
-
-    async def hit(self, card: dict, attempt: int, user_id: int) -> dict:
+    async def hit(self, card: dict, attempt: int = 1, user_id: int = 0, **kwargs) -> dict:
         """Executes payment attempt against Epoch gateway."""
+        attempt = kwargs.get('idx', attempt)
         t0 = time.time()
         result = dict(
             attempt=attempt, card=card, success=False,
