@@ -390,19 +390,7 @@ class ProxyManager:
             return None
         return random.choice(pool)
 
-    @classmethod
-    async def get_any_random(cls, user_id: int) -> Optional[Dict]:
-        """Returns a proxy from the user's pool, or falls back to any user's active pool."""
-        p = await cls.get_random(user_id)
-        if p:
-            return p
-        # Fallback to any loaded pool in the system
-        for uid in await cls.get_all_users():
-            p_list = await cls.get_user_proxies(uid)
-            if p_list:
-                return random.choice(p_list)
-        return None
-        
+
     @classmethod
     async def remove(cls, user_id: int, proxy_raw: str):
         pool = await cls.get_user_proxies(user_id)
