@@ -383,6 +383,84 @@ class JioHitter:
                                 result["status"] = "DECLINED"
                                 return result
 
+                    # ── Check Direct Paytm transactionStatus Form in r_bank ──
+                    theia_action_direct = re.search(r"action=['\"](https://[^'\"]*transactionStatus[^'\"]*)['\"]", r_bank.text, re.I)
+                    theia_fields_direct = re.findall(r"name=['\"]([^'\"]+)['\"]\s+value=['\"]([^'\"]*)['\"]", r_bank.text, re.I)
+
+                    if theia_action_direct and theia_fields_direct:
+                        theia_url = theia_action_direct.group(1)
+                        theia_data = {k: v for k, v in theia_fields_direct}
+
+                        r_theia = await s.post(
+                            theia_url,
+                            headers=self._get_headers(pf, lg, str(r_bank.url), ct="application/x-www-form-urlencoded", origin="https://securepay.paytmpayments.com"),
+                            data=theia_data,
+                            allow_redirects=True
+                        )
+
+                        # Extract B2B Callback Form
+                        b2b_action = re.search(r"ACTION=['\"](https://pay\.jio\.com[^'\"]+)['\"]", r_theia.text, re.I)
+                        if not b2b_action:
+                            b2b_action = re.search(r"action=['\"]([^'\"]*pay\.jio\.com[^'\"]+)['\"]", r_theia.text, re.I)
+                        b2b_fields = re.findall(r"name=['\"]([^'\"]+)['\"]\s+value=['\"]([^'\"]*)['\"]", r_theia.text, re.I)
+
+                        if b2b_action and b2b_fields:
+                            b2b_url = b2b_action.group(1)
+                            b2b_data = {k: v for k, v in b2b_fields}
+
+                            r_b2b = await s.post(
+                                b2b_url,
+                                headers=self._get_headers(pf, lg, str(r_theia.url), ct="application/x-www-form-urlencoded", origin="https://secure.paytmpayments.com"),
+                                data=b2b_data,
+                                allow_redirects=True
+                            )
+
+                            servlet_action = re.search(r"action=['\"](https://www\.jio\.com[^'\"]*paymentservlet[^'\"]*)['\"]", r_b2b.text, re.I)
+                            servlet_fields = re.findall(r"name=['\"]([^'\"]+)['\"]\s+value=['\"]([^'\"]*)['\"]", r_b2b.text, re.I)
+
+                            if servlet_action and servlet_fields:
+                                servlet_url = servlet_action.group(1)
+                                servlet_data = {k: v for k, v in servlet_fields}
+
+                                r_final = await s.post(
+                                    servlet_url,
+                                    headers=self._get_headers(pf, lg, str(r_b2b.url), ct="application/x-www-form-urlencoded", origin="https://pay.jio.com",
+                                                              extra={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}),
+                                    data=servlet_data,
+                                    allow_redirects=True
+                                )
+
+                                final_text = r_final.text.lower()
+                                result["response_time"] = round(time.time() - t0, 2)
+
+                                if "/selfcare/recharge/status" in str(r_final.url).lower() or any(term in final_text for term in ["successful", "recharge successful", "payment approved"]):
+                                    if b2b_data.get("STATUS") == "PENDING" or "05" in str(servlet_data.get("jioResponseMsg", "")):
+                                        result["success"] = True
+                                        result["status"] = "PENDING@PREAUTH"
+                                        result["decline_code"] = "preauth_pending"
+                                        result["error"] = f"Pre-auth placed ({b2b_data.get('CHARGEAMOUNT', '0.37')} INR hold). Settlement pending by issuer."
+                                    else:
+                                        result["success"] = True
+                                        result["status"] = "APPROVED@PAID"
+                                    return result
+                                elif any(term in final_text for term in ["failed", "declined", "error"]):
+                                    result["decline_code"] = "charge_declined"
+                                    result["error"] = "Charge rejected on settlement servlet."
+                                    result["status"] = "DECLINED"
+                                    return result
+
+                        theia_text = r_theia.text.lower()
+                        result["response_time"] = round(time.time() - t0, 2)
+                        if any(term in theia_text for term in ["successful", "recharge successful"]):
+                            result["success"] = True
+                            result["status"] = "APPROVED@PAID"
+                            return result
+                        else:
+                            result["decline_code"] = "theia_declined"
+                            result["error"] = "Declined after direct Paytm settlement."
+                            result["status"] = "DECLINED"
+                            return result
+
                     # Check Direct Bank 3DS Challenge
                     bank_url_str = str(r_bank.url).lower()
                     bank_text_lower = r_bank.text.lower()
