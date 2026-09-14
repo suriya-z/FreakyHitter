@@ -353,18 +353,28 @@ class JioHitter:
                                     final_text = r_final.text.lower()
                                     result["response_time"] = round(time.time() - t0, 2)
 
-                                    if "/selfcare/recharge/status" in str(r_final.url).lower() or any(term in final_text for term in ["successful", "recharge successful", "payment approved"]):
-                                        # If Paytm was pending pre-auth
-                                        if b2b_data.get("STATUS") == "PENDING" or "05" in str(servlet_data.get("jioResponseMsg", "")):
-                                            result["success"] = True
-                                            result["status"] = "PENDING@PREAUTH"
-                                            result["decline_code"] = "preauth_pending"
-                                            result["error"] = f"Pre-auth placed ({b2b_data.get('CHARGEAMOUNT', '0.37')} INR hold). Settlement pending by issuer."
-                                        else:
-                                            result["success"] = True
-                                            result["status"] = "APPROVED@PAID"
+                                    jio_msg = str(servlet_data.get("jioResponseMsg", ""))
+                                    msg_parts = jio_msg.split("|")
+                                    jio_code = msg_parts[7] if len(msg_parts) > 7 else ""
+
+                                    if jio_code in ("00", "0", "SUCCESS") or "txn_success" in final_text or "payment successful" in final_text:
+                                        result["success"] = True
+                                        result["status"] = "APPROVED@PAID"
+                                        return result
+                                    elif jio_code == "05" or "unsuccessful" in final_text:
+                                        result["success"] = False
+                                        result["status"] = "DECLINED"
+                                        result["decline_code"] = "jio_payment_unsuccessful"
+                                        result["error"] = "Payment attempt was unsuccessful on Jio Gateway (Code 05)."
+                                        return result
+                                    elif b2b_data.get("STATUS") == "PENDING" or "pending" in final_text:
+                                        result["success"] = False
+                                        result["status"] = "PENDING"
+                                        result["decline_code"] = "bank_pending"
+                                        result["error"] = f"Payment pending bank confirmation ({b2b_data.get('CHARGEAMOUNT', '0.37')} INR hold)."
                                         return result
                                     elif any(term in final_text for term in ["failed", "declined", "error"]):
+                                        result["success"] = False
                                         result["decline_code"] = "charge_declined"
                                         result["error"] = "Charge rejected on settlement servlet."
                                         result["status"] = "DECLINED"
@@ -433,17 +443,28 @@ class JioHitter:
                                 final_text = r_final.text.lower()
                                 result["response_time"] = round(time.time() - t0, 2)
 
-                                if "/selfcare/recharge/status" in str(r_final.url).lower() or any(term in final_text for term in ["successful", "recharge successful", "payment approved"]):
-                                    if b2b_data.get("STATUS") == "PENDING" or "05" in str(servlet_data.get("jioResponseMsg", "")):
-                                        result["success"] = True
-                                        result["status"] = "PENDING@PREAUTH"
-                                        result["decline_code"] = "preauth_pending"
-                                        result["error"] = f"Pre-auth placed ({b2b_data.get('CHARGEAMOUNT', '0.37')} INR hold). Settlement pending by issuer."
-                                    else:
-                                        result["success"] = True
-                                        result["status"] = "APPROVED@PAID"
+                                jio_msg = str(servlet_data.get("jioResponseMsg", ""))
+                                msg_parts = jio_msg.split("|")
+                                jio_code = msg_parts[7] if len(msg_parts) > 7 else ""
+
+                                if jio_code in ("00", "0", "SUCCESS") or "txn_success" in final_text or "payment successful" in final_text:
+                                    result["success"] = True
+                                    result["status"] = "APPROVED@PAID"
+                                    return result
+                                elif jio_code == "05" or "unsuccessful" in final_text:
+                                    result["success"] = False
+                                    result["status"] = "DECLINED"
+                                    result["decline_code"] = "jio_payment_unsuccessful"
+                                    result["error"] = "Payment attempt was unsuccessful on Jio Gateway (Code 05)."
+                                    return result
+                                elif b2b_data.get("STATUS") == "PENDING" or "pending" in final_text:
+                                    result["success"] = False
+                                    result["status"] = "PENDING"
+                                    result["decline_code"] = "bank_pending"
+                                    result["error"] = f"Payment pending bank confirmation ({b2b_data.get('CHARGEAMOUNT', '0.37')} INR hold)."
                                     return result
                                 elif any(term in final_text for term in ["failed", "declined", "error"]):
+                                    result["success"] = False
                                     result["decline_code"] = "charge_declined"
                                     result["error"] = "Charge rejected on settlement servlet."
                                     result["status"] = "DECLINED"
