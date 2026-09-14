@@ -1674,8 +1674,11 @@ async def jio_recharge_command(message: types.Message):
 
     try:
         from jio_hitter import JioHitter
-        proxy_data = await ProxyManager.get_random(user_id)
-        hitter = JioHitter(phone_number=phone_num, proxy_data=proxy_data, plan_amount=target_amt)
+        # Build a small rotation pool so the hitter can skip dead proxies on timeout
+        _picks = [await ProxyManager.get_random(user_id) for _ in range(3)]
+        proxy_pool = [p for p in _picks if p]
+        proxy_data = proxy_pool[0] if proxy_pool else None
+        hitter = JioHitter(phone_number=phone_num, proxy_data=proxy_data, plan_amount=target_amt, proxy_pool=proxy_pool)
         res = await hitter.hit(card_dict)
 
         if status_msg:
