@@ -1498,9 +1498,8 @@ async def hitep_command(message: types.Message):
     status_msg = await message.answer("cooking....")
     session_token = time.time()
     active_sessions[user_id] = session_token
-    
     try:
-        from epoch_hitter import EpochHitter
+        from gateways.epoch_hitter import EpochHitter
         proxy_data = await ProxyManager.get_random(user_id)
         
         card_blocks = []
