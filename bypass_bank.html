@@ -1,0 +1,328 @@
+<!-- URL: https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/brw/auth/choice/init?TK=486DC0DB11334DE5DA230BA490549C96C29AAC9B04E5E707F968DEB01173452826AA16EE926AD20D | STATUS: 200 -->
+<!DOCTYPE html>
+<!-- PAGEID: RETURN-2FA-0824 -->
+<html>
+
+<head>
+ 	<meta name="viewport" content="width=1,initial-scale=1,user-scalable=1" />
+ 	<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+	<script src="https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/acsdata/jquery-3.6.0.min.js"></script>
+	<script src="https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/acsdata/jquery-ui.min.js"></script>
+	<script src="https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/acsdata/respond.min.js" type="text/javascript" ></script>
+	<script src="https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/acsdata/modernizr.js"type="text/javascript" ></script>
+	<script src="https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/acsdata/bootstrap.min.js"type="text/javascript" ></script>
+	<script src="https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/acsdata/acsAuthUtils.js"type="text/javascript" ></script>
+	<link href="https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/acsdata/jquery-ui.min.css" rel="stylesheet" type="text/css" />
+	<link href="https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/css/bootstrap.min.css" rel="stylesheet"	type="text/css" />
+	<link href="https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/css/sia.v1.css" rel="stylesheet"	type="text/css" />
+	<link href="https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/css/sia_01.v1.css" rel="stylesheet"	type="text/css" />
+	<title>Return</title>
+
+	<script type="text/javascript">
+	
+	var contentShow = false;
+
+	function displaySpinner(load) {
+		console.log('Sono dentro a displaySpinner');
+		$("#content").hide();
+		setTimeout(function () {
+			console.log('contentShow ', contentShow);
+			if(contentShow) {
+				$("#spinner").hide();
+				$("#content").show();
+			}
+		}, 2000);
+	}
+	
+	function multilanguage(customMessage) {
+		var posde = customMessage.indexOf("<DE>", 0);
+		var posen = customMessage.indexOf("<EN>", 0);
+					
+		if ((posde >= 0 ) && (posen >=0)) {
+			//è multilingua
+			var language = "it";
+			var resde = "";
+			var resen = "";
+			if (posen > posde) {
+				resde = customMessage.slice(posde+4, posen);
+				resen = customMessage.slice(posen+4, customMessage.length);
+			} else {
+				resen = customMessage.slice(posen+4, posde);
+				resde = customMessage.slice(posde+4, customMessage.length);
+			}
+			
+			if (language ==  "de") {
+				return resde;
+			} else 	{
+				return resen;
+			}
+		} else {
+			//non è multilingua
+			return customMessage;
+		}
+	}
+
+	$(document).ready(function() {
+		$("#content").hide();
+		$("#spinner").show();
+		
+		var authMethod = "2FA";
+		var templateId = "C1";
+		var rcPortale  = "0824";
+		var rcPortaleDetails  = "";
+		var customerMessageDetailsCode  = "";
+		var isCardEnrolled = "9";
+		var cardStatus = "O";
+		var RC = "U";
+		var customMessage = AcsAuthUtils.decodeCustomMessage('');
+		var hasCustomMessage = (customMessage !== null && customMessage !== 'null' && customMessage !== undefined && customMessage !== '' && customMessage.length > 0);
+		if (hasCustomMessage) customMessage = multilanguage(customMessage);
+		
+		var retryPassMax = "5";
+		retryPassMax = ((retryPassMax !== null && retryPassMax !== '' &&
+				retryPassMax !== '' && retryPassMax.length > 0) ?
+						parseInt(retryPassMax) : 0);
+		var retryPassCounter = "0";
+		retryPassCounter = ((retryPassCounter !== null && retryPassCounter !== '' &&
+				retryPassCounter !== '' && retryPassCounter.length > 0) ?
+						parseInt(retryPassCounter) : 0);
+		
+		var showExpiredSession = null;
+		showExpiredSession = ('true' === $('#showExpiredSession').html() ? true : false);
+		
+		console.log('authMethod', authMethod);
+		console.log('templateId', templateId);
+		console.log('rcPortale', rcPortale);
+		console.log('rcPortaleDetails', rcPortaleDetails);
+		console.log('customerMessageDetailsCode', customerMessageDetailsCode);
+		console.log('isCardEnrolled', isCardEnrolled);
+		console.log('cardStatus', cardStatus);
+		console.log('customMessage', customMessage);
+		console.log('RC', RC);
+		console.log('showExpiredSession', showExpiredSession);
+		
+		var isTokenization = ("" == "true");
+	    console.log('isTokenization', isTokenization);
+
+		// contatori tentativi
+		console.log('retryPassMax', retryPassMax);
+		console.log('retryPassCounter', retryPassCounter);
+
+		console.log('ACS.ntr', "0");
+		console.log('ACS.nsp', "1");
+		console.log('ACS.maxRetryPass', "5");
+		console.log('ACS.maxSendPass', "99");
+
+		if (templateId !== undefined && templateId !== null && templateId.length > 0) {
+			if (isCardEnrolled !== undefined && isCardEnrolled !== null && isCardEnrolled !== '' && isCardEnrolled !== '9') {
+				// FIXME: CARD NOT ENROLLED !!!
+				console.log('Case:', authMethod, '-', 'card_not_enrolled');
+				if (hasCustomMessage) $('#divWarningNotEnrolledCard').html(customMessage);
+				$('#divInfoTextWarning').show();
+				$('#divWarningNotEnrolledCard').show();
+				contentShow = true;
+			} else if (cardStatus !== 'O') {
+				// FIXME: CARD BLOCKED !!!
+				console.log('Case:', authMethod, '-', 'card_already_blocked');
+				if (hasCustomMessage) $('#divWarningBlockCard').html(customMessage);
+				$('#divInfoTextWarning').show();
+				$('#divWarningBlockCard').show();
+				contentShow = true;
+			} else if (authMethod === '1FA' || authMethod === '2FA' || authMethod === 'DYN') {
+				console.log('Case:', authMethod, '-', rcPortale);
+
+				// send pwd success
+				if ('000' === rcPortale.substring(0, 3) || RC == 'C') {
+					document.vanilla.submit();
+				} else if ('08' === rcPortale.substring(0, 2) || '09' === rcPortale.substring(0, 2) || '026' === rcPortale.substring(0, 3) || '0224' === rcPortale) {
+					if (rcPortale === '0823' || rcPortale === '0824' || rcPortale === '0224' || rcPortale === '0264') $('#divWarningPasswordNotSent').show();
+					else $('#divGenericAuthError').show();
+					$('#divInfoTextWarning').show();
+					contentShow = true;
+				} else if (rcPortale.substring(0, 3) == '030') {
+					// auth not passed
+					if (hasCustomMessage) $('#divWarningBlockCard').html(customMessage);
+					$('#divInfoTextWarning').show();
+					$('#divWarningBlockCard').show();
+					contentShow = true;
+				} else if(rcPortale === '0220' || rcPortale === '0522' || (authMethod !== '2FA' && (rcPortale === '0221' || rcPortale === '0521' || rcPortale === '0551'))) {
+					if (hasCustomMessage) $('#divAuthenticationFailed').html(customMessage);
+					$('#divWarningBlockCard').hide();
+					$('#divAuthenticationFailed').show();
+					$('#divInfoTextWarning').show();
+					contentShow = true;
+				} else if((rcPortale === '0221' || rcPortale === '0521' || rcPortale === '0551') && authMethod === '2FA') {
+					$('#divWarningBlockCard').hide();
+					$('#divWarningNotEnrolledCard').show();
+					$('#divInfoTextWarning').show();
+					contentShow = true;
+				} else if ('021' === rcPortale.substring(0, 3)) {
+					if(showExpiredSession) {
+						$('#divSessionExpiredError').show();
+						$('#divInfoTextWarning').show();
+						contentShow = true;
+					} else {
+						document.vanilla.submit();
+					}
+				} else if (rcPortale.substring(0, 3) == '020' || rcPortale.substring(0, 3) == '050' || rcPortale.substring(0, 3) == '080') {
+					// blacklist
+					// Poste
+					if (rcPortaleDetails == 'account_temporary_locked') {
+						$('#divInfoTextWarning').show();
+						$('#divWarningBlockCard').show();
+						contentShow = true;
+					} else {
+						if (hasCustomMessage) $('#divWarningNotEnrolledCard').html(customMessage);
+						$('#divInfoTextWarning').show();
+						$('#divWarningNotEnrolledCard').show();
+						contentShow = true;
+						//HVB partially not enrolled
+						if (templateId === 'UD') {
+							$('#divInfo').hide();
+						}
+					}
+				} else {
+					if (hasCustomMessage) $('#divGenericAuthError').html(customMessage);
+					$('#divInfoTextWarning').show();
+					$('#divGenericAuthError').show();
+					contentShow = true;
+				}
+			} else if (authMethod === 'OOB') {
+				console.log('Case:', authMethod, '-', rcPortale);
+
+				if (RC == 'C') {
+					$("#PAResForm").submit();
+				} else if ('000' === rcPortale.substring(0, 3) || '010' === rcPortale.substring(0, 3)) {
+					if ('0004' === rcPortale || '0011' === rcPortale) {
+						if (hasCustomMessage) $('#divErrorAuthOob').html(customMessage);
+						$('#divInfoTextWarning').show();
+						$('#divErrorAuthOob').show();
+						contentShow = true;
+						if (!hasCustomMessage) $('#divInfoTextError').show();
+					} else {
+						$("#PAResForm").submit();
+					}
+				} else if ('021' === rcPortale.substring(0, 3)) {
+					if(showExpiredSession) {
+						$('#divSessionExpiredError').show();
+						$('#divInfoTextWarning').show();
+						contentShow = true;
+					} else {
+						$("#PAResForm").submit();
+					}
+				} else if ('080' === rcPortale.substring(0, 3) || '089' === rcPortale.substring(0, 3) || '09' === rcPortale.substring(0, 2)) {
+					$('#divGenericAuthError').show();
+					$('#divInfoTextWarning').show();
+					contentShow = true;
+				} else if (rcPortale.substring(0, 3) == '030' || rcPortale === '0204' || rcPortale === '0206') {
+					// auth not passed - VERIFY ME!
+					if (hasCustomMessage) $('#divErrorAuthOob').html(customMessage);
+					$('#divInfoTextWarning').show();
+					$('#divErrorAuthOob').show();
+					if (!hasCustomMessage) $('#divInfoTextError').show();
+					contentShow = true;
+				} else if (rcPortale.substring(0, 3) == '020') {
+					// blacklist
+					if (hasCustomMessage) $('#divGenericAuthError').html(customMessage);
+					$('#divInfoTextWarning').show();
+					$('#divGenericAuthError').show();
+					contentShow = true;
+				} else if (rcPortale.substring(0, 3) == '050') {
+					if (hasCustomMessage) $('#divWarningAlreadyBlockedCard').html(customMessage);
+					$('#divInfoTextWarning').show();
+					$('#divWarningAlreadyBlockedCard').show();
+					contentShow = true;
+				} else {
+					if (hasCustomMessage) $('#divErrorAuthOob').html(customMessage);
+					$('#divInfoTextWarning').show();
+					$('#divErrorAuthOob').show();
+					if (!hasCustomMessage) $('#divInfoTextError').show();
+					contentShow = true;
+				}
+			} else if (authMethod === 'CHS') {
+				$('#divInfoTextWarning').show();
+				$('#divGenericAuthError').show();
+				contentShow = true;
+			} else if (authMethod === 'LNG') {
+				$("#PAResForm").submit();
+			}
+		} else {
+			$('#divInfoTextWarning').show();
+			$('#divGenericAuthError').show();
+			contentShow = true;
+		}
+
+		$("#cancelBtn").click(function() {
+			let input = document.createElement("input");
+			input.setAttribute("type", "hidden");
+			input.setAttribute("id", "cancel");
+			input.setAttribute("name", "cancel");
+			input.setAttribute("value", "cancel");
+			$('#content').hide();
+			$('#spinner').show();
+			if(authMethod === '1FA'|| authMethod === '2FA'){
+				$('#challengeDataEntry').val("");
+				$("#vanilla").append(input);
+				$("#vanilla").submit();
+			} else {
+				$("#PAResForm").append(input);
+				$("#PAResForm").submit();
+			}
+		});
+		
+	});
+
+	</script>
+
+</head>
+
+<body onload="displaySpinner('0')">
+
+	<div class="container" id="spinner">
+		<div id="loading" class="center"></div>
+
+		<div class="cardHolderLoader_mastercard"></div>
+	    </div>
+
+	<div class="container" id="content" style="display: none;">
+
+		<p id="showExpiredSession" style="display: none">???C1_2FA_show_expired_session???</p>
+
+	    <div id="secCancelButton">
+		    	<button id="cancelBtn" name="cancelBtn" value="cancelBtn" class="btn" type="button">Chiudi</button>
+			    </div>
+		<div id="divBrandingZone">
+			<div class ="issuerImage" style="background-image:url(https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/acsimages/cassacentrale.svg)"></div>
+			<div class="cardInfoImage_mastercard"></div>
+	     		</div>
+		<div id= "divPurchaseAuthenticationTitle">Pagamento Sicuro 3DS</div>
+				<div class="sectionMessages">
+						<div id="divInfoTextWarning" class="warning" style="color:???C1_errorTextColor???">
+						    <img class="warningLogo" src="https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/assets/images/warning_auth_3ds2.png" />
+						    <span id="divWarningPasswordNotSent" style="display: none;">Spiacenti, si è presentato un errore tecnico. Si prega di chiudere la pagina e riprovare più tardi.</span>
+						    <span id="divWarningBlockCard" style="display: none;">I codici inseriti non sono corretti.<br/><br/>Attenzione, per motivi di sicurezza abbiamo temporaneamente inibito il servizio. E' necessario attendere 5 minuti prima di effettuare nuovamente l'operazione di pagamento.</span>
+							<span id="divWarningNotEnrolledCard" style="display: none;">Carta non abilitata al servizio 3DS. Si prega di verificare l'attivazione del servizio sul sito www.inbank.it.</span>
+							<span id="divSessionExpiredError" style="display: none;"><b>Attenzione!</b><br/>La sessione è scaduta</span>
+							<span id="divGenericAuthError" style="display: none;">Spiacenti, si è presentato un errore tecnico. Si prega di chiudere la pagina e riprovare più tardi.</span>
+							<span id="divAuthenticationFailed" style="display: none;">Spiacenti, si è presentato un errore tecnico. Si prega di chiudere la pagina e riprovare più tardi.</span>
+						</div>
+					</div>
+
+					<div id="formOtp">
+						<form method="post" action="https://securegw.paytmpayments.in/instaproxy/bankresponse/call/back/y9z0aT1qt1O9Kxa6Rc2D4eSqZsKcOYCQqCrpHWwpmik/RESP/v1" name="vanilla" id="vanilla">
+							<input type="hidden" name="cres" id="cres" value="eyJ0aHJlZURTU2VydmVyVHJhbnNJRCI6IjkzNjZiODBhLTk0YTEtNDBkZS1hYmFkLWJjMWE0ZjQ4Y2M4OSIsIm1lc3NhZ2VUeXBlIjoiQ1JlcyIsIm1lc3NhZ2VWZXJzaW9uIjoiMi4yLjAiLCJhY3NUcmFuc0lEIjoiOTNmZDI5MjMtMTBmYS00YmIyLTlkYmUtMWU4NDFlODZkNmJmIiwidHJhbnNTdGF0dXMiOiJOIn0"/>
+							<input type="hidden" name="threeDSSessionData" id="threeDSSessionData" value="adc5622f-9ce4-405a-9377-5b892fa041ba"/>
+
+							<div>
+								<button type="submit" id="confirm" name="confirm" value="confirm" class="btn btn-primary" style="background-color:#153E6A;border-color:#153E6A;color:#FFFFFF">
+											Chiudi</button>
+									</div>
+						</form>
+					</div>
+		      	<button id="clps" class="helpCollapsButton">Hai bisogno di aiuto?</button>
+										<div class="helpClass helpContent" style="background-color:;">Per informazioni sul pagamento e sul sistema di sicurezza 3DS, rivolgiti all&rsquo;assistenza clienti. Compila il form disponibile sul sito www.inbank.it</div>
+									<div id="secFooter"></div>
+				<script src="https://3ds.nexigroup.com/ACFS_3DS_ACS_GUI/resources/acsdata/acsAccordions.js"></script>
+				</div>
+</body>
+</html>

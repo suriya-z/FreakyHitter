@@ -1,0 +1,351 @@
+<!-- URL: https://secure.paytmpayments.com/theia/v1/transactionStatus?id=20260914210560000306281953938574559 | STATUS: 200 -->
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <!-- ui logger script -->
+    <script>
+        "use strict";(function(a){var b={version:"v0",screen:{width:a.innerWidth,height:a.innerHeight},url:"https://securegw.paytm.in/ui/logger",option:{debug:!0,env:"Logger"}},c=[],d=function(a,b){var c=[],d=[];return null==b&&(b=function(a,b){return c[0]===b?"[Circular ~]":"[Circular ~."+d.slice(0,c.indexOf(b)).join(".")+"]"}),function(e,f){if(0<c.length){var g=c.indexOf(this);~g?c.splice(g+1):c.push(this),~g?d.splice(g,window.Infinity,e):d.push(e),~c.indexOf(f)&&(f=b.call(this,e,f))}else c.push(f);return null==a?f:a.call(this,e,f)}},e=function(a,b,c,e){return JSON.stringify(a,d(b,e),c)},f=function(a){try{a=JSON.stringify(a)}catch(b){try{a=e(a)}catch(b){a="[{\"eventType\":\"JSON_STRINGIFY_EXCEPTION\"}]"}}return a},g=function(){return a&&a.navigator&&a.navigator.userAgent?a.navigator.userAgent:""},h=function(){return a.navigator&&a.navigator.connection&&a.navigator.connection.effectiveType?a.navigator.connection.effectiveType:""},i=function(){return{network:h(),userAgent:g()}},j=function(c){c||(c={});var d=c.meta||{};delete c.meta,Object.assign(b.option,c,d,{pageUrl:a.location.href,v:b.version})},k=function(){a.addEventListener("error",function(a){n({eventType:"JS_ERROR",message:a.message,url:a.filename,line:a.lineno,column:a.colno,error:a.error&&a.error.stack||"",errorType:a.type})}),a.setInterval(function(){q(!0)},5000),a.addEventListener("unload",function(){q(!0)})},l=function(){var a={};try{var b=new Date;a.time=b.getTime(),a.tzOffset=b.getTimezoneOffset(),a.iso=b.toISOString()}catch(b){a.time="",a.tzOffset="",a.iso=""}return a},m=function(){var a=Math.floor,b="IDS";try{return b=a(1000000000000000000*Math.random()).toString(36),"".concat(b).concat(performance.now().toString().replace(".",""))}catch(a){try{return"".concat(b).concat(Date.now())}catch(a){return b}}},n=function(a){return a?a.eventType?void(c.push(Object.assign(a,b.option,b.screen,l(),i())),q()):void console.log("eventType is mandatory field."):void console.log("log object should be of object type")},o=function(a,c){var d=new XMLHttpRequest;try{d.open("POST","".concat(b.url).concat(c)),d.setRequestHeader("Content-Type","application/json;charset=UTF-8"),d.send(a)}catch(a){console.log("error occur in XMLHttpRequest",a)}},p=function(a){var c="?id=".concat(m());a=f(a);try{window.navigator.sendBeacon("".concat(b.url).concat(c),new Blob([a],{type:"text/plain; charset=UTF-8"}))}catch(b){o(a,c)}},q=function(a){(c.length>=15||a&&0<c.length)&&(r(c),c=[])},r=function(a){return b.option.debug?void a.forEach(function(a){console.log("Log => ",f(a))}):void p(a)},s=function(){Object.assign||(Object.assign=function(){var a=Array.prototype.slice.call(arguments,0);if(0<a.length){var b=a[0];if(1<a.length)for(var c,d=1;d<a.length;d++)for(var e in c=a[d],c)c.hasOwnProperty&&c.hasOwnProperty(e)&&(b[e]=c[e]);return b}return{}})};(function _load(){s(),k(),j({})})(),a.Logger={init:function _init(a){a||(a={}),j(a)},log:n}})(window);
+    </script>
+    <!-- ui logger script -->
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: sans-serif;
+        }
+
+        .loader-wrapper {
+            height: 100%;
+            width: 100%;
+            padding-bottom: 20px;
+            position: absolute;
+        }
+
+        /*.loader-wrapper:before {*/
+            /*content: '';*/
+            /*position: absolute;*/
+            /*left: 0;*/
+            /*right: 0;*/
+            /*bottom: 10px;*/
+            /*height: 10px;*/
+            /*width: 100%;*/
+            /*background: #00b9f5;*/
+        /*}*/
+
+        /*.loader-wrapper:after {*/
+            /*content: '';*/
+            /*position: absolute;*/
+            /*left: 0;*/
+            /*right: 0;*/
+            /*bottom: 0;*/
+            /*height: 10px;*/
+            /*width: 100%;*/
+            /*background: #002e6e;*/
+        /*}*/
+
+        .loader-box {
+            position: absolute;
+            text-align: center;
+            background: #ffffff;
+            min-width: 200px;
+            left: 0;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            margin: auto;
+            height: 150px;
+        }
+
+        .loader-box h3 {
+            font-size: 24px;
+            color: #000;
+            margin: 15px 0 12px 0;
+        }
+
+        .loader-box img {
+            max-width: 80px;
+        }
+
+        .loader-box p {
+            font-size: 17px;
+            color: #666666;
+            /* max-width:232px; */
+            line-height: 24px;
+            margin: 0 auto;
+            padding: 0 15%;
+        }
+
+        .spinner {
+            width: 75px;
+            text-align: center;
+            display: inline-block;
+        }
+
+        .spinner>div {
+            width: 10px;
+            height: 10px;
+            background: #012b71;
+            border-radius: 100%;
+            display: inline-block;
+            -webkit-animation: sk-bouncedelay 1s infinite ease-in-out both;
+            -ms-animation: sk-bouncedelay 1s infinite ease-in-out both;
+            -moz-animation: sk-bouncedelay 1s infinite ease-in-out both;
+            -o-animation: sk-bouncedelay 1s infinite ease-in-out both;
+            animation: sk-bouncedelay 1s infinite ease-in-out both;
+        }
+
+        .spinner .bounce1 {
+            -webkit-animation-delay: -0.64s;
+            animation-delay: -0.64s;
+        }
+
+        .spinner .bounce2 {
+            -webkit-animation-delay: -0.48s;
+            animation-delay: -0.48s;
+        }
+
+        .spinner .bounce3 {
+            -webkit-animation-delay: -0.32s;
+            animation-delay: -0.32s;
+        }
+
+        .spinner .bounce4 {
+            -webkit-animation-delay: -0.16s;
+            animation-delay: -0.16s;
+            background: #48baf5;
+        }
+
+        .spinner .bounce5 {
+            background: #48baf5;
+        }
+
+        @-ms-keyframes sk-bouncedelay {
+
+            0%,
+            80%,
+            100% {
+                -ms-transform: scale(0.2)
+            }
+
+            40% {
+                -ms-transform: scale(1.0)
+            }
+        }
+
+        @-o-keyframes sk-bouncedelay {
+
+            0%,
+            80%,
+            100% {
+                -o-transform: scale(0.2)
+            }
+
+            40% {
+                -o-transform: scale(1.0)
+            }
+        }
+
+        @-moz-keyframes sk-bouncedelay {
+
+            0%,
+            80%,
+            100% {
+                -moz-transform: scale(0.2)
+            }
+
+            40% {
+                -moz-transform: scale(1.0)
+            }
+        }
+
+        @-webkit-keyframes sk-bouncedelay {
+
+            0%,
+            80%,
+            100% {
+                -webkit-transform: scale(0.2)
+            }
+
+            40% {
+                -webkit-transform: scale(1.0)
+            }
+        }
+
+        @keyframes sk-bouncedelay {
+
+            0%,
+            80%,
+            100% {
+                -webkit-transform: scale(0.2);
+                transform: scale(0.2);
+            }
+
+            40% {
+                -webkit-transform: scale(1.0);
+                transform: scale(1.0);
+            }
+        }
+
+        @media all and (max-width: 900px) {
+            .spinner {
+                display: inline-block;
+            }
+
+            .loader-img {
+                display: none;
+
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <FORM NAME='TESTFORM' ACTION='https://pay.jio.com/jiopg/v1/myjio-b2b-callback' METHOD='POST'>
+        <input type='hidden' name='ORDERID' value='BR000CXE1BS7'>
+<input type='hidden' name='MID' value='Relian85585126925964'>
+<input type='hidden' name='TXNID' value='20260914210560000306281953938574559'>
+<input type='hidden' name='TXNAMOUNT' value='11.00'>
+<input type='hidden' name='PAYMENTMODE' value='DC'>
+<input type='hidden' name='CURRENCY' value='INR'>
+<input type='hidden' name='TXNDATE' value='2026-09-14 15:38:07.0'>
+<input type='hidden' name='STATUS' value='PENDING'>
+<input type='hidden' name='RESPCODE' value='402'>
+<input type='hidden' name='RESPMSG' value='Looks like the payment is not complete. Please wait while we confirm the status with your bank.'>
+<input type='hidden' name='MERC_UNQ_REF' value='RECHARGE_JIO_NA_5088899792_TN'>
+<input type='hidden' name='GATEWAYNAME' value='IRBH'>
+<input type='hidden' name='BANKTXNID' value=''>
+<input type='hidden' name='BANKNAME' value='Cassa Centrale Banca - Credito Cooperativo del Nord Est SpA'>
+<input type='hidden' name='CHARGEAMOUNT' value='0.37'>
+<input type='hidden' name='CHECKSUMHASH' value='oMSfl+m7KZX93U18jbGEoiB2igdbHXWVlNKXvUWrYeb21qye130B+zsPghqerXW2Km9BppXle0RGd4DdQhcPX6HbBMkIKON0S+Ytjb9WBGc='>
+
+    </FORM>
+    
+    
+    <div class='loader-wrapper'>
+        <div class='loader-box'>
+            <div class="spinner">
+                <div class="bounce1"></div>
+                <div class="bounce2"></div>
+                <div class="bounce3"></div>
+                <div class="bounce4"></div>
+                <div class="bounce5"></div>
+            </div>
+            <!-- <img class="loader-img" src="https://staticgw1.paytm.in/common/images/loader.gif" alt="Loading..." /> -->
+            <h3>Processing</h3>
+             <!-- <p id="wait_time" style="display: none;">Please wait as it may take upto 5 seconds</p>-->
+            <p></p>
+            <p>Please do not press 'Back' or 'Refresh' button</p>
+        </div>
+    </div>
+    <script>
+        var elements = document.forms[0] && document.forms[0].elements, orderId = elements && elements['ORDERID'] && elements['ORDERID'].value,
+            mid = elements && elements['MID'] && elements['MID'].value;
+        if(Logger) {
+            var config = {}, pageOrigin = window.location.origin,
+            permittedOrigins = {'https://securegw.paytm.in': true, 'https://secure.paytm.in': true, 'https://securex.paytm.in': true};
+            
+            config["env"] = 'txnStatus';
+            if(permittedOrigins.hasOwnProperty(pageOrigin)){
+                config["env"] = 'txnStatus_prod';
+                config["debug"] = false;
+            }
+
+            config["meta"] = {
+                "mid" : mid,
+                "orderId" : orderId
+            }
+            Logger.init(config);
+        }
+
+        function log(data){
+            Logger && Logger.log(data);
+        }
+        var formData = {}, formsDataArray = Array.prototype.slice.call(elements);
+        for(var i=0; i< formsDataArray.length;i++) {
+            formData[formsDataArray[i].name] = formsDataArray[i].value;
+        }
+        
+        // Log for txnStatus page rendering
+        log({"eventType":"ON_PAGE_LOAD", "eventData" : "Txn Status Page is Loaded", "formData": formData});
+    </script>
+    <script type="text/javascript">
+        try {
+            if(document.getElementsByName("oneClickInfo").length){
+                var oneClickInfoValue = document.getElementsByName("oneClickInfo")[0].value;
+                if(oneClickInfoValue && window.HTMLOUT){
+                    window.HTMLOUT.setOneClickToken(oneClickInfoValue);
+                }
+                if(oneClickInfoValue && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.setOneClickTokenIOS){
+                    window.webkit.messageHandlers.setOneClickTokenIOS.postMessage("oneClickToken#"+oneClickInfoValue);
+                    log({"eventType":"VISA_ONE_CLICK_DATA_SET_JS", "OS_ENVIRONMENT" : "IOS"});
+                }
+            }
+            
+            if(document.getElementsByName("retryInfo").length > 0 && document.getElementsByName("retryInfo")[0].value.length>0 && window.HTMLOUT){
+                //TODO
+            }
+        } catch(error) {}
+
+        try {
+            var txnStatus = elements && elements['STATUS'] && elements['STATUS'].value,
+                formUri = document.forms[0] && document.forms[0].action;
+            if(window && window.localStorage) {
+                // check txn status and updating local storage if the txn failed
+                var getData = JSON.parse(localStorage.getItem('latestUsedPaymodes'));
+                var savedPaymodes = getData && getData.latestUsedPaymodes;
+                
+                var validSuccessPaymodes = [];
+                for(var i=0; i< (savedPaymodes && savedPaymodes.length);i++) {
+                    
+                    if(savedPaymodes[i].orderId) {
+                        if(savedPaymodes[i].orderId === orderId && txnStatus !== 'TXN_SUCCESS') {
+                            continue;
+                        }
+                        delete savedPaymodes[i].orderId;
+                    }
+                    validSuccessPaymodes.push(savedPaymodes[i]);
+                }
+                var paymodesObj = {};
+                paymodesObj['latestUsedPaymodes'] = validSuccessPaymodes;
+                window.localStorage.setItem('latestUsedPaymodes', JSON.stringify(paymodesObj));
+                // logged for pushing valid localStorage paymodes
+                log({"eventType":"LOCAL_STORAGE_VALID_SAVED_PAYMODES", "validSavedPaymodes" : JSON.stringify(paymodesObj)});
+            }
+            // logged before form submit
+            log({"eventType":"TXN_STATUS_FORM_POST", "FORM_URI":encodeURIComponent(formUri), "TXN_STATUS": txnStatus});
+            
+            // Logged after 5sec threshold
+            setTimeout(function(){
+                    log({"eventType":"NOT_TXN_STATUS_FORM_SUBMITTED", "FORM_URI" : encodeURIComponent(formUri), "message": "Form Not Submitted also after 5 seconds threshold"});
+            }, 5000);
+            
+            document.forms[0].submit();
+        } catch(error) {
+            // logging when error occurs on form submit
+            log({"eventType":"ERROR_ON_TXN_STATUS_FORM_SUBMIT", "message": error.message, "name": error.name, "stack": error.stack });
+            
+            // Submit Form even if some exception occurs for eg. localStorage is not accessible in webview or some browser or any other exception
+            document.forms[0].submit();
+        }
+    
+    </script>
+    <!-- <script>
+        var waitTimeElem = document.getElementById('wait_time');
+        if(subFlow === "true"){
+            waitTimeElem.style.display = "block";
+        }
+    </script>-->
+
+</body>
+
+</html>

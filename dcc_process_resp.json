@@ -1,0 +1,39 @@
+<!-- URL: https://securegw.paytmpayments.in/theia/api/v1/processTransaction?mid=Relian85585126925964&orderId=BR000CXEVB3X | STATUS: 200 -->
+{
+  "head": {
+    "responseTimestamp": "1789394450564",
+    "version": "v1"
+  },
+  "body": {
+    "resultInfo": {
+      "resultStatus": "S",
+      "resultCode": "0000",
+      "resultMsg": "Success"
+    },
+    "callbackUrl": "https://authentication.cardinalcommerce.com/ThreeDSecure/V2_1_0/CReq?oid=62470771568c5d33d0b7aac3&tid=2b41f74f-28e7-4003-9dd7-741a5b8d04e2",
+    "method": "POST",
+    "content": {
+      "creq": "eyJtZXNzYWdlVHlwZSI6IkNSZXEiLCJtZXNzYWdlVmVyc2lvbiI6IjIuMi4wIiwidGhyZWVEU1NlcnZlclRyYW5zSUQiOiI1OTJjNTg4ZC01ZDdlLTRkMjAtYmM3MC1lZTMyN2Y0Y2EyZTYiLCJhY3NUcmFuc0lEIjoiMmI0MWY3NGYtMjhlNy00MDAzLTlkZDctNzQxYTViOGQwNGUyIiwiY2hhbGxlbmdlV2luZG93U2l6ZSI6IjAxIn0",
+      "threeDSSessionData": "2eeb1710-541e-4cc9-922c-c44aa33fcf91"
+    },
+    "bankForm": {
+      "pageType": "redirect",
+      "isForceResendOtp": false,
+      "redirectForm": {
+        "actionUrl": "https://authentication.cardinalcommerce.com/ThreeDSecure/V2_1_0/CReq?oid=62470771568c5d33d0b7aac3&tid=2b41f74f-28e7-4003-9dd7-741a5b8d04e2",
+        "method": "POST",
+        "type": "redirect",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        "content": {
+          "creq": "eyJtZXNzYWdlVHlwZSI6IkNSZXEiLCJtZXNzYWdlVmVyc2lvbiI6IjIuMi4wIiwidGhyZWVEU1NlcnZlclRyYW5zSUQiOiI1OTJjNTg4ZC01ZDdlLTRkMjAtYmM3MC1lZTMyN2Y0Y2EyZTYiLCJhY3NUcmFuc0lEIjoiMmI0MWY3NGYtMjhlNy00MDAzLTlkZDctNzQxYTViOGQwNGUyIiwiY2hhbGxlbmdlV2luZG93U2l6ZSI6IjAxIn0",
+          "threeDSSessionData": "2eeb1710-541e-4cc9-922c-c44aa33fcf91"
+        }
+      }
+    },
+    "riskContent": {
+      "eventLinkId": "ppse5ae7cec1a9804efc92bbb6001a5e57c8"
+    }
+  }
+}

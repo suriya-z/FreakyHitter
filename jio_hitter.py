@@ -43,7 +43,10 @@ class JioHitter:
         if len(self.phone) > 10 and self.phone.startswith("91"):
             self.phone = self.phone[2:]
         self.proxy_data = proxy_data
-        self.target_amount = plan_amount or 11.0
+        try:
+            self.target_amount = float(plan_amount) if plan_amount else 11.0
+        except (ValueError, TypeError):
+            self.target_amount = 11.0
         # Pool of proxies to rotate through on connection/timeout failures
         self._proxy_pool: list = [p for p in (proxy_pool or []) if p] or ([proxy_data] if proxy_data else [])
 
@@ -482,16 +485,26 @@ class JioHitter:
                             result["status"] = "DECLINED"
                             return result
 
-                    # Check Direct Bank 3DS Challenge
+                    # ── CardinalCommerce / ACS 3DS2 Challenge Detection ──
                     bank_url_str = str(r_bank.url).lower()
                     bank_text_lower = r_bank.text.lower()
-                    if any(ind in bank_url_str for ind in ["mdpayacs", "acs", "entersekt", "cardinalcommerce", "arcot", "3dsecure", "centinel", "challenge"]) or \
-                       any(term in bank_text_lower for term in ["verification code", "verify by phone", "one time password", "enter the verification code", "resend code", "challengeinfo", "secure checkout"]):
+                    is_cardinal = any(ind in bank_url_str for ind in ["mdpayacs", "acs", "entersekt", "cardinalcommerce", "arcot", "3dsecure", "centinel", "challenge"]) or \
+                       any(term in bank_text_lower for term in ["verification code", "verify by phone", "one time password", "enter the verification code", "resend code", "challengeinfo", "secure checkout"])
+
+                    if is_cardinal:
                         result["response_time"] = round(time.time() - t0, 2)
                         result["decline_code"] = "3ds_required"
                         phone_hint_m = re.search(r'sent to your phone number\s+([^\s<]+)', r_bank.text, re.I)
-                        hint = f" ({phone_hint_m.group(1)})" if phone_hint_m else ""
-                        result["error"] = f"3DS OTP Challenge required by issuer{hint}."
+                        phone_hint2 = re.search(r'\*{3}-\*{3}-(\d{4})', r_bank.text)
+                        if phone_hint_m:
+                            hint = f" (phone: {phone_hint_m.group(1)})"
+                        elif phone_hint2:
+                            hint = f" (phone: ***-***-{phone_hint2.group(1)})"
+                        else:
+                            hint = ""
+                        issuer_m = re.search(r'alt="([^"]*)\s+[Ll]ogo"', r_bank.text, re.I)
+                        issuer = f" [{issuer_m.group(1)}]" if issuer_m else ""
+                        result["error"] = f"3DS OTP Challenge required by issuer{issuer}{hint}."
                         result["status"] = "3DS_CHALLENGE"
                         return result
 
