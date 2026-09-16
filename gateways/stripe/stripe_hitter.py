@@ -2076,9 +2076,10 @@ class StripeAPIHitter:
                                         # ── STEP 2: POST verify_challenge ───────────────────────────────────
                                         # Use _trawl_captcha_token extracted natively by Trawl.
                                         _best_token = _trawl_captcha_token
+                                        _active_cs = (isinstance(res, dict) and res.get('client_secret')) or (isinstance(confirm_json, dict) and confirm_json.get('client_secret')) or client_secret
                                         _verify_data = {
                                             "key": self.pk_live,
-                                            "client_secret": client_secret,
+                                            "client_secret": _active_cs,
                                         }
                                         if _best_token:
 
