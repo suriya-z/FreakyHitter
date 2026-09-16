@@ -1895,6 +1895,7 @@ class StripeAPIHitter:
                                 next_action = res.get("next_action") or {}
                                 sdk = next_action.get("use_stripe_sdk") or {}
                                 captcha_triggered = False
+                                _is_waf_gate = False  # guard: assigned properly below after sdk extraction
                                 _top_rqdata = None
                                 _top_sitekey = None
 
@@ -2284,10 +2285,13 @@ class StripeAPIHitter:
                                 )
                                 processed_auth = False
 
-                                # Fallback source: use PaymentIntent ID if sdk didn't surface three_d_secure_2_source
-                                # Some merchants (e.g. PoYo) don't surface source in confirm — pi_id IS the source
-                                if not source and pi:
-                                    source = pi
+                                # NOTE: Do NOT fall back to pi_ as source — /v1/3ds2/authenticate
+                                # rejects raw PaymentIntent IDs with HTTP 400. Only src_, tdsrc_,
+                                # and pi_3ds_ prefixes are valid. If source is None here, skip the
+                                # EMV matrix and let the bypasser handle it via resolve_3ds().
+                                _VALID_SOURCE_PREFIXES = ('src_', 'tdsrc_', 'pi_3ds_')
+                                if source and not str(source).startswith(_VALID_SOURCE_PREFIXES):
+                                    source = None  # reject invalid prefix — don't 400 the endpoint
 
                                 if source:
                                     # Recipe 3 Fix: Ensure tz_id has a safe integer fallback
