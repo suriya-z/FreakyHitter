@@ -12,6 +12,7 @@ import hashlib
 import random
 import asyncio
 import html
+import inspect
 from typing import Dict, Optional, Any
 from urllib.parse import urlencode, urljoin
 from curl_compat import ChromeSession
@@ -96,12 +97,18 @@ def _flatten(data: dict, prefix: str = "") -> dict:
 
 async def _text(resp) -> str:
     t = resp.text
-    return await t() if callable(t) else t
+    val = t() if callable(t) else t
+    if inspect.isawaitable(val):
+        return await val
+    return val
 
 
 async def _json(resp) -> Any:
     j = resp.json
-    return await j() if callable(j) else j
+    val = j() if callable(j) else j
+    if inspect.isawaitable(val):
+        return await val
+    return val
 
 
 def _html_challenge(html_text: str) -> bool:
