@@ -2130,7 +2130,6 @@ class StripeAPIHitter:
                                                 result['captcha_bypassed'] = True
                                                 result['raw_response'] = _verify_json
                                                 try:
-                                                    from gateways.stripe.stripe_3ds_bypasser import Stripe3DSBypasser
                                                     bypasser_res = await Stripe3DSBypasser.resolve_3ds(
                                                         result,
                                                         proxy_data=self.proxy_data,
