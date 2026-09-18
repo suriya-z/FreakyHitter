@@ -1470,7 +1470,13 @@ class StripeAPIHitter:
                     confirm_data = {
                         "payment_method": pm_id,
                         "expected_payment_method_type": "card",
-                        # use_stripe_sdk omitted — same reason as PI path above
+                        "mandate_data[customer_acceptance][type]": "online",
+                        "mandate_data[customer_acceptance][online][infer_from_client]": "true",
+                        "client_context[currency]": (self.currency.lower() if hasattr(self, 'currency') and self.currency else "usd"),
+                        "client_context[mode]": "setup",
+                        "client_context[payment_method_types][0]": "card",
+                        "client_context[setup_future_usage]": "off_session",
+                        # use_stripe_sdk omitted — Stripe defaults to SDK mode for 3DS shapes
                         "return_url": checkout_page_url,
                         "key": self.pk_live,
                         "client_secret": self.cs_live
@@ -1635,20 +1641,18 @@ class StripeAPIHitter:
                             "payment_method_options[card][request_three_d_secure]": "automatic",
                             "payment_method_options[card][setup_future_usage]": "off_session",
                         },
-                        # Attempt 2: Mandate Data Customer Acceptance with spoofed IP & Setup Future Usage
+                        # Attempt 2: Mandate Data Customer Acceptance (inferred from client) & Setup Future Usage
                         {
                             "payment_method_options[card][setup_future_usage]": "off_session",
                             "mandate_data[customer_acceptance][type]": "online",
-                            "mandate_data[customer_acceptance][online][ip_address]": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
-                            "mandate_data[customer_acceptance][online][user_agent]": profile["user_agent"],
+                            "mandate_data[customer_acceptance][online][infer_from_client]": "true",
                         },
-                        # Attempt 3: Low-value TRA exemption + mandate
+                        # Attempt 3: Low-value TRA exemption + client-inferred mandate
                         {
                             "payment_method_options[card][request_three_d_secure]": "automatic",
                             "payment_method_options[card][setup_future_usage]": "off_session",
                             "mandate_data[customer_acceptance][type]": "online",
-                            "mandate_data[customer_acceptance][online][ip_address]": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
-                            "mandate_data[customer_acceptance][online][user_agent]": profile["user_agent"],
+                            "mandate_data[customer_acceptance][online][infer_from_client]": "true",
                         }
                     ]
 
@@ -2512,15 +2516,21 @@ class StripeAPIHitter:
                                             result['receipt_url'] = receipt_url
                                         return result
 
-                                    # Extract real decline code from last_payment_error / error if available
+                                    # Extract real decline code from last_payment_error / last_setup_error across all levels
                                     _raw_pi_res = poll_json.get('payment_intent') or poll_json.get('setup_intent') or poll_json
-                                    err = (
-                                        _raw_pi_res.get('last_payment_error')
-                                        or _raw_pi_res.get('last_setup_error')
-                                        or poll_json.get('last_payment_error')
-                                        or poll_json.get('error')
-                                        or {}
-                                    )
+                                    err_obj = poll_json.get('error') or {}
+                                    nested_pi_err = (err_obj.get('payment_intent') or err_obj.get('setup_intent') or {}) if isinstance(err_obj, dict) else {}
+                                    err = {}
+                                    for _cand in (_raw_pi_res, poll_json, err_obj, nested_pi_err):
+                                        if isinstance(_cand, dict):
+                                            err = _cand.get('last_payment_error') or _cand.get('last_setup_error') or err
+                                            if err:
+                                                break
+                                    if not err and isinstance(err_obj, dict) and err_obj:
+                                        err = err_obj
+                                    elif not err and isinstance(poll_json.get('error'), dict):
+                                        err = poll_json['error']
+
                                     if isinstance(err, dict) and (err.get('decline_code') or err.get('code') or err.get('message')):
                                         result['decline_code'] = err.get('decline_code') or err.get('code') or status_2
                                         result['error'] = err.get('message') or f"Declined ({result['decline_code']})"
